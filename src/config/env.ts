@@ -14,6 +14,11 @@ export interface AppConfig {
   vipHmacSecret: string;
   poolTargetSize: number;
   registrationConcurrency: number;
+  redisUrl: string;
+  queuePrefix: string;
+  registrationJobConcurrency: number;
+  registrationJobRemoveOnComplete: number;
+  registrationJobRemoveOnFail: number;
 }
 
 export interface MysqlEnvConfig {
@@ -112,6 +117,11 @@ export function loadConfig(env: EnvInput = process.env): AppConfig {
     vipBaseUrl: (env.VIP_BASE_URL?.trim() || "https://navos-mind-server-vip.tec-do.com").replace(/\/+$/, ""),
     vipHmacSecret: requireEnv(env, "VIP_HMAC_SECRET"),
     poolTargetSize: parseNonNegativeInt(env.POOL_TARGET_SIZE, 0),
-    registrationConcurrency: parsePositiveInt(env.REGISTRATION_CONCURRENCY, 5)
+    registrationConcurrency: parsePositiveInt(env.REGISTRATION_CONCURRENCY, 5),
+    redisUrl: env.REDIS_URL?.trim() || "redis://127.0.0.1:6379",
+    queuePrefix: env.QUEUE_PREFIX?.trim() || "navos",
+    registrationJobConcurrency: parsePositiveInt(env.REGISTRATION_JOB_CONCURRENCY, 2),
+    registrationJobRemoveOnComplete: parsePositiveInt(env.REGISTRATION_JOB_REMOVE_ON_COMPLETE, 50),
+    registrationJobRemoveOnFail: parsePositiveInt(env.REGISTRATION_JOB_REMOVE_ON_FAIL, 100)
   };
 }

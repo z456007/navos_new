@@ -15,7 +15,12 @@ describe("loadConfig", () => {
       MYSQL_USER: "root",
       MYSQL_PASSWORD: "root",
       MYSQL_DATABASE: "navos_test",
-      VIP_HMAC_SECRET: "test-secret-32-chars-long-key!!"
+      VIP_HMAC_SECRET: "test-secret-32-chars-long-key!!",
+      REDIS_URL: "redis://127.0.0.1:6380",
+      QUEUE_PREFIX: "navos-test",
+      REGISTRATION_JOB_CONCURRENCY: "3",
+      REGISTRATION_JOB_REMOVE_ON_COMPLETE: "25",
+      REGISTRATION_JOB_REMOVE_ON_FAIL: "75"
     });
 
     expect(config.masterApiKey).toBe("sk-test");
@@ -28,6 +33,11 @@ describe("loadConfig", () => {
     expect(config.vipHmacSecret).toBe("test-secret-32-chars-long-key!!");
     expect(config.poolTargetSize).toBe(0);
     expect(config.registrationConcurrency).toBe(5);
+    expect(config.redisUrl).toBe("redis://127.0.0.1:6380");
+    expect(config.queuePrefix).toBe("navos-test");
+    expect(config.registrationJobConcurrency).toBe(3);
+    expect(config.registrationJobRemoveOnComplete).toBe(25);
+    expect(config.registrationJobRemoveOnFail).toBe(75);
     expect(config.mysql).toEqual({
       host: "127.0.0.1",
       port: 3307,
