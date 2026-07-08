@@ -2,6 +2,13 @@ import type { ProviderResult } from "./http.js";
 import { ProviderHttpClient } from "./http.js";
 
 export type NormalizedVideoStatus = "queued" | "running" | "succeeded" | "failed" | "unknown";
+export type VideoResolution = "480P" | "720P" | "1080P";
+
+export const VIDEO_DURATION_LIMITS: Record<VideoResolution, number> = {
+  "480P": 15,
+  "720P": 10,
+  "1080P": 5
+};
 
 export interface NormalizedVideoTask {
   id?: string;
@@ -15,6 +22,34 @@ export interface NormalizedVideoTask {
   sha256?: string;
   error?: string;
   raw: unknown;
+}
+
+export function assertVideoGenerationRules(payload: Record<string, unknown>): void {
+  const resolution = normalizeResolution(payload.resolution);
+  const duration = normalizeDuration(payload.durationSeconds ?? payload.duration_seconds ?? payload.duration);
+  const limit = VIDEO_DURATION_LIMITS[resolution];
+  if (duration !== undefined && duration > limit) {
+    throw new Error(`${resolution} 最长只能生成 ${limit} 秒`);
+  }
+}
+
+function normalizeResolution(value: unknown): VideoResolution {
+  const normalized = typeof value === "string" ? value.trim().toUpperCase() : "720P";
+  if (normalized === "480P" || normalized === "720P" || normalized === "1080P") {
+    return normalized;
+  }
+  throw new Error("resolution must be one of 480P, 720P, 1080P");
+}
+
+function normalizeDuration(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+  const duration = Number(value);
+  if (!Number.isFinite(duration) || duration <= 0) {
+    throw new Error("durationSeconds must be a positive number");
+  }
+  return duration;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

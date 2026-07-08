@@ -50,12 +50,28 @@ export class AccountService {
     return account ? toListItem(account) : undefined;
   }
 
+  async getProviderAccount(uid: string): Promise<AccountRecord | undefined> {
+    return this.store.get(uid);
+  }
+
   async pickAccount(): Promise<AccountRecord | undefined> {
     const account = await this.store.pickActive();
     if (account) {
       await this.store.markUsed(account.uid);
     }
     return account;
+  }
+
+  async leaseVideoAccount(leaseId: string, ttlMs: number = 10 * 60 * 1000): Promise<AccountRecord | undefined> {
+    return this.store.leaseActive(leaseId, Date.now() + ttlMs);
+  }
+
+  async releaseVideoAccount(uid: string, leaseId?: string): Promise<void> {
+    await this.store.releaseLease(uid, leaseId);
+  }
+
+  async depleteVideoAccount(uid: string): Promise<void> {
+    await this.store.setStatus(uid, "depleted");
   }
 
   async enableAccount(uid: string): Promise<AccountListItem | undefined> {
@@ -96,4 +112,3 @@ function toListItem(account: AccountRecord): AccountListItem {
     rateLimitedUntil: account.rateLimitedUntil
   };
 }
-

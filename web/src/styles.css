@@ -272,6 +272,10 @@ a.button {
   padding: 14px;
 }
 
+.metric .ant-card-body {
+  padding: 0;
+}
+
 .metric span {
   display: block;
   color: var(--muted);
@@ -385,12 +389,68 @@ a.button {
   grid-template-columns: minmax(320px, 0.88fr) minmax(360px, 1.12fr);
 }
 
+.video-rule-band {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border-bottom: 1px solid var(--line);
+  background: #f8fbff;
+  padding: 14px;
+}
+
+.video-rule-band strong,
+.video-rule-band span {
+  display: block;
+}
+
+.video-rule-band strong {
+  font-size: 14px;
+}
+
+.video-rule-band span {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 3px;
+}
+
+.rule-tag {
+  margin-inline-end: 0;
+}
+
+.rule-tag.active {
+  border-color: #2557d6;
+  color: #1d4ed8;
+  background: #edf4ff;
+}
+
+.video-budget-meter {
+  display: grid;
+  grid-template-columns: 64px minmax(120px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--line);
+  padding: 10px 14px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.video-budget-meter strong {
+  color: var(--ink);
+}
+
 .video-form,
 .video-output {
   display: grid;
   align-content: start;
   gap: 14px;
   padding: 14px;
+}
+
+.create-video-button {
+  min-height: 38px;
 }
 
 .video-output {
@@ -638,6 +698,7 @@ td {
   .metrics,
   .import-grid,
   .task-strip,
+  .video-rule-band,
   .video-grid,
   .form-row.two,
   .form-row.three,
@@ -665,6 +726,11 @@ td {
   .video-output {
     border-left: 0;
     border-top: 1px solid var(--line);
+  }
+
+  .video-rule-band {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .sidebar-exit {

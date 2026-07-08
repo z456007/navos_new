@@ -85,6 +85,26 @@ describe("admin app gate", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/video/generations/task_1", expect.objectContaining({ method: "GET" }));
   });
 
+  it("shows video duration rules and clamps 1080P to five seconds", async () => {
+    const fetchMock = vi.fn(async () => Response.json([]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("Master API Key"), { target: { value: "sk-local" } });
+    fireEvent.click(screen.getByRole("button", { name: "进入控制台" }));
+
+    await screen.findByRole("button", { name: "视频生成" });
+    fireEvent.click(screen.getByRole("button", { name: "视频生成" }));
+
+    expect(screen.getByText("480P / 15秒")).toBeInTheDocument();
+    expect(screen.getByText("720P / 10秒")).toBeInTheDocument();
+    expect(screen.getByText("1080P / 5秒")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("分辨率"), { target: { value: "1080P" } });
+    expect(screen.getByLabelText("时长")).toHaveAttribute("max", "5");
+  });
+
   it("saves COS config from the console without exposing secrets", async () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });
@@ -133,5 +153,46 @@ describe("admin app gate", () => {
     await screen.findByText("已保存");
     expect(screen.queryByText("secret-key")).not.toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith("/api/cos/config", expect.objectContaining({ method: "PUT" }));
+  });
+
+  it("saves YYDS Mail config from the console without exposing the key", async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });
+      const path = String(url);
+      if (path === "/api/accounts") {
+        return Response.json([]);
+      }
+      if (path === "/api/mail/yyds/config" && init?.method === "GET") {
+        return Response.json({ configured: false });
+      }
+      if (path === "/api/mail/yyds/config" && init?.method === "PUT") {
+        const payload = JSON.parse(String(init.body));
+        expect(payload.apiKey).toBe("ac-ui-key");
+        return Response.json({
+          id: 1,
+          enabled: true,
+          apiKeyConfigured: true,
+          createdAt: 1,
+          updatedAt: 2
+        });
+      }
+      return Response.json({ error: { message: "unexpected path" } }, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("Master API Key"), { target: { value: "sk-local" } });
+    fireEvent.click(screen.getByRole("button", { name: "进入控制台" }));
+
+    await screen.findByRole("button", { name: "YYDS配置" });
+    fireEvent.click(screen.getByRole("button", { name: "YYDS配置" }));
+
+    fireEvent.change(await screen.findByLabelText("YYDS Mail Key"), { target: { value: "ac-ui-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存YYDS配置" }));
+
+    await screen.findByText("已保存");
+    expect(screen.queryByText("ac-ui-key")).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/api/mail/yyds/config", expect.objectContaining({ method: "PUT" }));
   });
 });

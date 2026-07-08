@@ -1,6 +1,6 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import type { AccountIdentity, HeaderBag, ProviderAuthMode } from "../protocols/auth.js";
 import { buildProviderAuthHeaders, isClientAuthorized } from "../protocols/auth.js";
@@ -9,14 +9,16 @@ import { ProviderHttpClient } from "../protocols/http.js";
 import { forwardModelRequest } from "../protocols/model-proxy.js";
 import { registerAccount } from "../protocols/register.js";
 import { uploadAsset } from "../protocols/upload.js";
-import { createVideoTask, getVideoTask, normalizeVideoTaskStatus, type NormalizedVideoTask } from "../protocols/video.js";
+import { assertVideoGenerationRules, createVideoTask, getVideoTask, normalizeVideoTaskStatus, type NormalizedVideoTask } from "../protocols/video.js";
 import { YydsMailClient, YydsMailError } from "../protocols/mail/yyds-mail.js";
 import { AccountService } from "../services/account-service.js";
 import { CosConfigService, type CosConfigInput, type EnabledCosConfig } from "../services/cos-config-service.js";
 import { archiveVideoToCos, type ArchiveVideoResult } from "../services/video-archive.js";
+import { YydsMailConfigService, type YydsMailConfigInput } from "../services/yyds-mail-config-service.js";
 import { SecretBox } from "../security/secretbox.js";
 import { InMemoryAccountStore } from "../store/account-store.js";
 import { InMemoryCosConfigStore, type CosConfigStore } from "../store/cos-config-store.js";
+import { InMemoryYydsMailConfigStore, type YydsMailConfigStore } from "../store/yyds-mail-config-store.js";
 import { InMemoryVideoTaskStore, type VideoTaskRecord, type VideoTaskStore } from "../store/video-task-store.js";
 import { adminAssetContentType, adminPageHtml, resolveAdminAsset } from "./admin-page.js";
 
@@ -28,6 +30,8 @@ export interface CreateAppOptions {
   accountService?: AccountService;
   yydsMailApiKey?: string;
   yydsMailBaseUrl?: string;
+  yydsMailConfigSecret?: string;
+  yydsMailConfigStore?: YydsMailConfigStore;
   cosConfigSecret?: string;
   cosConfigStore?: CosConfigStore;
   videoTaskStore?: VideoTaskStore;
@@ -81,15 +85,18 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     cosConfigStore,
     new SecretBox(normalizeSecretRoot(options.cosConfigSecret ?? options.masterApiKey))
   );
+  const yydsMailConfigStore = options.yydsMailConfigStore ?? new InMemoryYydsMailConfigStore();
+  const yydsMailConfigService = new YydsMailConfigService(
+    yydsMailConfigStore,
+    new SecretBox(
+      normalizeSecretRoot(options.yydsMailConfigSecret ?? options.cosConfigSecret ?? options.masterApiKey),
+      "navos:yyds_mail_config:v1"
+    )
+  );
   const videoTaskStore = options.videoTaskStore ?? new InMemoryVideoTaskStore();
   const archiveVideo = options.archiveVideo ?? ((input: { taskId: string; sourceUrl: string; config: EnabledCosConfig }) =>
     archiveVideoToCos({ ...input, fetchImpl: options.fetchImpl }));
   const client = new ProviderHttpClient(options.providerBaseUrl, options.fetchImpl);
-  const yydsMailClient = new YydsMailClient({
-    baseUrl: options.yydsMailBaseUrl ?? "https://maliapi.215.im/v1",
-    apiKey: options.yydsMailApiKey ?? "",
-    fetchImpl: options.fetchImpl
-  });
 
   function requireLocalAuth(request: FastifyRequest, reply: FastifyReply): boolean {
     if (isClientAuthorized(headersFromRequest(request), options.masterApiKey)) {
@@ -108,12 +115,17 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     return buildProviderAuthHeaders(account, options.providerAuthMode);
   }
 
-  function requireYydsConfigured(reply: FastifyReply): boolean {
-    if (options.yydsMailApiKey) {
-      return true;
+  async function yydsClient(reply: FastifyReply): Promise<YydsMailClient | undefined> {
+    const apiKey = await yydsMailConfigService.enabledApiKey(options.yydsMailApiKey);
+    if (!apiKey) {
+      await reply.status(503).send({ error: { message: "YYDS Mail API key is not configured", type: "mail_unavailable" } });
+      return undefined;
     }
-    void reply.status(503).send({ error: { message: "YYDS Mail API key is not configured", type: "mail_unavailable" } });
-    return false;
+    return new YydsMailClient({
+      baseUrl: options.yydsMailBaseUrl ?? "https://maliapi.215.im/v1",
+      apiKey,
+      fetchImpl: options.fetchImpl
+    });
   }
 
   async function sendYydsError(reply: FastifyReply, error: unknown): Promise<void> {
@@ -133,12 +145,13 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     return request.query && typeof request.query === "object" ? request.query as MailboxQuery : {};
   }
 
-  async function saveVideoTask(task: NormalizedVideoTask): Promise<VideoTaskRecord | undefined> {
+  async function saveVideoTask(task: NormalizedVideoTask, accountUid?: string): Promise<VideoTaskRecord | undefined> {
     if (!task.id) {
       return undefined;
     }
     return videoTaskStore.upsert({
       taskId: task.id,
+      accountUid,
       status: task.status,
       sourceUrl: task.videoUrl,
       raw: task.raw,
@@ -361,6 +374,24 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     }
   });
 
+  app.get("/api/mail/yyds/config", async (request, reply) => {
+    if (!requireLocalAuth(request, reply)) {
+      return;
+    }
+    await reply.send(await yydsMailConfigService.get() ?? { configured: false });
+  });
+
+  app.put("/api/mail/yyds/config", async (request, reply) => {
+    if (!requireLocalAuth(request, reply)) {
+      return;
+    }
+    try {
+      await reply.send(await yydsMailConfigService.save(bodyRecord(request) as YydsMailConfigInput));
+    } catch (error) {
+      await sendBadRequest(reply, error);
+    }
+  });
+
   app.post("/api/accounts/:uid/enable", async (request, reply) => {
     if (!requireLocalAuth(request, reply)) {
       return;
@@ -403,18 +434,26 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
   });
 
   app.post("/api/mail/yyds/accounts", async (request, reply) => {
-    if (!requireLocalAuth(request, reply) || !requireYydsConfigured(reply)) {
+    if (!requireLocalAuth(request, reply)) {
+      return;
+    }
+    const client = await yydsClient(reply);
+    if (!client) {
       return;
     }
     try {
-      await reply.send(await yydsMailClient.createMailbox());
+      await reply.send(await client.createMailbox());
     } catch (error) {
       await sendYydsError(reply, error);
     }
   });
 
   app.get("/api/mail/yyds/messages", async (request, reply) => {
-    if (!requireLocalAuth(request, reply) || !requireYydsConfigured(reply)) {
+    if (!requireLocalAuth(request, reply)) {
+      return;
+    }
+    const client = await yydsClient(reply);
+    if (!client) {
       return;
     }
     const query = mailboxQuery(request);
@@ -423,14 +462,18 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       return;
     }
     try {
-      await reply.send(await yydsMailClient.listMessages({ address: query.address, token: query.token }));
+      await reply.send(await client.listMessages({ address: query.address, token: query.token }));
     } catch (error) {
       await sendYydsError(reply, error);
     }
   });
 
   app.get("/api/mail/yyds/messages/:messageId", async (request, reply) => {
-    if (!requireLocalAuth(request, reply) || !requireYydsConfigured(reply)) {
+    if (!requireLocalAuth(request, reply)) {
+      return;
+    }
+    const client = await yydsClient(reply);
+    if (!client) {
       return;
     }
     const query = mailboxQuery(request);
@@ -440,14 +483,18 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       return;
     }
     try {
-      await reply.send(await yydsMailClient.getMessage(params.messageId, { address: query.address, token: query.token }));
+      await reply.send(await client.getMessage(params.messageId, { address: query.address, token: query.token }));
     } catch (error) {
       await sendYydsError(reply, error);
     }
   });
 
   app.post("/api/mail/yyds/verification-code", async (request, reply) => {
-    if (!requireLocalAuth(request, reply) || !requireYydsConfigured(reply)) {
+    if (!requireLocalAuth(request, reply)) {
+      return;
+    }
+    const client = await yydsClient(reply);
+    if (!client) {
       return;
     }
     const body = bodyRecord(request);
@@ -456,7 +503,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       return;
     }
     try {
-      await reply.send(await yydsMailClient.findVerificationCode({
+      await reply.send(await client.findVerificationCode({
         address: body.address,
         token: typeof body.token === "string" ? body.token : undefined
       }));
@@ -492,14 +539,31 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     if (!requireLocalAuth(request, reply)) {
       return;
     }
-    const headers = await providerHeaders(reply);
-    if (!headers) {
+    const body = bodyRecord(request);
+    try {
+      assertVideoGenerationRules(body);
+    } catch (error) {
+      await sendBadRequest(reply, error);
       return;
     }
-    const result = await createVideoTask(client, bodyRecord(request), headers);
-    const createdTask = normalizeVideoTaskStatus(result.body);
-    if (createdTask.id) {
-      await saveVideoTask(createdTask);
+
+    const leaseId = `video:${randomUUID()}`;
+    const account = await accountService.leaseVideoAccount(leaseId);
+    if (!account) {
+      await reply.status(503).send({ error: { message: "No available account for video generation", type: "account_unavailable" } });
+      return;
+    }
+
+    const headers = buildProviderAuthHeaders(account, options.providerAuthMode);
+    const result = await createVideoTask(client, body, headers);
+    if (result.status >= 200 && result.status < 300) {
+      await accountService.depleteVideoAccount(account.uid);
+      const createdTask = normalizeVideoTaskStatus(result.body);
+      if (createdTask.id) {
+        await saveVideoTask(createdTask, account.uid);
+      }
+    } else {
+      await accountService.releaseVideoAccount(account.uid, leaseId);
     }
     await sendProviderResult(reply, result);
   }
@@ -508,13 +572,17 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     if (!requireLocalAuth(request, reply)) {
       return;
     }
-    const headers = await providerHeaders(reply);
-    if (!headers) {
-      return;
-    }
     const params = request.params as { taskId?: string };
     if (!params.taskId) {
       await reply.status(400).send({ error: { message: "taskId is required" } });
+      return;
+    }
+    const existingTask = await videoTaskStore.get(params.taskId);
+    const taskAccount = existingTask?.accountUid ? await accountService.getProviderAccount(existingTask.accountUid) : undefined;
+    const headers = taskAccount
+      ? buildProviderAuthHeaders(taskAccount, options.providerAuthMode)
+      : await providerHeaders(reply);
+    if (!headers) {
       return;
     }
     const result = await getVideoTask(client, params.taskId, headers);

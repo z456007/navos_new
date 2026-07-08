@@ -36,6 +36,22 @@ describe("AccountService", () => {
     expect(second?.uid).toBe("u2");
   });
 
+  it("leases different accounts for concurrent video jobs", async () => {
+    const store = new InMemoryAccountStore();
+    const service = new AccountService(store);
+    await service.importAccount({ uid: "u1", token: "t1" });
+    await service.importAccount({ uid: "u2", token: "t2" });
+
+    const [first, second, third] = await Promise.all([
+      service.leaseVideoAccount("job_1"),
+      service.leaseVideoAccount("job_2"),
+      service.leaseVideoAccount("job_3")
+    ]);
+
+    expect([first?.uid, second?.uid].sort()).toEqual(["u1", "u2"]);
+    expect(third).toBeUndefined();
+  });
+
   it("skips disabled and cooling-down accounts", async () => {
     const service = new AccountService(new InMemoryAccountStore());
     await service.importAccount({ uid: "disabled", token: "t1" });
@@ -55,4 +71,3 @@ describe("AccountService", () => {
     await expect(service.importAccount({ uid: "u1", token: "" })).rejects.toThrow(/token/);
   });
 });
-

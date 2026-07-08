@@ -5,6 +5,7 @@ export type VideoArchiveStatus = "pending" | "archiving" | "archived" | "failed"
 
 export interface VideoTaskRecord {
   taskId: string;
+  accountUid?: string;
   status: string;
   sourceUrl?: string;
   cosUrl?: string;
@@ -22,6 +23,7 @@ export interface VideoTaskRecord {
 
 export interface SaveVideoTaskInput {
   taskId: string;
+  accountUid?: string;
   status: string;
   sourceUrl?: string;
   cosUrl?: string;
@@ -43,6 +45,7 @@ export interface VideoTaskStore {
 
 interface VideoTaskRow extends RowDataPacket {
   task_id: string;
+  account_uid: string | null;
   status: string;
   source_url: string | null;
   cos_url: string | null;
@@ -71,6 +74,7 @@ export class InMemoryVideoTaskStore implements VideoTaskStore {
     const existing = this.tasks.get(input.taskId);
     const next: VideoTaskRecord = {
       taskId: input.taskId,
+      accountUid: input.accountUid ?? existing?.accountUid,
       status: input.status,
       sourceUrl: input.sourceUrl ?? existing?.sourceUrl,
       cosUrl: input.cosUrl ?? existing?.cosUrl,
@@ -110,6 +114,7 @@ export class MysqlVideoTaskStore implements VideoTaskStore {
     await this.pool.query(`
       CREATE TABLE IF NOT EXISTS video_tasks (
         task_id VARCHAR(128) PRIMARY KEY,
+        account_uid VARCHAR(128) NULL,
         status VARCHAR(32) NOT NULL,
         source_url VARCHAR(1000) NULL,
         cos_url VARCHAR(1000) NULL,
@@ -126,6 +131,19 @@ export class MysqlVideoTaskStore implements VideoTaskStore {
         INDEX idx_video_tasks_status (status, archive_status, updated_at)
       )
     `);
+    await this.addColumnIfMissing("account_uid", "ALTER TABLE video_tasks ADD COLUMN account_uid VARCHAR(128) NULL AFTER task_id");
+  }
+
+  private async addColumnIfMissing(column: string, ddl: string): Promise<void> {
+    const [rows] = await this.pool.execute<RowDataPacket[]>(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'video_tasks' AND COLUMN_NAME = :column
+       LIMIT 1`,
+      { column }
+    );
+    if (rows.length === 0) {
+      await this.pool.query(ddl);
+    }
   }
 
   async get(taskId: string): Promise<VideoTaskRecord | undefined> {
@@ -138,6 +156,7 @@ export class MysqlVideoTaskStore implements VideoTaskStore {
     const now = Date.now();
     const next: VideoTaskRecord = {
       taskId: input.taskId,
+      accountUid: input.accountUid ?? existing?.accountUid,
       status: input.status,
       sourceUrl: input.sourceUrl ?? existing?.sourceUrl,
       cosUrl: input.cosUrl ?? existing?.cosUrl,
@@ -154,10 +173,11 @@ export class MysqlVideoTaskStore implements VideoTaskStore {
     };
     await this.pool.execute(
       `INSERT INTO video_tasks
-        (task_id, status, source_url, cos_url, cos_key, archive_status, archive_error, size_bytes, sha256, raw_json, created_at, updated_at, completed_at, archived_at)
+        (task_id, account_uid, status, source_url, cos_url, cos_key, archive_status, archive_error, size_bytes, sha256, raw_json, created_at, updated_at, completed_at, archived_at)
        VALUES
-        (:taskId, :status, :sourceUrl, :cosUrl, :cosKey, :archiveStatus, :archiveError, :sizeBytes, :sha256, CAST(:rawJson AS JSON), :createdAt, :updatedAt, :completedAt, :archivedAt)
+        (:taskId, :accountUid, :status, :sourceUrl, :cosUrl, :cosKey, :archiveStatus, :archiveError, :sizeBytes, :sha256, CAST(:rawJson AS JSON), :createdAt, :updatedAt, :completedAt, :archivedAt)
        ON DUPLICATE KEY UPDATE
+        account_uid = COALESCE(VALUES(account_uid), account_uid),
         status = VALUES(status),
         source_url = VALUES(source_url),
         cos_url = VALUES(cos_url),
@@ -172,6 +192,7 @@ export class MysqlVideoTaskStore implements VideoTaskStore {
         archived_at = VALUES(archived_at)`,
       {
         taskId: next.taskId,
+        accountUid: next.accountUid ?? null,
         status: next.status,
         sourceUrl: next.sourceUrl ?? null,
         cosUrl: next.cosUrl ?? null,
@@ -198,6 +219,7 @@ function cloneRecord(record: VideoTaskRecord): VideoTaskRecord {
 function fromRow(row: VideoTaskRow): VideoTaskRecord {
   return {
     taskId: row.task_id,
+    accountUid: row.account_uid ?? undefined,
     status: row.status,
     sourceUrl: row.source_url ?? undefined,
     cosUrl: row.cos_url ?? undefined,

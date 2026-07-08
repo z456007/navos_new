@@ -19,8 +19,9 @@ import {
   Timer,
   UserPlus
 } from "lucide-react";
+import { Alert, Button as AntButton, Card, ConfigProvider, Progress, Space, Statistic, Tag, theme } from "antd";
 import { ADMIN_KEY_STORAGE, apiRequest, errorMessage } from "./api";
-import type { AccountListItem, CosConfig, Mailbox, PanelId, StatusState, VideoTaskStatus, VideoTaskView } from "./types";
+import type { AccountListItem, CosConfig, Mailbox, PanelId, StatusState, VideoTaskStatus, VideoTaskView, YydsMailConfig } from "./types";
 
 const initialMessagesPayload = `{
   "model": "claude.sonnet-4.6",
@@ -41,6 +42,28 @@ const initialChatPayload = `{
 const defaultVideoPrompt = "原创极简动画短片：一只小型白色机器人在干净的浅灰色桌面上挥手，柔和自然光，镜头稳定，画面清晰，无文字，无水印，无对白。";
 
 const idleStatus: StatusState = { kind: "idle", message: "" };
+const videoDurationLimits: Record<string, number> = {
+  "480P": 15,
+  "720P": 10,
+  "1080P": 5
+};
+
+const navosTheme = {
+  algorithm: theme.defaultAlgorithm,
+  token: {
+    colorPrimary: "#2557d6",
+    colorInfo: "#2557d6",
+    colorSuccess: "#1a7f55",
+    colorWarning: "#a15c07",
+    colorError: "#b42318",
+    borderRadius: 7,
+    fontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+  },
+  components: {
+    Card: { borderRadiusLG: 8 },
+    Button: { borderRadius: 7 }
+  }
+};
 
 export function App() {
   const [apiKey, setApiKey] = useState("");
@@ -91,26 +114,26 @@ export function App() {
     setAuthStatus(idleStatus);
   }
 
-  if (!isAuthenticated) {
-    return (
-      <AuthGate
-        initialKey={apiKey}
-        status={authStatus}
-        onVerify={verifyKey}
-      />
-    );
-  }
-
   return (
-    <ConsoleShell
-      accounts={accounts}
-      activePanel={activePanel}
-      apiKey={apiKey}
-      onPanelChange={setActivePanel}
-      onRefreshAccounts={() => loadAccounts()}
-      onAccountsChange={setAccounts}
-      onSignOut={signOut}
-    />
+    <ConfigProvider theme={navosTheme}>
+      {!isAuthenticated ? (
+        <AuthGate
+          initialKey={apiKey}
+          status={authStatus}
+          onVerify={verifyKey}
+        />
+      ) : (
+        <ConsoleShell
+          accounts={accounts}
+          activePanel={activePanel}
+          apiKey={apiKey}
+          onPanelChange={setActivePanel}
+          onRefreshAccounts={() => loadAccounts()}
+          onAccountsChange={setAccounts}
+          onSignOut={signOut}
+        />
+      )}
+    </ConfigProvider>
   );
 }
 
@@ -200,6 +223,9 @@ function ConsoleShell({
           <NavButton active={activePanel === "mail"} icon={<Mail size={17} />} onClick={() => onPanelChange("mail")}>
             YYDS 邮箱
           </NavButton>
+          <NavButton active={activePanel === "yydsConfig"} icon={<KeyRound size={17} />} onClick={() => onPanelChange("yydsConfig")}>
+            YYDS配置
+          </NavButton>
           <NavButton active={activePanel === "video"} icon={<Clapperboard size={17} />} onClick={() => onPanelChange("video")}>
             视频生成
           </NavButton>
@@ -244,6 +270,7 @@ function ConsoleShell({
           />
         )}
         {activePanel === "mail" && <MailPanel apiKey={apiKey} />}
+        {activePanel === "yydsConfig" && <YydsMailConfigPanel apiKey={apiKey} />}
         {activePanel === "video" && <VideoPanel apiKey={apiKey} />}
         {activePanel === "cos" && <CosConfigPanel apiKey={apiKey} />}
         {activePanel === "probe" && (
@@ -584,6 +611,88 @@ function MailPanel({ apiKey }: { apiKey: string }) {
   );
 }
 
+function YydsMailConfigPanel({ apiKey }: { apiKey: string }) {
+  const [config, setConfig] = useState<YydsMailConfig | undefined>();
+  const [mailKey, setMailKey] = useState("");
+  const [status, setStatus] = useState<StatusState>(idleStatus);
+
+  useEffect(() => {
+    let active = true;
+    async function loadConfig() {
+      setStatus({ kind: "loading", message: "读取配置中" });
+      try {
+        const loaded = await apiRequest<YydsMailConfig>(apiKey, "/api/mail/yyds/config", { method: "GET" });
+        if (!active) {
+          return;
+        }
+        setConfig(loaded);
+        setMailKey("");
+        setStatus({ kind: "idle", message: "" });
+      } catch (error) {
+        if (active) {
+          setStatus({ kind: "error", message: errorMessage(error) ?? "读取 YYDS 配置失败" });
+        }
+      }
+    }
+
+    void loadConfig();
+    return () => {
+      active = false;
+    };
+  }, [apiKey]);
+
+  async function saveConfig(event: FormEvent) {
+    event.preventDefault();
+    setStatus({ kind: "loading", message: "保存中" });
+    try {
+      const saved = await apiRequest<YydsMailConfig>(apiKey, "/api/mail/yyds/config", {
+        method: "PUT",
+        body: JSON.stringify({
+          apiKey: mailKey || undefined,
+          enabled: true
+        })
+      });
+      setConfig(saved);
+      setMailKey("");
+      setStatus({ kind: "ok", message: "已保存" });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) ?? "保存 YYDS 配置失败" });
+    }
+  }
+
+  return (
+    <section className="panel narrow" aria-labelledby="yyds-config-title">
+      <div className="panel-head">
+        <div>
+          <h2 id="yyds-config-title">YYDS配置</h2>
+          <StatusLine status={status} />
+        </div>
+        <span className={`badge ${config?.apiKeyConfigured ? "active" : "disabled"}`}>
+          {config?.apiKeyConfigured ? "已配置" : "未配置"}
+        </span>
+      </div>
+
+      <form className="cos-form" onSubmit={saveConfig}>
+        <Alert
+          showIcon
+          type="info"
+          title="保存 YYDS Mail Key"
+          description="Key 会加密写入 MySQL，保存后页面不会回显明文。"
+        />
+        <TextField label="YYDS Mail Key" type="password" value={mailKey} onChange={setMailKey} />
+        <div className="secret-note">
+          <span>当前 Key: {config?.apiKeyConfigured ? "已保存" : "未保存"}</span>
+        </div>
+        <div className="toolbar flush">
+          <AntButton disabled={status.kind === "loading"} htmlType="submit" icon={<KeyRound size={16} />} type="primary">
+            保存YYDS配置
+          </AntButton>
+        </div>
+      </form>
+    </section>
+  );
+}
+
 function VideoPanel({ apiKey }: { apiKey: string }) {
   const [form, setForm] = useState({
     model: "navos/doubao-seedance-2-0-260128",
@@ -599,6 +708,7 @@ function VideoPanel({ apiKey }: { apiKey: string }) {
   const [events, setEvents] = useState<string[]>([]);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const previewUrl = task?.cosUrl ?? task?.videoUrl;
+  const durationLimit = videoDurationLimit(form.resolution);
 
   useEffect(() => () => clearPolling(), []);
 
@@ -620,6 +730,10 @@ function VideoPanel({ apiKey }: { apiKey: string }) {
     const prompt = form.prompt.trim();
     if (!prompt) {
       setStatus({ kind: "error", message: "提示词不能为空" });
+      return;
+    }
+    if (form.durationSeconds > durationLimit) {
+      setStatus({ kind: "error", message: `${form.resolution} 最长只能生成 ${durationLimit} 秒` });
       return;
     }
 
@@ -703,21 +817,58 @@ function VideoPanel({ apiKey }: { apiKey: string }) {
           <h2 id="video-title">视频生成</h2>
           <StatusLine status={status} />
         </div>
-        <button className="button" disabled={!task?.id || status.kind === "loading"} onClick={() => void pollTask()} type="button">
-          <RefreshCw size={16} aria-hidden="true" />
+        <AntButton disabled={!task?.id || status.kind === "loading"} icon={<RefreshCw size={16} />} onClick={() => void pollTask()}>
           查询状态
-        </button>
+        </AntButton>
+      </div>
+
+      <div className="video-rule-band" aria-label="视频账号规则">
+        <div>
+          <strong>账号视频预算</strong>
+          <span>每个账号只跑一次任务；并发时会先租用不同账号，创建成功后标记耗尽。</span>
+        </div>
+        <Space size={8} wrap>
+          {Object.entries(videoDurationLimits).map(([resolution, seconds]) => (
+            <Tag className={`rule-tag${resolution === form.resolution ? " active" : ""}`} key={resolution}>
+              {resolution} / {seconds}秒
+            </Tag>
+          ))}
+          <Tag color="processing">并发租约</Tag>
+        </Space>
+      </div>
+
+      <div className="video-budget-meter">
+        <span>{form.resolution}</span>
+        <Progress
+          percent={Math.round((form.durationSeconds / durationLimit) * 100)}
+          showInfo={false}
+          strokeColor={form.durationSeconds >= durationLimit ? "#a15c07" : "#2557d6"}
+        />
+        <strong>{form.durationSeconds}s / {durationLimit}s</strong>
       </div>
 
       <div className="video-grid">
         <form className="video-form" onSubmit={createTask}>
+          <Alert
+            showIcon
+            type="info"
+            title="生成前会租用一个可用账号"
+            description="480P 最长 15 秒，720P 最长 10 秒，1080P 最长 5 秒。账号池不足时请求会直接停止。"
+          />
           <TextField label="模型" value={form.model} onChange={(model) => setForm((current) => ({ ...current, model }))} />
           <div className="form-row three compact">
             <SelectField
               label="分辨率"
               value={form.resolution}
-              options={["720P", "480P"]}
-              onChange={(resolution) => setForm((current) => ({ ...current, resolution }))}
+              options={["480P", "720P", "1080P"]}
+              onChange={(resolution) => setForm((current) => {
+                const nextLimit = videoDurationLimit(resolution);
+                return {
+                  ...current,
+                  resolution,
+                  durationSeconds: Math.min(current.durationSeconds, nextLimit)
+                };
+              })}
             />
             <SelectField
               label="比例"
@@ -728,11 +879,17 @@ function VideoPanel({ apiKey }: { apiKey: string }) {
             <label className="text-field">
               <span>时长</span>
               <input
-                max={15}
+                max={durationLimit}
                 min={4}
                 type="number"
                 value={form.durationSeconds}
-                onChange={(event) => setForm((current) => ({ ...current, durationSeconds: Number(event.target.value) }))}
+                onChange={(event) => setForm((current) => {
+                  const nextDuration = Number(event.target.value);
+                  return {
+                    ...current,
+                    durationSeconds: Math.min(nextDuration, videoDurationLimit(current.resolution))
+                  };
+                })}
               />
             </label>
           </div>
@@ -749,10 +906,9 @@ function VideoPanel({ apiKey }: { apiKey: string }) {
             <textarea value={form.prompt} onChange={(event) => setForm((current) => ({ ...current, prompt: event.target.value }))} />
           </label>
           <div className="toolbar flush">
-            <button className="button primary" disabled={status.kind === "loading"} type="submit">
-              <Clapperboard size={16} aria-hidden="true" />
+            <AntButton className="create-video-button" disabled={status.kind === "loading"} htmlType="submit" icon={<Clapperboard size={16} />} type="primary">
               创建视频任务
-            </button>
+            </AntButton>
           </div>
         </form>
 
@@ -892,11 +1048,11 @@ function NavButton({
 }
 
 function Metric({ label, value, tone }: { label: string; value: number; tone?: "ok" | "wait" | "bad" }) {
+  const color = tone === "ok" ? "#1a7f55" : tone === "wait" ? "#a15c07" : tone === "bad" ? "#b42318" : "#182230";
   return (
-    <div className={`metric${tone ? ` ${tone}` : ""}`}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
+    <Card className={`metric${tone ? ` ${tone}` : ""}`} size="small">
+      <Statistic title={label} value={value} styles={{ content: { color, fontSize: 25, lineHeight: 1 } }} />
+    </Card>
   );
 }
 
@@ -985,6 +1141,10 @@ function readVideoString(value: unknown, keys: string[]): string | undefined {
     }
   }
   return undefined;
+}
+
+function videoDurationLimit(resolution: string): number {
+  return videoDurationLimits[resolution] ?? videoDurationLimits["720P"];
 }
 
 function configToCosForm(config?: CosConfig): CosConfigForm {
@@ -1079,6 +1239,9 @@ function accountMetrics(accounts: AccountListItem[]) {
 function panelTitle(panel: PanelId): string {
   if (panel === "mail") {
     return "YYDS 邮箱";
+  }
+  if (panel === "yydsConfig") {
+    return "YYDS配置";
   }
   if (panel === "video") {
     return "视频生成";

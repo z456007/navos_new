@@ -21,6 +21,8 @@ interface AccountRow extends RowDataPacket {
   last_used_at: number;
   last_balance_at: number;
   rate_limited_until: number;
+  lease_id: string | null;
+  lease_until: number;
 }
 
 export class MysqlAccountStore implements AccountStore {
@@ -71,9 +73,25 @@ export class MysqlAccountStore implements AccountStore {
         last_used_at BIGINT NOT NULL DEFAULT 0,
         last_balance_at BIGINT NOT NULL DEFAULT 0,
         rate_limited_until BIGINT NOT NULL DEFAULT 0,
+        lease_id VARCHAR(120) NULL,
+        lease_until BIGINT NOT NULL DEFAULT 0,
         INDEX idx_accounts_pick (status, rate_limited_until, last_used_at, created_at)
       )
     `);
+    await this.addColumnIfMissing("lease_id", "ALTER TABLE accounts ADD COLUMN lease_id VARCHAR(120) NULL");
+    await this.addColumnIfMissing("lease_until", "ALTER TABLE accounts ADD COLUMN lease_until BIGINT NOT NULL DEFAULT 0");
+  }
+
+  private async addColumnIfMissing(column: string, ddl: string): Promise<void> {
+    const [rows] = await this.pool.execute<RowDataPacket[]>(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'accounts' AND COLUMN_NAME = :column
+       LIMIT 1`,
+      { column }
+    );
+    if (rows.length === 0) {
+      await this.pool.query(ddl);
+    }
   }
 
   async upsert(account: AccountImportInput): Promise<AccountRecord> {
@@ -121,7 +139,7 @@ export class MysqlAccountStore implements AccountStore {
   async pickActive(nowMs: number = Date.now()): Promise<AccountRecord | undefined> {
     const [rows] = await this.pool.execute<AccountRow[]>(
       `SELECT * FROM accounts
-       WHERE status = 'active' AND rate_limited_until <= :nowMs
+       WHERE status = 'active' AND rate_limited_until <= :nowMs AND lease_until <= :nowMs
        ORDER BY last_used_at ASC, created_at ASC
        LIMIT 1`,
       { nowMs }
@@ -129,16 +147,71 @@ export class MysqlAccountStore implements AccountStore {
     return rows[0] ? fromRow(rows[0]) : undefined;
   }
 
+  async leaseActive(leaseId: string, leaseUntilMs: number, nowMs: number = Date.now()): Promise<AccountRecord | undefined> {
+    const connection = await this.pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const [rows] = await connection.execute<AccountRow[]>(
+        `SELECT * FROM accounts
+         WHERE status = 'active' AND rate_limited_until <= :nowMs AND lease_until <= :nowMs
+         ORDER BY last_used_at ASC, created_at ASC
+         LIMIT 1
+         FOR UPDATE`,
+        { nowMs }
+      );
+      const row = rows[0];
+      if (!row) {
+        await connection.rollback();
+        return undefined;
+      }
+      await connection.execute(
+        "UPDATE accounts SET lease_id = :leaseId, lease_until = :leaseUntilMs WHERE uid = :uid",
+        { leaseId, leaseUntilMs, uid: row.uid }
+      );
+      await connection.commit();
+      return {
+        ...fromRow(row),
+        leaseId,
+        leaseUntil: leaseUntilMs
+      };
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
+  async releaseLease(uid: string, leaseId?: string): Promise<void> {
+    if (leaseId) {
+      await this.pool.execute(
+        "UPDATE accounts SET lease_id = NULL, lease_until = 0 WHERE uid = :uid AND lease_id = :leaseId",
+        { uid, leaseId }
+      );
+      return;
+    }
+    await this.pool.execute("UPDATE accounts SET lease_id = NULL, lease_until = 0 WHERE uid = :uid", { uid });
+  }
+
   async markUsed(uid: string, usedAtMs: number = Date.now()): Promise<void> {
-    await this.pool.execute("UPDATE accounts SET last_used_at = :usedAtMs WHERE uid = :uid", { uid, usedAtMs });
+    await this.pool.execute(
+      "UPDATE accounts SET last_used_at = :usedAtMs, lease_id = NULL, lease_until = 0 WHERE uid = :uid",
+      { uid, usedAtMs }
+    );
   }
 
   async setStatus(uid: string, status: AccountStatus): Promise<void> {
-    await this.pool.execute("UPDATE accounts SET status = :status WHERE uid = :uid", { uid, status });
+    await this.pool.execute(
+      "UPDATE accounts SET status = :status, lease_id = NULL, lease_until = 0 WHERE uid = :uid",
+      { uid, status }
+    );
   }
 
   async setCooldown(uid: string, untilMs: number): Promise<void> {
-    await this.pool.execute("UPDATE accounts SET rate_limited_until = :untilMs WHERE uid = :uid", { uid, untilMs });
+    await this.pool.execute(
+      "UPDATE accounts SET rate_limited_until = :untilMs, lease_id = NULL, lease_until = 0 WHERE uid = :uid",
+      { uid, untilMs }
+    );
   }
 }
 
@@ -154,7 +227,8 @@ function fromRow(row: AccountRow): AccountRecord {
     createdAt: Number(row.created_at),
     lastUsedAt: Number(row.last_used_at),
     lastBalanceAt: Number(row.last_balance_at),
-    rateLimitedUntil: Number(row.rate_limited_until)
+    rateLimitedUntil: Number(row.rate_limited_until),
+    leaseId: row.lease_id ?? undefined,
+    leaseUntil: Number(row.lease_until ?? 0)
   };
 }
-

@@ -3,6 +3,7 @@ import { AccountService } from "../src/services/account-service.js";
 import { createApp } from "../src/server/app.js";
 import { InMemoryAccountStore } from "../src/store/account-store.js";
 import { InMemoryCosConfigStore } from "../src/store/cos-config-store.js";
+import { InMemoryYydsMailConfigStore } from "../src/store/yyds-mail-config-store.js";
 import { InMemoryVideoTaskStore } from "../src/store/video-task-store.js";
 
 describe("server routes", () => {
@@ -60,6 +61,52 @@ describe("server routes", () => {
     });
     expect(authorized.statusCode).toBe(200);
     expect(authorized.json()).toMatchObject({ address: "navos-test@mail.test", token: "mail-token" });
+  });
+
+  it("stores YYDS Mail config encrypted and uses it for mailbox creation", async () => {
+    const yydsMailConfigStore = new InMemoryYydsMailConfigStore();
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+      yydsMailBaseUrl: "https://mail.test/v1",
+      yydsMailConfigStore,
+      yydsMailConfigSecret: "12345678901234567890123456789012",
+      fetchImpl: async (url, init) => {
+        if (String(url).includes("mail.test")) {
+          expect(init?.headers).toMatchObject({ "x-api-key": "ac-db-key" });
+          return Response.json({
+            success: true,
+            data: { address: "navos-db@mail.test", id: "m1", token: "mail-token" }
+          });
+        }
+        return Response.json({ ok: true });
+      }
+    });
+
+    const saved = await app.inject({
+      method: "PUT",
+      url: "/api/mail/yyds/config",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { apiKey: "ac-db-key", enabled: true }
+    });
+
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json()).toMatchObject({ enabled: true, apiKeyConfigured: true });
+    expect(JSON.stringify(saved.json())).not.toContain("ac-db-key");
+    const raw = await yydsMailConfigStore.getRaw();
+    expect(raw?.apiKeyEnc).toBeTruthy();
+    expect(raw?.apiKeyEnc).not.toContain("ac-db-key");
+
+    const mailbox = await app.inject({
+      method: "POST",
+      url: "/api/mail/yyds/accounts",
+      headers: { authorization: "Bearer sk-test" }
+    });
+
+    expect(mailbox.statusCode).toBe(200);
+    expect(mailbox.json()).toMatchObject({ address: "navos-db@mail.test" });
   });
 
   it("imports and lists accounts through protected account routes", async () => {
@@ -135,6 +182,74 @@ describe("server routes", () => {
       "POST /api/tasks/navos-seedance-video-generation",
       "GET /api/tasks/video/generations/task_1"
     ]);
+  });
+
+  it("rejects video durations that exceed account resolution rules", async () => {
+    const fetchImpl = vi.fn(async () => Response.json({ task_id: "task_1", status: "queued" }));
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+      fetchImpl
+    });
+
+    const rejected = await app.inject({
+      method: "POST",
+      url: "/api/video/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "city skyline", durationSeconds: 10, resolution: "1080P" }
+    });
+
+    expect(rejected.statusCode).toBe(400);
+    expect(rejected.json().error.message).toContain("1080P");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("uses one leased account per concurrent video create and depletes successful accounts", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    await accountService.importAccount({ uid: "u1", token: "t1" });
+    await accountService.importAccount({ uid: "u2", token: "t2" });
+    const usedUids: string[] = [];
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      fetchImpl: async (_url, init) => {
+        const authorization = String((init?.headers as Record<string, string>).authorization ?? "");
+        usedUids.push(authorization.replace(/^Bearer\s+/, "").split(":")[0]);
+        return Response.json({ task_id: `task_${usedUids.length}`, status: "queued" });
+      }
+    });
+
+    const [first, second, third] = await Promise.all([
+      app.inject({
+        method: "POST",
+        url: "/api/video/generations",
+        headers: { authorization: "Bearer sk-test" },
+        payload: { prompt: "city skyline", durationSeconds: 15, resolution: "480P" }
+      }),
+      app.inject({
+        method: "POST",
+        url: "/api/video/generations",
+        headers: { authorization: "Bearer sk-test" },
+        payload: { prompt: "city skyline", durationSeconds: 10, resolution: "720P" }
+      }),
+      app.inject({
+        method: "POST",
+        url: "/api/video/generations",
+        headers: { authorization: "Bearer sk-test" },
+        payload: { prompt: "city skyline", durationSeconds: 5, resolution: "1080P" }
+      })
+    ]);
+
+    expect([first.statusCode, second.statusCode].sort()).toEqual([200, 200]);
+    expect(third.statusCode).toBe(503);
+    expect(usedUids.sort()).toEqual(["u1", "u2"]);
+    expect((await store.get("u1"))?.status).toBe("depleted");
+    expect((await store.get("u2"))?.status).toBe("depleted");
   });
 
   it("stores COS config encrypted and never returns secrets", async () => {

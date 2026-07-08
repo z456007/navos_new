@@ -3,15 +3,18 @@ import { createApp } from "./server/app.js";
 import { AccountService } from "./services/account-service.js";
 import { MysqlAccountStore } from "./store/mysql-account-store.js";
 import { MysqlCosConfigStore } from "./store/cos-config-store.js";
+import { MysqlYydsMailConfigStore } from "./store/yyds-mail-config-store.js";
 import { MysqlVideoTaskStore } from "./store/video-task-store.js";
 
 const config = loadConfig();
 await MysqlAccountStore.createDatabaseIfMissing(config.mysql);
 const accountStore = new MysqlAccountStore(config.mysql);
 const cosConfigStore = new MysqlCosConfigStore(config.mysql);
+const yydsMailConfigStore = new MysqlYydsMailConfigStore(config.mysql);
 const videoTaskStore = new MysqlVideoTaskStore(config.mysql);
 await accountStore.ensureSchema();
 await cosConfigStore.ensureSchema();
+await yydsMailConfigStore.ensureSchema();
 await videoTaskStore.ensureSchema();
 
 if (config.defaultAccount) {
@@ -23,6 +26,8 @@ const app = createApp({
   accountService: new AccountService(accountStore),
   cosConfigSecret: config.cosConfigSecret,
   cosConfigStore,
+  yydsMailConfigSecret: config.cosConfigSecret,
+  yydsMailConfigStore,
   videoTaskStore
 });
 

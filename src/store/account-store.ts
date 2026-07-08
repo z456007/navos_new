@@ -12,6 +12,8 @@ export interface AccountRecord extends AccountIdentity {
   lastUsedAt: number;
   lastBalanceAt: number;
   rateLimitedUntil: number;
+  leaseId?: string;
+  leaseUntil: number;
 }
 
 export interface AccountImportInput extends AccountIdentity {
@@ -27,6 +29,8 @@ export interface AccountStore {
   list(): Promise<AccountRecord[]>;
   get(uid: string): Promise<AccountRecord | undefined>;
   pickActive(nowMs?: number): Promise<AccountRecord | undefined>;
+  leaseActive(leaseId: string, leaseUntilMs: number, nowMs?: number): Promise<AccountRecord | undefined>;
+  releaseLease(uid: string, leaseId?: string): Promise<void>;
   markUsed(uid: string, usedAtMs?: number): Promise<void>;
   setStatus(uid: string, status: AccountStatus): Promise<void>;
   setCooldown(uid: string, untilMs: number): Promise<void>;
@@ -49,7 +53,9 @@ function toRecord(account: AccountImportInput, existing?: AccountRecord): Accoun
     createdAt: existing?.createdAt ?? timestamp,
     lastUsedAt: existing?.lastUsedAt ?? 0,
     lastBalanceAt: existing?.lastBalanceAt ?? 0,
-    rateLimitedUntil: existing?.rateLimitedUntil ?? 0
+    rateLimitedUntil: existing?.rateLimitedUntil ?? 0,
+    leaseId: existing?.leaseId,
+    leaseUntil: existing?.leaseUntil ?? 0
   };
 }
 
@@ -82,15 +88,37 @@ export class InMemoryAccountStore implements AccountStore {
 
   async pickActive(nowMs: number = now()): Promise<AccountRecord | undefined> {
     const candidates = Array.from(this.accounts.values())
-      .filter((account) => account.status === "active" && account.rateLimitedUntil <= nowMs)
+      .filter((account) => account.status === "active" && account.rateLimitedUntil <= nowMs && account.leaseUntil <= nowMs)
       .sort((a, b) => a.lastUsedAt - b.lastUsedAt || a.createdAt - b.createdAt);
     return candidates[0] ? { ...candidates[0] } : undefined;
+  }
+
+  async leaseActive(leaseId: string, leaseUntilMs: number, nowMs: number = now()): Promise<AccountRecord | undefined> {
+    const account = Array.from(this.accounts.values())
+      .filter((candidate) => candidate.status === "active" && candidate.rateLimitedUntil <= nowMs && candidate.leaseUntil <= nowMs)
+      .sort((a, b) => a.lastUsedAt - b.lastUsedAt || a.createdAt - b.createdAt)[0];
+    if (!account) {
+      return undefined;
+    }
+    account.leaseId = leaseId;
+    account.leaseUntil = leaseUntilMs;
+    return { ...account };
+  }
+
+  async releaseLease(uid: string, leaseId?: string): Promise<void> {
+    const account = this.accounts.get(uid);
+    if (account && (!leaseId || account.leaseId === leaseId)) {
+      account.leaseId = undefined;
+      account.leaseUntil = 0;
+    }
   }
 
   async markUsed(uid: string, usedAtMs: number = now()): Promise<void> {
     const account = this.accounts.get(uid);
     if (account) {
       account.lastUsedAt = usedAtMs;
+      account.leaseId = undefined;
+      account.leaseUntil = 0;
     }
   }
 
@@ -98,6 +126,8 @@ export class InMemoryAccountStore implements AccountStore {
     const account = this.accounts.get(uid);
     if (account) {
       account.status = status;
+      account.leaseId = undefined;
+      account.leaseUntil = 0;
     }
   }
 
@@ -105,6 +135,8 @@ export class InMemoryAccountStore implements AccountStore {
     const account = this.accounts.get(uid);
     if (account) {
       account.rateLimitedUntil = untilMs;
+      account.leaseId = undefined;
+      account.leaseUntil = 0;
     }
   }
 }

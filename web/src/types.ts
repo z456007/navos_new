@@ -19,7 +19,7 @@ export interface Mailbox {
   token?: string;
 }
 
-export type PanelId = "accounts" | "mail" | "probe" | "video" | "cos";
+export type PanelId = "accounts" | "mail" | "probe" | "video" | "cos" | "yydsConfig";
 
 export interface CosConfig {
   id?: number;
@@ -33,6 +33,15 @@ export interface CosConfig {
   appId?: string;
   publicDomain?: string;
   uploadPrefix?: string;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+export interface YydsMailConfig {
+  id?: number;
+  configured?: boolean;
+  enabled?: boolean;
+  apiKeyConfigured?: boolean;
   createdAt?: number;
   updatedAt?: number;
 }
