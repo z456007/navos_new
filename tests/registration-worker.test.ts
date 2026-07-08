@@ -243,17 +243,131 @@ describe("processRegistrationJob", () => {
     });
   });
 
+  it("serializes concurrent fill jobs so the second sees accounts created by the first", async () => {
+    const firstAttempt = deferredResult(success(1));
+    const secondAttempt = deferredResult(success(2));
+    const attemptQueue = [firstAttempt, secondAttempt];
+    let activeCount = 0;
+    const observedActiveCounts: number[] = [];
+    const registrationService = makeRegistrationService({
+      getStats: vi.fn(async () => {
+        observedActiveCounts.push(activeCount);
+        return stats({ activeCount });
+      }),
+      registerOne: vi.fn(() => {
+        const attempt = attemptQueue.shift();
+        if (!attempt) {
+          throw new Error("unexpected registration attempt");
+        }
+        return attempt.promise.then((result) => {
+          if (result.success) {
+            activeCount += 1;
+          }
+          return result;
+        });
+      })
+    });
+    const firstJob = makeJob({ mode: "fill", target: 2, concurrency: 2 }, "fill-1");
+    const secondJob = makeJob({ mode: "fill", target: 2, concurrency: 2 }, "fill-2");
+
+    const firstProcessing = processRegistrationJob(firstJob, registrationService);
+    const secondProcessing = processRegistrationJob(secondJob, registrationService);
+
+    await vi.waitFor(() => expect(registrationService.registerOne).toHaveBeenCalledTimes(2));
+    expect(registrationService.getStats).toHaveBeenCalledTimes(1);
+
+    firstAttempt.resolve();
+    secondAttempt.resolve();
+
+    await expect(firstProcessing).resolves.toMatchObject({
+      target: 2,
+      started: 2,
+      completed: 2,
+      failed: 0,
+      results: [success(1), success(2)]
+    });
+    await expect(secondProcessing).resolves.toMatchObject({
+      target: 2,
+      started: 0,
+      completed: 0,
+      failed: 0,
+      results: []
+    });
+
+    expect(observedActiveCounts).toEqual([0, 2]);
+    expect(registrationService.registerOne).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ["NaN target", { mode: "fill", target: Number.NaN, concurrency: 1 }, /target/],
+    ["fractional target", { mode: "fill", target: 1.5, concurrency: 1 }, /target/],
+    ["infinite target", { mode: "fill", target: Number.POSITIVE_INFINITY, concurrency: 1 }, /target/],
+    ["zero target", { mode: "fill", target: 0, concurrency: 1 }, /target/],
+    ["too-high target", { mode: "fill", target: 501, concurrency: 1 }, /target/],
+    ["NaN concurrency", { mode: "fill", target: 2, concurrency: Number.NaN }, /concurrency/],
+    ["fractional concurrency", { mode: "fill", target: 2, concurrency: 1.5 }, /concurrency/],
+    [
+      "infinite concurrency",
+      { mode: "fill", target: 2, concurrency: Number.POSITIVE_INFINITY },
+      /concurrency/
+    ],
+    ["zero concurrency", { mode: "fill", target: 2, concurrency: 0 }, /concurrency/],
+    ["too-high concurrency", { mode: "fill", target: 2, concurrency: 21 }, /concurrency/]
+  ])("rejects malformed fill payload before stats/progress/registering: %s", async (_caseName, payload, message) => {
+    const registrationService = makeRegistrationService({
+      getStats: vi.fn(async () => stats({ activeCount: 0 }))
+    });
+    const clearCancelRequest = vi.fn(async () => undefined);
+    const job = makeJob(payload as RegistrationJobPayload);
+    job.updateProgress = vi.fn(async () => {
+      throw new Error("progress should not start for malformed fill payload");
+    });
+
+    await expect(
+      processRegistrationJob(job, registrationService, { clearCancelRequest })
+    ).rejects.toThrow(message);
+
+    expect(clearCancelRequest).toHaveBeenCalledWith("job-1");
+    expect(registrationService.getStats).not.toHaveBeenCalled();
+    expect(registrationService.registerOne).not.toHaveBeenCalled();
+    expect(job.updateProgress).not.toHaveBeenCalled();
+  });
+
+  it("clears fill cancel request when getStats throws without masking the original error", async () => {
+    const registrationService = makeRegistrationService({
+      getStats: vi.fn(async () => {
+        throw new Error("stats unavailable");
+      })
+    });
+    const clearCancelRequest = vi.fn(async () => {
+      throw new Error("redis unavailable");
+    });
+    const job = makeJob({ mode: "fill", target: 2, concurrency: 1 });
+
+    await expect(
+      processRegistrationJob(job, registrationService, { clearCancelRequest })
+    ).rejects.toThrow("stats unavailable");
+
+    expect(clearCancelRequest).toHaveBeenCalledWith("job-1");
+    expect(registrationService.registerOne).not.toHaveBeenCalled();
+    expect(job.updateProgress).not.toHaveBeenCalled();
+  });
+
   it("rejects malformed fill concurrency without registering", async () => {
     const registrationService = makeRegistrationService({
       getStats: vi.fn(async () => stats({ activeCount: 0 }))
     });
+    const clearCancelRequest = vi.fn(async () => undefined);
     const job = makeJob({ mode: "fill", target: 2, concurrency: 0 });
 
-    await expect(processRegistrationJob(job, registrationService)).rejects.toThrow(
-      "fill registration concurrency must be greater than 0"
+    await expect(
+      processRegistrationJob(job, registrationService, { clearCancelRequest })
+    ).rejects.toThrow(
+      "fill registration concurrency must be an integer from 1 to 20"
     );
 
-    expect(registrationService.getStats).toHaveBeenCalledTimes(1);
+    expect(clearCancelRequest).toHaveBeenCalledWith("job-1");
+    expect(registrationService.getStats).not.toHaveBeenCalled();
     expect(registrationService.registerOne).not.toHaveBeenCalled();
   });
 

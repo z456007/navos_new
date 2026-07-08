@@ -7,6 +7,12 @@ import type {
 } from "./registration-job-types.js";
 
 const QUEUE_NAME = "registration";
+const MIN_FILL_TARGET = 1;
+const MAX_FILL_TARGET = 500;
+const MIN_FILL_CONCURRENCY = 1;
+const MAX_FILL_CONCURRENCY = 20;
+
+let fillRegistrationQueue: Promise<void> = Promise.resolve();
 
 export interface RegistrationWorkerOptions {
   redisUrl: string;
@@ -32,6 +38,7 @@ export async function processRegistrationJob(
 ): Promise<unknown> {
   const jobId = String(job.id);
   const progress = createProgressTracker(job);
+  const data = job.data;
 
   if (await isCancellationRequested(job, jobId, options)) {
     await progress.update(0, 0, 0, 0, "warn", "registration job canceled before start");
@@ -39,11 +46,13 @@ export async function processRegistrationJob(
     return { canceled: true };
   }
 
-  if (job.data.mode === "single") {
+  if (data.mode === "single") {
     return processSingleRegistration(jobId, progress, registrationService, options);
   }
 
-  return processFillRegistration(jobId, job.data, progress, registrationService, options);
+  return runSerializedFillRegistration(() => (
+    processFillRegistration(jobId, data, progress, registrationService, options)
+  ));
 }
 
 export function createRegistrationWorker(options: RegistrationWorkerOptions): Worker<RegistrationJobPayload> {
@@ -97,54 +106,76 @@ async function processFillRegistration(
   registrationService: RegistrationService,
   options: RegistrationProcessorOptions
 ): Promise<unknown> {
-  const stats = await registrationService.getStats();
-  const total = Math.max(0, data.target - stats.activeCount);
-  const results: RegistrationResult[] = [];
-  let started = 0;
-  let completed = 0;
-  let failed = 0;
+  try {
+    validateFillRegistrationPayload(data);
 
-  await progress.update(started, completed, failed, total, "info", "fill registration started");
+    const stats = await registrationService.getStats();
+    const total = Math.max(0, data.target - stats.activeCount);
+    const results: RegistrationResult[] = [];
+    let started = 0;
+    let completed = 0;
+    let failed = 0;
 
-  if (data.concurrency <= 0) {
-    throw new Error("fill registration concurrency must be greater than 0");
-  }
+    await progress.update(started, completed, failed, total, "info", "fill registration started");
 
-  while (started < total) {
-    if (await isCancellationRequestedForId(jobId, options)) {
-      await progress.update(started, completed, failed, total, "warn", "fill registration canceled");
-      await clearCancelRequestBestEffort(jobId, options);
-      return {
-        canceled: true,
-        target: data.target,
-        started,
-        completed,
-        failed,
-        results
-      };
+    while (started < total) {
+      if (await isCancellationRequestedForId(jobId, options)) {
+        await progress.update(started, completed, failed, total, "warn", "fill registration canceled");
+        return {
+          canceled: true,
+          target: data.target,
+          started,
+          completed,
+          failed,
+          results
+        };
+      }
+
+      const batchSize = Math.min(data.concurrency, total - started);
+      const batch = Array.from({ length: batchSize }, () => registerOneSafely(registrationService));
+      started += batchSize;
+      await progress.update(started, completed, failed, total, "info", "fill registration batch started");
+
+      const batchResults = await Promise.all(batch);
+      results.push(...batchResults);
+      completed = results.filter((result) => result.success).length;
+      failed = results.length - completed;
+
+      await progress.update(started, completed, failed, total, "info", "fill registration batch completed");
     }
 
-    const batchSize = Math.min(data.concurrency, total - started);
-    const batch = Array.from({ length: batchSize }, () => registerOneSafely(registrationService));
-    started += batchSize;
-    await progress.update(started, completed, failed, total, "info", "fill registration batch started");
-
-    const batchResults = await Promise.all(batch);
-    results.push(...batchResults);
-    completed = results.filter((result) => result.success).length;
-    failed = results.length - completed;
-
-    await progress.update(started, completed, failed, total, "info", "fill registration batch completed");
+    return {
+      target: data.target,
+      started,
+      completed,
+      failed,
+      results
+    };
+  } finally {
+    await clearCancelRequestBestEffort(jobId, options);
   }
+}
 
-  await clearCancelRequestBestEffort(jobId, options);
-  return {
-    target: data.target,
-    started,
-    completed,
-    failed,
-    results
-  };
+function runSerializedFillRegistration<T>(operation: () => Promise<T>): Promise<T> {
+  const run = fillRegistrationQueue.then(operation);
+  fillRegistrationQueue = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
+}
+
+function validateFillRegistrationPayload(data: Extract<RegistrationJobPayload, { mode: "fill" }>): void {
+  if (!Number.isSafeInteger(data.target) || data.target < MIN_FILL_TARGET || data.target > MAX_FILL_TARGET) {
+    throw new Error("fill registration target must be an integer from 1 to 500");
+  }
+  if (
+    !Number.isSafeInteger(data.concurrency)
+    || data.concurrency < MIN_FILL_CONCURRENCY
+    || data.concurrency > MAX_FILL_CONCURRENCY
+  ) {
+    throw new Error("fill registration concurrency must be an integer from 1 to 20");
+  }
 }
 
 async function registerOneSafely(registrationService: RegistrationService): Promise<RegistrationResult> {
