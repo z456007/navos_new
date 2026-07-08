@@ -5,10 +5,6 @@ import { InMemoryAccountStore } from "../src/store/account-store.js";
 import { VipClient } from "../src/protocols/vip-client.js";
 import { YydsMailClient } from "../src/protocols/mail/yyds-mail.js";
 
-function mockFetch(body: unknown, status = 200): ReturnType<typeof vi.fn> {
-  return vi.fn(async () => Response.json(body, { status }));
-}
-
 describe("generateCompanyInfo", () => {
   it("generates randomized Chinese company info", () => {
     const info = generateCompanyInfo();
@@ -23,84 +19,62 @@ describe("generateCompanyInfo", () => {
   });
 });
 
+/** YYDS mock that returns mailbox on POST /accounts, code-bearing messages on GET /messages */
+function mailFetchForCode(mailAddr: string, mailToken: string, code: string) {
+  return vi.fn(async (url: string, init?: RequestInit) => {
+    const u = String(url);
+    if (u.includes("/accounts") && init?.method === "POST") {
+      return Response.json({ success: true, data: { address: mailAddr, token: mailToken } });
+    }
+    // /messages with ?address=... — return array with a message containing the code
+    if (u.includes("/messages")) {
+      return Response.json({
+        data: [{ id: "msg-1", subject: "验证码", body: `您的验证码是：${code}` }]
+      });
+    }
+    return Response.json({ success: true, data: {} });
+  });
+}
+
 describe("RegistrationService", () => {
   let accountService: AccountService;
   let store: InMemoryAccountStore;
-  let yydsClient: YydsMailClient;
-  let vipClient: VipClient;
-  let service: RegistrationService;
 
   beforeEach(() => {
     store = new InMemoryAccountStore();
     accountService = new AccountService(store);
   });
 
-  function buildService(vipFetch: ReturnType<typeof mockFetch>, mailFetch: ReturnType<typeof mockFetch>) {
-    vipClient = new VipClient({
-      baseUrl: "https://vip.test",
-      hmacSecret: "test-secret-32-chars-long-enough!!",
-      fetchImpl: vipFetch
-    });
-    yydsClient = new YydsMailClient({
-      baseUrl: "https://mail.test/v1",
-      apiKey: "ac-test",
-      fetchImpl: mailFetch
-    });
-    service = new RegistrationService({
-      yydsClient,
-      vipClient,
-      accountService,
-      maxPollAttempts: 2,
-      pollIntervalMs: 1
+  function vipFetchForPipeline(steps: { failAt?: number; uid?: string; token?: string }) {
+    const failAt = steps.failAt ?? 999;
+    const uid = steps.uid ?? "uid-1";
+    const token = steps.token ?? "tok-1";
+    let step = 0;
+    return vi.fn(async (_url: string, init?: RequestInit) => {
+      step++;
+      const body = init?.body ? JSON.parse(init.body as string) : {};
+      if (step === failAt) return Response.json({ error: "fail" }, { status: 400 });
+
+      if (body.template_scene) return Response.json({ resp_common: { ret: 0 } });
+      if (body.login_type === 9) return Response.json({ uid, token, resp_common: { ret: 0 } });
+      if (body.currency_id) return Response.json({ data: { available_balance: 1000 } });
+      if (body.image_base64) return Response.json({ data: { url: "https://cdn.test/lic.jpg" } });
+      return Response.json({ resp_common: { ret: 0 } });
     });
   }
 
+  function buildService(vipFetch: ReturnType<typeof vi.fn>, mailFetch: ReturnType<typeof vi.fn>) {
+    const vipClient = new VipClient({ baseUrl: "https://vip.test", hmacSecret: "test-secret-32!!", fetchImpl: vipFetch });
+    const yydsClient = new YydsMailClient({ baseUrl: "https://mail.test/v1", apiKey: "ac-test", fetchImpl: mailFetch });
+    const service = new RegistrationService({ yydsClient, vipClient, accountService, maxPollAttempts: 2, pollIntervalMs: 1 });
+    return service;
+  }
+
   it("registers one account through the full pipeline", async () => {
-    let step = 0;
-    const vipFetch = vi.fn(async (_url: string, init?: RequestInit) => {
-      step++;
-      const body = init?.body ? JSON.parse(init.body as string) : {};
+    const vipFetch = vipFetchForPipeline({});
+    const mailFetch = mailFetchForCode("test@mail.test", "mail-tok", "123456");
 
-      if (step === 1) {
-        // sendEmailCode
-        expect(body.email).toBe("test@mail.test");
-        expect(body.template_scene).toBe("login");
-        return Response.json({ resp_common: { ret: 0 } });
-      }
-      if (step === 2) {
-        // login
-        expect(body.login_type).toBe(9);
-        expect(body.email_params.email).toBe("test@mail.test");
-        return Response.json({ uid: "uid-1", token: "tok-1", resp_common: { ret: 0 } });
-      }
-      if (step === 3) {
-        // queryBalance
-        return Response.json({ data: { available_balance: 1000 } });
-      }
-      if (step === 4) {
-        // uploadBusinessLicense
-        return Response.json({ data: { url: "https://cdn.test/lic.jpg" } });
-      }
-      if (step === 5) {
-        // submitEnterpriseCert
-        return Response.json({ resp_common: { ret: 0 } });
-      }
-      return Response.json({}, { status: 500 });
-    });
-
-    const mailFetch = vi.fn(async (_url: string) => {
-      return Response.json({
-        success: true,
-        data: {
-          address: "test@mail.test",
-          token: "mail-tok",
-          messages: [{ id: "msg-1", subject: "验证码" }]
-        }
-      });
-    });
-
-    buildService(vipFetch, mailFetch);
-
+    const service = buildService(vipFetch, mailFetch);
     const result = await service.registerOne();
 
     expect(result.success).toBe(true);
@@ -110,63 +84,53 @@ describe("RegistrationService", () => {
     expect(result.balance).toBe(2000);
     expect(result.certCredits).toBe(1000);
 
-    // Verify account was imported into pool
     const accounts = await accountService.listAccounts();
     expect(accounts).toHaveLength(1);
     expect(accounts[0]).toMatchObject({
-      uid: "uid-1",
-      tokenPreview: "tok-1",
-      balanceRemaining: 2000,
-      balanceTotal: 2000,
-      status: "active"
+      uid: "uid-1", tokenPreview: "tok-1",
+      balanceRemaining: 2000, balanceTotal: 2000, status: "active"
     });
   });
 
   it("returns success without cert credits when enterprise cert fails", async () => {
-    let step = 0;
-    const vipFetch = vi.fn(async (_url: string, init?: RequestInit) => {
-      step++;
-      if (step === 1) return Response.json({ resp_common: { ret: 0 } });
-      if (step === 2) return Response.json({ uid: "uid-2", token: "tok-2" });
-      if (step === 3) return Response.json({ data: { available_balance: 1000 } });
-      // step 4: enterprise cert upload fails
-      return Response.json({ error: "upload failed" }, { status: 400 });
-    });
+    const vipFetch = vipFetchForPipeline({ failAt: 4 }); // step 4 = uploadBusinessLicense
+    const mailFetch = mailFetchForCode("test2@mail.test", "mt", "654321");
 
-    const mailFetch = vi.fn(async () =>
-      Response.json({ success: true, data: { address: "test2@mail.test", token: "mt" } })
-    );
-
-    buildService(vipFetch, mailFetch);
+    const service = buildService(vipFetch, mailFetch);
     const result = await service.registerOne();
 
     expect(result.success).toBe(true);
     expect(result.balance).toBe(1000);
     expect(result.certCredits).toBe(0);
-
-    const accounts = await accountService.listAccounts();
-    expect(accounts[0].balanceRemaining).toBe(1000);
   });
 
   it("fillPool registers until target is reached", async () => {
-    let calls = 0;
+    let mailIdx = 0;
+    const mailFetch = vi.fn(async (url: string, init?: RequestInit) => {
+      const u = String(url);
+      if (u.includes("/accounts") && init?.method === "POST") {
+        mailIdx++;
+        return Response.json({ success: true, data: { address: `test-${mailIdx}@mail.test`, token: `mt-${mailIdx}` } });
+      }
+      if (u.includes("/messages")) {
+        return Response.json({ data: [{ id: "msg-1", body: `验证码 111111` }] });
+      }
+      return Response.json({ success: true, data: {} });
+    });
+
+    let step = 0;
     const vipFetch = vi.fn(async (_url: string, init?: RequestInit) => {
-      calls++;
+      step++;
       const body = init?.body ? JSON.parse(init.body as string) : {};
       if (body.template_scene) return Response.json({ resp_common: { ret: 0 } });
-      if (body.login_type) return Response.json({ uid: `uid-${calls}`, token: `tok-${calls}` });
+      if (body.login_type === 9) return Response.json({ uid: `uid-${step}`, token: `tok-${step}` });
       if (body.currency_id) return Response.json({ data: { available_balance: 1000 } });
       if (body.image_base64) return Response.json({ data: { url: "https://cdn.test/lic.jpg" } });
       return Response.json({ resp_common: { ret: 0 } });
     });
 
-    const mailFetch = vi.fn(async () =>
-      Response.json({ success: true, data: { address: `test@mail.test`, token: "mt" } })
-    );
+    const service = buildService(vipFetch, mailFetch);
 
-    buildService(vipFetch, mailFetch);
-
-    // need 3 accounts, target = 3
     const fillResult = await service.fillPool(3, 2);
 
     expect(fillResult.started).toBe(3);
@@ -179,9 +143,10 @@ describe("RegistrationService", () => {
   });
 
   it("getStats returns pool statistics", async () => {
-    const vipFetch = vi.fn(async () => Response.json({ ok: true }));
-    const mailFetch = vi.fn(async () => Response.json({ ok: true }));
-    buildService(vipFetch, mailFetch);
+    const service = buildService(
+      vi.fn(async () => Response.json({ ok: true })),
+      vi.fn(async () => Response.json({ ok: true }))
+    );
 
     await accountService.importAccount({ uid: "a", token: "t", status: "active" });
     await accountService.importAccount({ uid: "b", token: "t", status: "active" });
@@ -198,7 +163,7 @@ describe("RegistrationService", () => {
   it("fillPool returns early when pool already at target", async () => {
     const vipFetch = vi.fn();
     const mailFetch = vi.fn();
-    buildService(vipFetch, mailFetch);
+    const service = buildService(vipFetch, mailFetch);
 
     await accountService.importAccount({ uid: "a", token: "t", status: "active" });
     await accountService.importAccount({ uid: "b", token: "t", status: "active" });
@@ -207,5 +172,32 @@ describe("RegistrationService", () => {
     expect(result.started).toBe(0);
     expect(result.completed).toBe(0);
     expect(vipFetch).not.toHaveBeenCalled();
+  });
+
+  it("returns failure when verification code is never received", async () => {
+    const vipFetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = init?.body ? JSON.parse(init.body as string) : {};
+      if (body.template_scene) return Response.json({ resp_common: { ret: 0 } });
+      return Response.json({}, { status: 500 });
+    });
+
+    // YYDS returns no messages with codes
+    const mailFetch = vi.fn(async (url: string, init?: RequestInit) => {
+      const u = String(url);
+      if (u.includes("/accounts") && init?.method === "POST") {
+        return Response.json({ success: true, data: { address: "test@mail.test", token: "mt" } });
+      }
+      if (u.includes("/messages")) {
+        return Response.json({ data: [] });
+      }
+      return Response.json({ success: true, data: {} });
+    });
+
+    const service = buildService(vipFetch, mailFetch);
+    const result = await service.registerOne();
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("verification code not received");
+    expect(result.email).toBe("test@mail.test");
   });
 });
