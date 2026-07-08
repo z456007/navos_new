@@ -15,11 +15,30 @@ describe("video protocol", () => {
     expect(normalizeVideoTaskStatus({ status: "running" }).status).toBe("running");
   });
 
+  it("normalizes nested navos task responses", () => {
+    const raw = {
+      code: 200,
+      data: {
+        task_id: "task_2",
+        status: "completed",
+        data: {
+          video_url: "https://cdn.test/final.mp4"
+        }
+      }
+    };
+
+    expect(normalizeVideoTaskStatus(raw)).toMatchObject({
+      id: "task_2",
+      status: "succeeded",
+      videoUrl: "https://cdn.test/final.mp4"
+    });
+  });
+
   it("creates and polls video tasks through provider client", async () => {
     const paths: string[] = [];
     const client = new ProviderHttpClient("https://upstream.test", async (url, init) => {
       paths.push(`${init?.method ?? "GET"} ${new URL(String(url)).pathname}`);
-      if (String(url).endsWith("/api/video/generations")) {
+      if (String(url).endsWith("/api/tasks/navos-seedance-video-generation")) {
         return Response.json({ task_id: "task_1", status: "queued" });
       }
       return Response.json({ task_id: "task_1", status: "success", video_url: "https://cdn.test/v.mp4" });
@@ -30,7 +49,9 @@ describe("video protocol", () => {
 
     expect(created.body).toMatchObject({ task_id: "task_1" });
     expect(polled.body).toMatchObject({ status: "succeeded", videoUrl: "https://cdn.test/v.mp4" });
-    expect(paths).toEqual(["POST /api/video/generations", "GET /api/video/generations/task_1"]);
+    expect(paths).toEqual([
+      "POST /api/tasks/navos-seedance-video-generation",
+      "GET /api/tasks/video/generations/task_1"
+    ]);
   });
 });
-

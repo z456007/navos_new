@@ -348,7 +348,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     await sendProviderResult(reply, result);
   });
 
-  app.post("/api/video/generations", async (request, reply) => {
+  async function handleCreateVideo(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     if (!requireLocalAuth(request, reply)) {
       return;
     }
@@ -358,9 +358,9 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     }
     const result = await createVideoTask(client, bodyRecord(request), headers);
     await sendProviderResult(reply, result);
-  });
+  }
 
-  app.get("/api/video/generations/:taskId", async (request, reply) => {
+  async function handleGetVideoTask(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     if (!requireLocalAuth(request, reply)) {
       return;
     }
@@ -375,7 +375,12 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     }
     const result = await getVideoTask(client, params.taskId, headers);
     await sendProviderResult(reply, result);
-  });
+  }
+
+  app.post("/api/video/generations", handleCreateVideo);
+  app.post("/v1/video/generations", handleCreateVideo);
+  app.get("/api/video/generations/:taskId", handleGetVideoTask);
+  app.get("/v1/video/generations/:taskId", handleGetVideoTask);
 
   return app;
 }

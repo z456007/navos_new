@@ -11,11 +11,35 @@ export interface NormalizedVideoTask {
   raw: unknown;
 }
 
-function readString(record: Record<string, unknown>, keys: string[]): string | undefined {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.length > 0) {
-      return value;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function candidateRecords(raw: unknown): Record<string, unknown>[] {
+  if (!isRecord(raw)) {
+    return [];
+  }
+
+  const records = [raw];
+  const firstData = raw.data;
+  if (isRecord(firstData)) {
+    records.push(firstData);
+    const nestedData = firstData.data;
+    if (isRecord(nestedData)) {
+      records.push(nestedData);
+    }
+  }
+
+  return records;
+}
+
+function readString(records: Record<string, unknown>[], keys: string[]): string | undefined {
+  for (const record of records) {
+    for (const key of keys) {
+      const value = record[key];
+      if (typeof value === "string" && value.length > 0) {
+        return value;
+      }
     }
   }
   return undefined;
@@ -42,12 +66,12 @@ function mapStatus(status: string | undefined): NormalizedVideoStatus {
 }
 
 export function normalizeVideoTaskStatus(raw: unknown): NormalizedVideoTask {
-  const record = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const records = candidateRecords(raw);
   return {
-    id: readString(record, ["id", "task_id", "taskId"]),
-    status: mapStatus(readString(record, ["status", "state"])),
-    videoUrl: readString(record, ["videoUrl", "video_url", "url", "output_url"]),
-    error: readString(record, ["error", "error_message", "message"]),
+    id: readString(records, ["id", "task_id", "taskId"]),
+    status: mapStatus(readString(records, ["status", "state"])),
+    videoUrl: readString(records, ["videoUrl", "video_url", "url", "output_url"]),
+    error: readString(records, ["error", "error_message", "message"]),
     raw
   };
 }
@@ -57,7 +81,7 @@ export async function createVideoTask<T = unknown>(
   payload: Record<string, unknown>,
   headers: Record<string, string>
 ): Promise<ProviderResult<T>> {
-  return client.requestJson<T>("POST", "/api/video/generations", payload, headers);
+  return client.requestJson<T>("POST", "/api/tasks/navos-seedance-video-generation", payload, headers);
 }
 
 export async function getVideoTask(
@@ -65,10 +89,9 @@ export async function getVideoTask(
   taskId: string,
   headers: Record<string, string>
 ): Promise<ProviderResult<NormalizedVideoTask>> {
-  const result = await client.requestJson("GET", `/api/video/generations/${encodeURIComponent(taskId)}`, undefined, headers);
+  const result = await client.requestJson("GET", `/api/tasks/video/generations/${encodeURIComponent(taskId)}`, undefined, headers);
   return {
     ...result,
     body: normalizeVideoTaskStatus(result.body)
   };
 }
-

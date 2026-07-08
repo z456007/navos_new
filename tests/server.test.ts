@@ -96,4 +96,42 @@ describe("server routes", () => {
     ]);
     expect(listed.json()[0]).not.toHaveProperty("token");
   });
+
+  it("exposes v1 video generation compatibility routes", async () => {
+    const paths: string[] = [];
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+      fetchImpl: async (url, init) => {
+        paths.push(`${init?.method ?? "GET"} ${new URL(String(url)).pathname}`);
+        if (String(url).endsWith("/api/tasks/navos-seedance-video-generation")) {
+          return Response.json({ task_id: "task_1", status: "queued" });
+        }
+        return Response.json({ task_id: "task_1", status: "success", video_url: "https://cdn.test/v.mp4" });
+      }
+    });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/video/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "city skyline", durationSeconds: 5, resolution: "720P" }
+    });
+
+    const polled = await app.inject({
+      method: "GET",
+      url: "/v1/video/generations/task_1",
+      headers: { authorization: "Bearer sk-test" }
+    });
+
+    expect(created.statusCode).toBe(200);
+    expect(polled.statusCode).toBe(200);
+    expect(polled.json()).toMatchObject({ status: "succeeded", videoUrl: "https://cdn.test/v.mp4" });
+    expect(paths).toEqual([
+      "POST /api/tasks/navos-seedance-video-generation",
+      "GET /api/tasks/video/generations/task_1"
+    ]);
+  });
 });
