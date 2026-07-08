@@ -3,7 +3,10 @@ import { YydsMailClient } from "./protocols/mail/yyds-mail.js";
 import { VipClient } from "./protocols/vip-client.js";
 import { createApp } from "./server/app.js";
 import { AccountService } from "./services/account-service.js";
+import { BullmqRegistrationQueue } from "./services/bullmq-registration-queue.js";
+import { RegistrationJobService } from "./services/registration-job-service.js";
 import { RegistrationService } from "./services/registration-service.js";
+import { createRegistrationWorker } from "./services/registration-worker.js";
 import { MysqlAccountStore } from "./store/mysql-account-store.js";
 import { MysqlCosConfigStore } from "./store/cos-config-store.js";
 import { MysqlYydsMailConfigStore } from "./store/yyds-mail-config-store.js";
@@ -43,6 +46,27 @@ const registrationService = new RegistrationService({
   accountService
 });
 
+const registrationQueue = new BullmqRegistrationQueue({
+  redisUrl: config.redisUrl,
+  queuePrefix: config.queuePrefix,
+  removeOnComplete: config.registrationJobRemoveOnComplete,
+  removeOnFail: config.registrationJobRemoveOnFail
+});
+
+const registrationJobService = new RegistrationJobService(registrationQueue, {
+  defaultTarget: config.poolTargetSize > 0 ? config.poolTargetSize : 10,
+  defaultConcurrency: config.registrationConcurrency
+});
+
+const registrationWorker = createRegistrationWorker({
+  redisUrl: config.redisUrl,
+  queuePrefix: config.queuePrefix,
+  concurrency: config.registrationJobConcurrency,
+  registrationService,
+  isCancelRequested: (jobId) => registrationQueue.isCancelRequested(jobId),
+  clearCancelRequest: (jobId) => registrationQueue.clearCancelRequest(jobId)
+});
+
 const app = createApp({
   ...config,
   accountService,
@@ -51,7 +75,13 @@ const app = createApp({
   yydsMailConfigSecret: config.cosConfigSecret,
   yydsMailConfigStore,
   videoTaskStore,
-  registrationService
+  registrationService,
+  registrationJobService
+});
+
+app.addHook("onClose", async () => {
+  await registrationWorker.close();
+  await registrationQueue.close();
 });
 
 await app.listen({ host: "0.0.0.0", port: config.listenPort });
