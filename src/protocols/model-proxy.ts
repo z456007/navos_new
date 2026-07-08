@@ -14,6 +14,13 @@ const ALLOWED_PATHS = new Set([
   "/v1/messages"
 ]);
 
+function upstreamPath(path: string): string {
+  if (path === "/v1/chat/completions") {
+    return "/chat/completions";
+  }
+  return path;
+}
+
 export async function forwardModelRequest<T = unknown>(
   client: ProviderHttpClient,
   request: ModelProxyRequest
@@ -21,9 +28,9 @@ export async function forwardModelRequest<T = unknown>(
   if (!ALLOWED_PATHS.has(request.path)) {
     throw new Error(`Unsupported proxy path: ${request.path}`);
   }
+  const path = upstreamPath(request.path);
   if (request.method === "GET") {
-    return client.requestJson<T>("GET", request.path, undefined, request.headers);
+    return client.requestJson<T>("GET", path, undefined, request.headers);
   }
-  return client.requestJson<T>("POST", request.path, request.body ?? {}, request.headers);
+  return client.requestJson<T>("POST", path, request.body ?? {}, request.headers);
 }
-

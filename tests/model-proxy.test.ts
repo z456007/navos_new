@@ -21,7 +21,7 @@ describe("model proxy", () => {
 
     expect(result.status).toBe(200);
     expect(result.body).toEqual({ id: "chatcmpl_1" });
-    expect(capturedUrl).toBe("https://upstream.test/v1/chat/completions");
+    expect(capturedUrl).toBe("https://upstream.test/chat/completions");
     expect(capturedInit?.method).toBe("POST");
   });
 
@@ -35,4 +35,3 @@ describe("model proxy", () => {
     })).rejects.toThrow(/Unsupported proxy path/);
   });
 });
-
