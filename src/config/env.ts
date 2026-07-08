@@ -7,7 +7,16 @@ export interface AppConfig {
   listenPort: number;
   yydsMailApiKey?: string;
   yydsMailBaseUrl: string;
+  mysql: MysqlEnvConfig;
   defaultAccount?: AccountIdentity;
+}
+
+export interface MysqlEnvConfig {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database: string;
 }
 
 type EnvInput = Record<string, string | undefined>;
@@ -41,6 +50,17 @@ function parsePort(value: string | undefined): number {
   return port;
 }
 
+function parseMysqlPort(value: string | undefined): number {
+  if (!value) {
+    return 3306;
+  }
+  const port = Number.parseInt(value, 10);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`Invalid MYSQL_PORT: ${value}`);
+  }
+  return port;
+}
+
 export function loadConfig(env: EnvInput = process.env): AppConfig {
   const uid = env.PROVIDER_ACCOUNT_UID?.trim();
   const token = env.PROVIDER_ACCOUNT_TOKEN?.trim();
@@ -53,6 +73,13 @@ export function loadConfig(env: EnvInput = process.env): AppConfig {
     listenPort: parsePort(env.PORT),
     yydsMailApiKey: env.YYDS_MAIL_API_KEY?.trim() || undefined,
     yydsMailBaseUrl: (env.YYDS_MAIL_BASE_URL?.trim() || "https://maliapi.215.im/v1").replace(/\/+$/, ""),
+    mysql: {
+      host: env.MYSQL_HOST?.trim() || "127.0.0.1",
+      port: parseMysqlPort(env.MYSQL_PORT),
+      user: env.MYSQL_USER?.trim() || "root",
+      password: env.MYSQL_PASSWORD ?? "",
+      database: env.MYSQL_DATABASE?.trim() || "navos_new"
+    },
     defaultAccount
   };
 }

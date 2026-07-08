@@ -1,0 +1,160 @@
+import mysql, { type Pool, type RowDataPacket } from "mysql2/promise";
+import type { AccountImportInput, AccountRecord, AccountStatus, AccountStore } from "./account-store.js";
+
+export interface MysqlConfig {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database: string;
+}
+
+interface AccountRow extends RowDataPacket {
+  uid: string;
+  token: string;
+  mailbox_addr: string | null;
+  mailbox_token: string | null;
+  balance_remaining: number;
+  balance_total: number;
+  status: AccountStatus;
+  created_at: number;
+  last_used_at: number;
+  last_balance_at: number;
+  rate_limited_until: number;
+}
+
+export class MysqlAccountStore implements AccountStore {
+  private readonly pool: Pool;
+
+  constructor(config: MysqlConfig) {
+    this.pool = mysql.createPool({
+      host: config.host,
+      port: config.port,
+      user: config.user,
+      password: config.password,
+      database: config.database,
+      waitForConnections: true,
+      connectionLimit: 10,
+      namedPlaceholders: true
+    });
+  }
+
+  static async createDatabaseIfMissing(config: MysqlConfig): Promise<void> {
+    const connection = await mysql.createConnection({
+      host: config.host,
+      port: config.port,
+      user: config.user,
+      password: config.password
+    });
+    try {
+      await connection.query(`CREATE DATABASE IF NOT EXISTS \`${config.database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+    } finally {
+      await connection.end();
+    }
+  }
+
+  async close(): Promise<void> {
+    await this.pool.end();
+  }
+
+  async ensureSchema(): Promise<void> {
+    await this.pool.query(`
+      CREATE TABLE IF NOT EXISTS accounts (
+        uid VARCHAR(128) PRIMARY KEY,
+        token TEXT NOT NULL,
+        mailbox_addr VARCHAR(320) NULL,
+        mailbox_token TEXT NULL,
+        balance_remaining INT NOT NULL DEFAULT 0,
+        balance_total INT NOT NULL DEFAULT 0,
+        status ENUM('active', 'disabled', 'depleted') NOT NULL DEFAULT 'active',
+        created_at BIGINT NOT NULL,
+        last_used_at BIGINT NOT NULL DEFAULT 0,
+        last_balance_at BIGINT NOT NULL DEFAULT 0,
+        rate_limited_until BIGINT NOT NULL DEFAULT 0,
+        INDEX idx_accounts_pick (status, rate_limited_until, last_used_at, created_at)
+      )
+    `);
+  }
+
+  async upsert(account: AccountImportInput): Promise<AccountRecord> {
+    const createdAt = Date.now();
+    await this.pool.execute(
+      `INSERT INTO accounts
+        (uid, token, mailbox_addr, mailbox_token, balance_remaining, balance_total, status, created_at)
+       VALUES
+        (:uid, :token, :mailboxAddr, :mailboxToken, :balanceRemaining, :balanceTotal, :status, :createdAt)
+       ON DUPLICATE KEY UPDATE
+        token = VALUES(token),
+        mailbox_addr = COALESCE(VALUES(mailbox_addr), mailbox_addr),
+        mailbox_token = COALESCE(VALUES(mailbox_token), mailbox_token),
+        balance_remaining = VALUES(balance_remaining),
+        balance_total = VALUES(balance_total),
+        status = VALUES(status)`,
+      {
+        uid: account.uid,
+        token: account.token,
+        mailboxAddr: account.mailboxAddr ?? null,
+        mailboxToken: account.mailboxToken ?? null,
+        balanceRemaining: account.balanceRemaining ?? 0,
+        balanceTotal: account.balanceTotal ?? 0,
+        status: account.status ?? "active",
+        createdAt
+      }
+    );
+    const saved = await this.get(account.uid);
+    if (!saved) {
+      throw new Error(`failed to load saved account ${account.uid}`);
+    }
+    return saved;
+  }
+
+  async list(): Promise<AccountRecord[]> {
+    const [rows] = await this.pool.query<AccountRow[]>("SELECT * FROM accounts ORDER BY created_at ASC");
+    return rows.map(fromRow);
+  }
+
+  async get(uid: string): Promise<AccountRecord | undefined> {
+    const [rows] = await this.pool.execute<AccountRow[]>("SELECT * FROM accounts WHERE uid = :uid LIMIT 1", { uid });
+    return rows[0] ? fromRow(rows[0]) : undefined;
+  }
+
+  async pickActive(nowMs: number = Date.now()): Promise<AccountRecord | undefined> {
+    const [rows] = await this.pool.execute<AccountRow[]>(
+      `SELECT * FROM accounts
+       WHERE status = 'active' AND rate_limited_until <= :nowMs
+       ORDER BY last_used_at ASC, created_at ASC
+       LIMIT 1`,
+      { nowMs }
+    );
+    return rows[0] ? fromRow(rows[0]) : undefined;
+  }
+
+  async markUsed(uid: string, usedAtMs: number = Date.now()): Promise<void> {
+    await this.pool.execute("UPDATE accounts SET last_used_at = :usedAtMs WHERE uid = :uid", { uid, usedAtMs });
+  }
+
+  async setStatus(uid: string, status: AccountStatus): Promise<void> {
+    await this.pool.execute("UPDATE accounts SET status = :status WHERE uid = :uid", { uid, status });
+  }
+
+  async setCooldown(uid: string, untilMs: number): Promise<void> {
+    await this.pool.execute("UPDATE accounts SET rate_limited_until = :untilMs WHERE uid = :uid", { uid, untilMs });
+  }
+}
+
+function fromRow(row: AccountRow): AccountRecord {
+  return {
+    uid: row.uid,
+    token: row.token,
+    mailboxAddr: row.mailbox_addr ?? undefined,
+    mailboxToken: row.mailbox_token ?? undefined,
+    balanceRemaining: row.balance_remaining,
+    balanceTotal: row.balance_total,
+    status: row.status,
+    createdAt: Number(row.created_at),
+    lastUsedAt: Number(row.last_used_at),
+    lastBalanceAt: Number(row.last_balance_at),
+    rateLimitedUntil: Number(row.rate_limited_until)
+  };
+}
+

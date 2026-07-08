@@ -8,6 +8,7 @@ import { registerAccount } from "../protocols/register.js";
 import { uploadAsset } from "../protocols/upload.js";
 import { createVideoTask, getVideoTask } from "../protocols/video.js";
 import { YydsMailClient, YydsMailError } from "../protocols/mail/yyds-mail.js";
+import { AccountService } from "../services/account-service.js";
 import { InMemoryAccountStore } from "../store/account-store.js";
 
 export interface CreateAppOptions {
@@ -15,6 +16,7 @@ export interface CreateAppOptions {
   providerBaseUrl: string;
   providerAuthMode: ProviderAuthMode;
   defaultAccount?: AccountIdentity;
+  accountService?: AccountService;
   yydsMailApiKey?: string;
   yydsMailBaseUrl?: string;
   fetchImpl?: FetchLike;
@@ -28,6 +30,10 @@ interface UploadRequestBody {
 interface MailboxQuery {
   address?: string;
   token?: string;
+}
+
+interface CooldownBody {
+  seconds?: unknown;
 }
 
 function headersFromRequest(request: FastifyRequest): HeaderBag {
@@ -52,7 +58,7 @@ async function sendProviderResult(reply: FastifyReply, result: ProviderResult): 
 
 export function createApp(options: CreateAppOptions): FastifyInstance {
   const app = Fastify({ logger: false });
-  const store = new InMemoryAccountStore(options.defaultAccount);
+  const accountService = options.accountService ?? new AccountService(new InMemoryAccountStore(options.defaultAccount));
   const client = new ProviderHttpClient(options.providerBaseUrl, options.fetchImpl);
   const yydsMailClient = new YydsMailClient({
     baseUrl: options.yydsMailBaseUrl ?? "https://maliapi.215.im/v1",
@@ -68,8 +74,8 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     return false;
   }
 
-  function providerHeaders(reply: FastifyReply): Record<string, string> | undefined {
-    const account = store.getDefault();
+  async function providerHeaders(reply: FastifyReply): Promise<Record<string, string> | undefined> {
+    const account = await accountService.pickAccount();
     if (!account) {
       void reply.status(503).send({ error: { message: "No provider account configured", type: "account_unavailable" } });
       return undefined;
@@ -104,7 +110,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     if (!requireLocalAuth(request, reply)) {
       return;
     }
-    const headers = providerHeaders(reply);
+    const headers = await providerHeaders(reply);
     if (!headers) {
       return;
     }
@@ -116,7 +122,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     if (!requireLocalAuth(request, reply)) {
       return;
     }
-    const headers = providerHeaders(reply);
+    const headers = await providerHeaders(reply);
     if (!headers) {
       return;
     }
@@ -133,7 +139,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     if (!requireLocalAuth(request, reply)) {
       return;
     }
-    const headers = providerHeaders(reply);
+    const headers = await providerHeaders(reply);
     if (!headers) {
       return;
     }
@@ -150,12 +156,84 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     if (!requireLocalAuth(request, reply)) {
       return;
     }
-    const headers = providerHeaders(reply);
+    const headers = await providerHeaders(reply);
     if (!headers) {
       return;
     }
     const result = await registerAccount(client, bodyRecord(request), headers);
     await sendProviderResult(reply, result);
+  });
+
+  app.post("/api/accounts/import", async (request, reply) => {
+    if (!requireLocalAuth(request, reply)) {
+      return;
+    }
+    try {
+      await reply.send(await accountService.importAccount(bodyRecord(request) as { uid: string; token: string }));
+    } catch (error) {
+      await reply.status(400).send({ error: { message: error instanceof Error ? error.message : "Invalid account import" } });
+    }
+  });
+
+  app.get("/api/accounts", async (request, reply) => {
+    if (!requireLocalAuth(request, reply)) {
+      return;
+    }
+    await reply.send(await accountService.listAccounts());
+  });
+
+  app.get("/api/accounts/:uid", async (request, reply) => {
+    if (!requireLocalAuth(request, reply)) {
+      return;
+    }
+    const params = request.params as { uid?: string };
+    const account = params.uid ? await accountService.getAccount(params.uid) : undefined;
+    if (!account) {
+      await reply.status(404).send({ error: { message: "Account not found" } });
+      return;
+    }
+    await reply.send(account);
+  });
+
+  app.post("/api/accounts/:uid/enable", async (request, reply) => {
+    if (!requireLocalAuth(request, reply)) {
+      return;
+    }
+    const params = request.params as { uid?: string };
+    const account = params.uid ? await accountService.enableAccount(params.uid) : undefined;
+    if (!account) {
+      await reply.status(404).send({ error: { message: "Account not found" } });
+      return;
+    }
+    await reply.send(account);
+  });
+
+  app.post("/api/accounts/:uid/disable", async (request, reply) => {
+    if (!requireLocalAuth(request, reply)) {
+      return;
+    }
+    const params = request.params as { uid?: string };
+    const account = params.uid ? await accountService.disableAccount(params.uid) : undefined;
+    if (!account) {
+      await reply.status(404).send({ error: { message: "Account not found" } });
+      return;
+    }
+    await reply.send(account);
+  });
+
+  app.post("/api/accounts/:uid/cooldown", async (request, reply) => {
+    if (!requireLocalAuth(request, reply)) {
+      return;
+    }
+    const params = request.params as { uid?: string };
+    const body = request.body as CooldownBody | undefined;
+    const seconds = typeof body?.seconds === "number" ? body.seconds : 600;
+    const account = params.uid ? await accountService.cooldownAccount(params.uid, seconds) : undefined;
+    if (!account) {
+      await reply.status(404).send({ error: { message: "Account not found" } });
+      return;
+    }
+    await reply.send(account);
   });
 
   app.post("/api/mail/yyds/accounts", async (request, reply) => {
@@ -225,7 +303,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     if (!requireLocalAuth(request, reply)) {
       return;
     }
-    const headers = providerHeaders(reply);
+    const headers = await providerHeaders(reply);
     if (!headers) {
       return;
     }
@@ -248,7 +326,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     if (!requireLocalAuth(request, reply)) {
       return;
     }
-    const headers = providerHeaders(reply);
+    const headers = await providerHeaders(reply);
     if (!headers) {
       return;
     }
@@ -260,7 +338,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     if (!requireLocalAuth(request, reply)) {
       return;
     }
-    const headers = providerHeaders(reply);
+    const headers = await providerHeaders(reply);
     if (!headers) {
       return;
     }

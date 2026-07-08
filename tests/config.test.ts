@@ -9,7 +9,12 @@ describe("loadConfig", () => {
       PROVIDER_ACCOUNT_UID: "u1",
       PROVIDER_ACCOUNT_TOKEN: "t1",
       YYDS_MAIL_API_KEY: "ac-test",
-      YYDS_MAIL_BASE_URL: "https://mail.test/v1"
+      YYDS_MAIL_BASE_URL: "https://mail.test/v1",
+      MYSQL_HOST: "127.0.0.1",
+      MYSQL_PORT: "3307",
+      MYSQL_USER: "root",
+      MYSQL_PASSWORD: "root",
+      MYSQL_DATABASE: "navos_test"
     });
 
     expect(config.masterApiKey).toBe("sk-test");
@@ -18,6 +23,13 @@ describe("loadConfig", () => {
     expect(config.listenPort).toBe(18888);
     expect(config.yydsMailApiKey).toBe("ac-test");
     expect(config.yydsMailBaseUrl).toBe("https://mail.test/v1");
+    expect(config.mysql).toEqual({
+      host: "127.0.0.1",
+      port: 3307,
+      user: "root",
+      password: "root",
+      database: "navos_test"
+    });
   });
 
   it("rejects missing required settings", () => {
