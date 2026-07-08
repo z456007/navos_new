@@ -94,6 +94,17 @@ describe("processRegistrationJob", () => {
     return { promise, resolve };
   }
 
+  function deferredVoid(): {
+    promise: Promise<void>;
+    resolve: () => void;
+  } {
+    let resolve!: () => void;
+    const promise = new Promise<void>((done) => {
+      resolve = () => done();
+    });
+    return { promise, resolve };
+  }
+
   it("processes one single registration job", async () => {
     const result = success(1);
     const registrationService = makeRegistrationService({
@@ -243,6 +254,47 @@ describe("processRegistrationJob", () => {
     });
   });
 
+  it("does not start fill registrations until batch-start progress update resolves", async () => {
+    const batchStartedProgress = deferredVoid();
+    const expectedResults = [success(1), success(2)];
+    const registrationService = makeRegistrationService({
+      getStats: vi.fn(async () => stats({ activeCount: 0 })),
+      registerOne: vi.fn()
+        .mockResolvedValueOnce(expectedResults[0])
+        .mockResolvedValueOnce(expectedResults[1])
+    });
+    const job = makeJob({ mode: "fill", target: 2, concurrency: 2 });
+    job.updateProgress = vi.fn(async (nextProgress) => {
+      const progress = nextProgress as ProgressWithLogs;
+      if (progress.logs.at(-1)?.message === "fill registration batch started") {
+        await batchStartedProgress.promise;
+      }
+    });
+
+    const processing = processRegistrationJob(job, registrationService);
+
+    await vi.waitFor(() => {
+      expect(job.updateProgress).toHaveBeenCalledTimes(2);
+      expect(lastProgress(job).logs.at(-1)).toMatchObject({
+        level: "info",
+        message: "fill registration batch started"
+      });
+    });
+    const registrationCallsBeforeBatchProgressResolved = vi.mocked(registrationService.registerOne).mock.calls.length;
+
+    batchStartedProgress.resolve();
+    await vi.waitFor(() => expect(registrationService.registerOne).toHaveBeenCalledTimes(2));
+
+    await expect(processing).resolves.toMatchObject({
+      target: 2,
+      started: 2,
+      completed: 2,
+      failed: 0,
+      results: expectedResults
+    });
+    expect(registrationCallsBeforeBatchProgressResolved).toBe(0);
+  });
+
   it("serializes concurrent fill jobs so the second sees accounts created by the first", async () => {
     const firstAttempt = deferredResult(success(1));
     const secondAttempt = deferredResult(success(2));
@@ -296,6 +348,76 @@ describe("processRegistrationJob", () => {
 
     expect(observedActiveCounts).toEqual([0, 2]);
     expect(registrationService.registerOne).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns canceled for a serialized fill canceled after another fill satisfies the target", async () => {
+    const firstAttempt = deferredResult(success(1));
+    const secondAttempt = deferredResult(success(2));
+    const attemptQueue = [firstAttempt, secondAttempt];
+    let activeCount = 0;
+    let secondJobCancellationChecks = 0;
+    const registrationService = makeRegistrationService({
+      getStats: vi.fn(async () => stats({ activeCount })),
+      registerOne: vi.fn(() => {
+        const attempt = attemptQueue.shift();
+        if (!attempt) {
+          throw new Error("unexpected registration attempt");
+        }
+        return attempt.promise.then((result) => {
+          if (result.success) {
+            activeCount += 1;
+          }
+          return result;
+        });
+      })
+    });
+    const isCancelRequested = vi.fn(async (jobId: string) => {
+      if (jobId !== "fill-2") {
+        return false;
+      }
+      secondJobCancellationChecks += 1;
+      return secondJobCancellationChecks > 1;
+    });
+    const clearCancelRequest = vi.fn(async () => undefined);
+    const firstJob = makeJob({ mode: "fill", target: 2, concurrency: 2 }, "fill-1");
+    const secondJob = makeJob({ mode: "fill", target: 2, concurrency: 2 }, "fill-2");
+
+    const firstProcessing = processRegistrationJob(firstJob, registrationService, {
+      isCancelRequested,
+      clearCancelRequest
+    });
+    const secondProcessing = processRegistrationJob(secondJob, registrationService, {
+      isCancelRequested,
+      clearCancelRequest
+    });
+
+    await vi.waitFor(() => expect(registrationService.registerOne).toHaveBeenCalledTimes(2));
+    firstAttempt.resolve();
+    secondAttempt.resolve();
+
+    await expect(firstProcessing).resolves.toMatchObject({
+      target: 2,
+      started: 2,
+      completed: 2,
+      failed: 0,
+      results: [success(1), success(2)]
+    });
+    await expect(secondProcessing).resolves.toEqual({
+      canceled: true,
+      target: 2,
+      started: 0,
+      completed: 0,
+      failed: 0,
+      results: []
+    });
+
+    expect(secondJobCancellationChecks).toBe(2);
+    expect(clearCancelRequest).toHaveBeenCalledWith("fill-2");
+    expect(registrationService.registerOne).toHaveBeenCalledTimes(2);
+    expect(lastProgress(secondJob).logs.at(-1)).toMatchObject({
+      level: "warn",
+      message: expect.stringContaining("canceled")
+    });
   });
 
   it.each([
@@ -421,6 +543,41 @@ describe("processRegistrationJob", () => {
     });
   });
 
+  it("clears cancel request when pre-start cancellation progress update fails", async () => {
+    const registrationService = makeRegistrationService();
+    const isCancelRequested = vi.fn(async () => true);
+    const clearCancelRequest = vi.fn(async () => undefined);
+    const job = makeJob({ mode: "single" });
+    job.updateProgress = vi.fn(async () => {
+      throw new Error("progress unavailable");
+    });
+
+    await expect(
+      processRegistrationJob(job, registrationService, { isCancelRequested, clearCancelRequest })
+    ).rejects.toThrow("progress unavailable");
+
+    expect(clearCancelRequest).toHaveBeenCalledWith("job-1");
+    expect(registrationService.registerOne).not.toHaveBeenCalled();
+    expect(registrationService.getStats).not.toHaveBeenCalled();
+  });
+
+  it("clears cancel request when single registration progress update fails", async () => {
+    const registrationService = makeRegistrationService();
+    const clearCancelRequest = vi.fn(async () => undefined);
+    const job = makeJob({ mode: "single" });
+    job.updateProgress = vi.fn(async () => {
+      throw new Error("progress unavailable");
+    });
+
+    await expect(
+      processRegistrationJob(job, registrationService, { clearCancelRequest })
+    ).rejects.toThrow("progress unavailable");
+
+    expect(clearCancelRequest).toHaveBeenCalledWith("job-1");
+    expect(registrationService.registerOne).not.toHaveBeenCalled();
+    expect(registrationService.getStats).not.toHaveBeenCalled();
+  });
+
   it("cancels fill after stats before the first batch without registering", async () => {
     const registrationService = makeRegistrationService({
       getStats: vi.fn(async () => stats({ activeCount: 1 }))
@@ -496,6 +653,7 @@ describe("processRegistrationJob", () => {
     const isCancelRequested = vi.fn()
       .mockResolvedValueOnce(false)
       .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
       .mockResolvedValueOnce(true);
     const clearCancelRequest = vi.fn(async () => undefined);
     const job = makeJob({ mode: "fill", target: 3, concurrency: 2 });
@@ -511,7 +669,7 @@ describe("processRegistrationJob", () => {
       results: partialResults
     });
 
-    expect(isCancelRequested).toHaveBeenCalledTimes(3);
+    expect(isCancelRequested).toHaveBeenCalledTimes(4);
     expect(clearCancelRequest).toHaveBeenCalledWith("job-1");
     expect(registrationService.registerOne).toHaveBeenCalledTimes(2);
     expect(lastProgress(job)).toMatchObject({

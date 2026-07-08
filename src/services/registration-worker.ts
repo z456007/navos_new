@@ -40,19 +40,22 @@ export async function processRegistrationJob(
   const progress = createProgressTracker(job);
   const data = job.data;
 
-  if (await isCancellationRequested(job, jobId, options)) {
-    await progress.update(0, 0, 0, 0, "warn", "registration job canceled before start");
+  try {
+    if (await isCancellationRequested(job, jobId, options)) {
+      await progress.update(0, 0, 0, 0, "warn", "registration job canceled before start");
+      return { canceled: true };
+    }
+
+    if (data.mode === "single") {
+      return await processSingleRegistration(progress, registrationService);
+    }
+
+    return await runSerializedFillRegistration(() => (
+      processFillRegistration(jobId, data, progress, registrationService, options)
+    ));
+  } finally {
     await clearCancelRequestBestEffort(jobId, options);
-    return { canceled: true };
   }
-
-  if (data.mode === "single") {
-    return processSingleRegistration(jobId, progress, registrationService, options);
-  }
-
-  return runSerializedFillRegistration(() => (
-    processFillRegistration(jobId, data, progress, registrationService, options)
-  ));
 }
 
 export function createRegistrationWorker(options: RegistrationWorkerOptions): Worker<RegistrationJobPayload> {
@@ -71,10 +74,8 @@ export function createRegistrationWorker(options: RegistrationWorkerOptions): Wo
 }
 
 async function processSingleRegistration(
-  jobId: string,
   progress: ReturnType<typeof createProgressTracker>,
-  registrationService: RegistrationService,
-  options: RegistrationProcessorOptions
+  registrationService: RegistrationService
 ): Promise<RegistrationResult> {
   await progress.update(1, 0, 0, 1, "info", "single registration started");
 
@@ -84,18 +85,15 @@ async function processSingleRegistration(
   } catch (error) {
     const message = errorMessage(error, "single registration failed");
     await progress.update(1, 0, 1, 1, "error", "single registration failed");
-    await clearCancelRequestBestEffort(jobId, options);
     throw new Error(message);
   }
 
   if (!result.success) {
     await progress.update(1, 0, 1, 1, "error", "single registration failed");
-    await clearCancelRequestBestEffort(jobId, options);
     throw new Error(result.error ?? "single registration failed");
   }
 
   await progress.update(1, 1, 0, 1, "info", "single registration completed");
-  await clearCancelRequestBestEffort(jobId, options);
   return result;
 }
 
@@ -106,54 +104,62 @@ async function processFillRegistration(
   registrationService: RegistrationService,
   options: RegistrationProcessorOptions
 ): Promise<unknown> {
-  try {
-    validateFillRegistrationPayload(data);
+  validateFillRegistrationPayload(data);
 
-    const stats = await registrationService.getStats();
-    const total = Math.max(0, data.target - stats.activeCount);
-    const results: RegistrationResult[] = [];
-    let started = 0;
-    let completed = 0;
-    let failed = 0;
+  const stats = await registrationService.getStats();
+  const total = Math.max(0, data.target - stats.activeCount);
+  const results: RegistrationResult[] = [];
+  let started = 0;
+  let completed = 0;
+  let failed = 0;
 
-    await progress.update(started, completed, failed, total, "info", "fill registration started");
+  await progress.update(started, completed, failed, total, "info", "fill registration started");
 
-    while (started < total) {
-      if (await isCancellationRequestedForId(jobId, options)) {
-        await progress.update(started, completed, failed, total, "warn", "fill registration canceled");
-        return {
-          canceled: true,
-          target: data.target,
-          started,
-          completed,
-          failed,
-          results
-        };
-      }
-
-      const batchSize = Math.min(data.concurrency, total - started);
-      const batch = Array.from({ length: batchSize }, () => registerOneSafely(registrationService));
-      started += batchSize;
-      await progress.update(started, completed, failed, total, "info", "fill registration batch started");
-
-      const batchResults = await Promise.all(batch);
-      results.push(...batchResults);
-      completed = results.filter((result) => result.success).length;
-      failed = results.length - completed;
-
-      await progress.update(started, completed, failed, total, "info", "fill registration batch completed");
-    }
-
+  if (await isCancellationRequestedForId(jobId, options)) {
+    await progress.update(started, completed, failed, total, "warn", "fill registration canceled");
     return {
+      canceled: true,
       target: data.target,
       started,
       completed,
       failed,
       results
     };
-  } finally {
-    await clearCancelRequestBestEffort(jobId, options);
   }
+
+  while (started < total) {
+    if (await isCancellationRequestedForId(jobId, options)) {
+      await progress.update(started, completed, failed, total, "warn", "fill registration canceled");
+      return {
+        canceled: true,
+        target: data.target,
+        started,
+        completed,
+        failed,
+        results
+      };
+    }
+
+    const batchSize = Math.min(data.concurrency, total - started);
+    started += batchSize;
+    await progress.update(started, completed, failed, total, "info", "fill registration batch started");
+
+    const batch = Array.from({ length: batchSize }, () => registerOneSafely(registrationService));
+    const batchResults = await Promise.all(batch);
+    results.push(...batchResults);
+    completed = results.filter((result) => result.success).length;
+    failed = results.length - completed;
+
+    await progress.update(started, completed, failed, total, "info", "fill registration batch completed");
+  }
+
+  return {
+    target: data.target,
+    started,
+    completed,
+    failed,
+    results
+  };
 }
 
 function runSerializedFillRegistration<T>(operation: () => Promise<T>): Promise<T> {
