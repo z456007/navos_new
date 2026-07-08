@@ -252,6 +252,65 @@ describe("server routes", () => {
     expect((await store.get("u2"))?.status).toBe("depleted");
   });
 
+  it("depletes a chat account when upstream reports insufficient balance", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    await accountService.importAccount({ uid: "u1", token: "t1" });
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      fetchImpl: async () => Response.json(
+        { error: { message: "积分不足：insufficient_balance" } },
+        { status: 402 }
+      )
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: { authorization: "Bearer sk-test" },
+      payload: {
+        model: "openai.gpt-5.5",
+        messages: [{ role: "user", content: "hello" }]
+      }
+    });
+
+    expect(response.statusCode).toBe(402);
+    expect((await store.get("u1"))?.status).toBe("depleted");
+    expect((await store.get("u1"))?.rateLimitedUntil).toBe(0);
+  });
+
+  it("depletes a leased video account when upstream reports insufficient balance", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    await accountService.importAccount({ uid: "u1", token: "t1" });
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      fetchImpl: async () => Response.json(
+        { code: 402, msg: "积分不足：本次生成需要扣除积分 reason=insufficient_balance" },
+        { status: 402 }
+      )
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/video/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "city skyline", durationSeconds: 5, resolution: "720P" }
+    });
+
+    const account = await store.get("u1");
+    expect(response.statusCode).toBe(402);
+    expect(account?.status).toBe("depleted");
+    expect(account?.leaseUntil).toBe(0);
+    expect(account?.rateLimitedUntil).toBe(0);
+  });
+
   it("stores COS config encrypted and never returns secrets", async () => {
     const cosConfigStore = new InMemoryCosConfigStore();
     const app = createApp({

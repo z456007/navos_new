@@ -70,8 +70,12 @@ export class AccountService {
     await this.store.releaseLease(uid, leaseId);
   }
 
-  async depleteVideoAccount(uid: string): Promise<void> {
+  async depleteAccount(uid: string): Promise<void> {
     await this.store.setStatus(uid, "depleted");
+  }
+
+  async depleteVideoAccount(uid: string): Promise<void> {
+    await this.depleteAccount(uid);
   }
 
   async enableAccount(uid: string): Promise<AccountListItem | undefined> {

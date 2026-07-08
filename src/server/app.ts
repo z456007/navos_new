@@ -16,7 +16,7 @@ import { CosConfigService, type CosConfigInput, type EnabledCosConfig } from "..
 import { archiveVideoToCos, type ArchiveVideoResult } from "../services/video-archive.js";
 import { YydsMailConfigService, type YydsMailConfigInput } from "../services/yyds-mail-config-service.js";
 import { SecretBox } from "../security/secretbox.js";
-import { InMemoryAccountStore } from "../store/account-store.js";
+import { InMemoryAccountStore, type AccountRecord } from "../store/account-store.js";
 import { InMemoryCosConfigStore, type CosConfigStore } from "../store/cos-config-store.js";
 import { InMemoryYydsMailConfigStore, type YydsMailConfigStore } from "../store/yyds-mail-config-store.js";
 import { InMemoryVideoTaskStore, type VideoTaskRecord, type VideoTaskStore } from "../store/video-task-store.js";
@@ -53,6 +53,11 @@ interface CooldownBody {
   seconds?: unknown;
 }
 
+interface ProviderAuthContext {
+  account: AccountRecord;
+  headers: Record<string, string>;
+}
+
 function headersFromRequest(request: FastifyRequest): HeaderBag {
   const headers: HeaderBag = {};
   for (const [key, value] of Object.entries(request.headers)) {
@@ -71,6 +76,16 @@ function bodyRecord(request: FastifyRequest): Record<string, unknown> {
 
 async function sendProviderResult(reply: FastifyReply, result: ProviderResult): Promise<void> {
   await reply.status(result.status).send(result.body);
+}
+
+function providerResultIndicatesQuotaExhausted(result: ProviderResult): boolean {
+  if (result.status === 402) {
+    return true;
+  }
+  const bodyText = typeof result.body === "string"
+    ? result.body
+    : JSON.stringify(result.body);
+  return /insufficient_balance|积分不足|余额不足/.test(bodyText);
 }
 
 function normalizeSecretRoot(value: string): string {
@@ -106,13 +121,26 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     return false;
   }
 
-  async function providerHeaders(reply: FastifyReply): Promise<Record<string, string> | undefined> {
+  async function providerAuth(reply: FastifyReply): Promise<ProviderAuthContext | undefined> {
     const account = await accountService.pickAccount();
     if (!account) {
       void reply.status(503).send({ error: { message: "No provider account configured", type: "account_unavailable" } });
       return undefined;
     }
-    return buildProviderAuthHeaders(account, options.providerAuthMode);
+    return {
+      account,
+      headers: buildProviderAuthHeaders(account, options.providerAuthMode)
+    };
+  }
+
+  async function providerHeaders(reply: FastifyReply): Promise<Record<string, string> | undefined> {
+    return (await providerAuth(reply))?.headers;
+  }
+
+  async function depleteProviderAccountIfNeeded(uid: string, result: ProviderResult): Promise<void> {
+    if (providerResultIndicatesQuotaExhausted(result)) {
+      await accountService.depleteAccount(uid);
+    }
   }
 
   async function yydsClient(reply: FastifyReply): Promise<YydsMailClient | undefined> {
@@ -271,11 +299,12 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     if (!requireLocalAuth(request, reply)) {
       return;
     }
-    const headers = await providerHeaders(reply);
-    if (!headers) {
+    const auth = await providerAuth(reply);
+    if (!auth) {
       return;
     }
-    const result = await forwardModelRequest(client, { method: "GET", path: "/v1/models", headers });
+    const result = await forwardModelRequest(client, { method: "GET", path: "/v1/models", headers: auth.headers });
+    await depleteProviderAccountIfNeeded(auth.account.uid, result);
     await sendProviderResult(reply, result);
   });
 
@@ -283,16 +312,17 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     if (!requireLocalAuth(request, reply)) {
       return;
     }
-    const headers = await providerHeaders(reply);
-    if (!headers) {
+    const auth = await providerAuth(reply);
+    if (!auth) {
       return;
     }
     const result = await forwardModelRequest(client, {
       method: "POST",
       path: "/v1/chat/completions",
       body: bodyRecord(request),
-      headers
+      headers: auth.headers
     });
+    await depleteProviderAccountIfNeeded(auth.account.uid, result);
     await sendProviderResult(reply, result);
   });
 
@@ -300,16 +330,17 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     if (!requireLocalAuth(request, reply)) {
       return;
     }
-    const headers = await providerHeaders(reply);
-    if (!headers) {
+    const auth = await providerAuth(reply);
+    if (!auth) {
       return;
     }
     const result = await forwardModelRequest(client, {
       method: "POST",
       path: "/v1/messages",
       body: bodyRecord(request),
-      headers
+      headers: auth.headers
     });
+    await depleteProviderAccountIfNeeded(auth.account.uid, result);
     await sendProviderResult(reply, result);
   });
 
@@ -516,8 +547,8 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     if (!requireLocalAuth(request, reply)) {
       return;
     }
-    const headers = await providerHeaders(reply);
-    if (!headers) {
+    const auth = await providerAuth(reply);
+    if (!auth) {
       return;
     }
 
@@ -530,8 +561,9 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     const result = await uploadAsset(client, {
       source: body.source,
       filename: typeof body.filename === "string" ? body.filename : undefined,
-      headers
+      headers: auth.headers
     });
+    await depleteProviderAccountIfNeeded(auth.account.uid, result);
     await sendProviderResult(reply, result);
   });
 
@@ -562,6 +594,8 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       if (createdTask.id) {
         await saveVideoTask(createdTask, account.uid);
       }
+    } else if (providerResultIndicatesQuotaExhausted(result)) {
+      await accountService.depleteVideoAccount(account.uid);
     } else {
       await accountService.releaseVideoAccount(account.uid, leaseId);
     }
