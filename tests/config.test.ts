@@ -7,13 +7,17 @@ describe("loadConfig", () => {
       MASTER_API_KEY: "sk-test",
       PROVIDER_BASE_URL: "https://upstream.test",
       PROVIDER_ACCOUNT_UID: "u1",
-      PROVIDER_ACCOUNT_TOKEN: "t1"
+      PROVIDER_ACCOUNT_TOKEN: "t1",
+      YYDS_MAIL_API_KEY: "ac-test",
+      YYDS_MAIL_BASE_URL: "https://mail.test/v1"
     });
 
     expect(config.masterApiKey).toBe("sk-test");
     expect(config.providerBaseUrl).toBe("https://upstream.test");
     expect(config.providerAuthMode).toBe("uid-token");
     expect(config.listenPort).toBe(18888);
+    expect(config.yydsMailApiKey).toBe("ac-test");
+    expect(config.yydsMailBaseUrl).toBe("https://mail.test/v1");
   });
 
   it("rejects missing required settings", () => {
@@ -21,4 +25,3 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ MASTER_API_KEY: "sk-test" })).toThrow(/PROVIDER_BASE_URL/);
   });
 });
-

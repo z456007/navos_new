@@ -1,0 +1,83 @@
+import { describe, expect, it } from "vitest";
+import {
+  YydsMailClient,
+  YydsMailError,
+  extractVerificationCode
+} from "../src/protocols/mail/yyds-mail.js";
+
+describe("YydsMailClient", () => {
+  it("creates a mailbox with x-api-key auth and a generated local part", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const client = new YydsMailClient({
+      baseUrl: "https://mail.test/v1",
+      apiKey: "ac-test",
+      fetchImpl: async (url, init) => {
+        calls.push({ url: String(url), init: init ?? {} });
+        return Response.json({
+          success: true,
+          data: { address: "navos-test@mail.test", id: "m1", token: "mail-token" }
+        });
+      },
+      localPartFactory: () => "navos-test"
+    });
+
+    const mailbox = await client.createMailbox();
+
+    expect(mailbox).toEqual({ address: "navos-test@mail.test", id: "m1", token: "mail-token" });
+    expect(calls[0]?.url).toBe("https://mail.test/v1/accounts");
+    expect(calls[0]?.init.method).toBe("POST");
+    expect(calls[0]?.init.headers).toMatchObject({
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-api-key": "ac-test"
+    });
+    expect(calls[0]?.init.body).toBe(JSON.stringify({ localPart: "navos-test" }));
+  });
+
+  it("lists and reads messages with mailbox bearer token and address query", async () => {
+    const urls: string[] = [];
+    const client = new YydsMailClient({
+      baseUrl: "https://mail.test/v1",
+      apiKey: "ac-test",
+      fetchImpl: async (url) => {
+        urls.push(String(url));
+        if (String(url).includes("/messages/msg_1")) {
+          return Response.json({ success: true, data: { id: "msg_1", text: "验证码 123456" } });
+        }
+        return Response.json({ success: true, data: [{ id: "msg_1", subject: "login" }] });
+      }
+    });
+
+    const messages = await client.listMessages({ address: "a@mail.test", token: "mail-token" });
+    const detail = await client.getMessage("msg_1", { address: "a@mail.test", token: "mail-token" });
+
+    expect(messages).toEqual([{ id: "msg_1", subject: "login" }]);
+    expect(detail).toEqual({ id: "msg_1", text: "验证码 123456" });
+    expect(urls).toEqual([
+      "https://mail.test/v1/messages?address=a%40mail.test",
+      "https://mail.test/v1/messages/msg_1?address=a%40mail.test"
+    ]);
+  });
+
+  it("raises a typed error for YYDS failure responses", async () => {
+    const client = new YydsMailClient({
+      baseUrl: "https://mail.test/v1",
+      apiKey: "ac-test",
+      fetchImpl: async () => Response.json({ success: false, errorCode: "NO_BALANCE" }, { status: 402 })
+    });
+
+    await expect(client.createMailbox()).rejects.toBeInstanceOf(YydsMailError);
+  });
+});
+
+describe("extractVerificationCode", () => {
+  it("extracts verification codes from Chinese or English mail content", () => {
+    expect(extractVerificationCode("您的验证码是 834921，5 分钟内有效")).toBe("834921");
+    expect(extractVerificationCode("verification code: 527100")).toBe("527100");
+  });
+
+  it("returns undefined when no code is present", () => {
+    expect(extractVerificationCode("welcome to navos")).toBeUndefined();
+  });
+});
+

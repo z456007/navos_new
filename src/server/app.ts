@@ -7,6 +7,7 @@ import { forwardModelRequest } from "../protocols/model-proxy.js";
 import { registerAccount } from "../protocols/register.js";
 import { uploadAsset } from "../protocols/upload.js";
 import { createVideoTask, getVideoTask } from "../protocols/video.js";
+import { YydsMailClient, YydsMailError } from "../protocols/mail/yyds-mail.js";
 import { InMemoryAccountStore } from "../store/account-store.js";
 
 export interface CreateAppOptions {
@@ -14,12 +15,19 @@ export interface CreateAppOptions {
   providerBaseUrl: string;
   providerAuthMode: ProviderAuthMode;
   defaultAccount?: AccountIdentity;
+  yydsMailApiKey?: string;
+  yydsMailBaseUrl?: string;
   fetchImpl?: FetchLike;
 }
 
 interface UploadRequestBody {
   source?: unknown;
   filename?: unknown;
+}
+
+interface MailboxQuery {
+  address?: string;
+  token?: string;
 }
 
 function headersFromRequest(request: FastifyRequest): HeaderBag {
@@ -46,6 +54,11 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
   const app = Fastify({ logger: false });
   const store = new InMemoryAccountStore(options.defaultAccount);
   const client = new ProviderHttpClient(options.providerBaseUrl, options.fetchImpl);
+  const yydsMailClient = new YydsMailClient({
+    baseUrl: options.yydsMailBaseUrl ?? "https://maliapi.215.im/v1",
+    apiKey: options.yydsMailApiKey ?? "",
+    fetchImpl: options.fetchImpl
+  });
 
   function requireLocalAuth(request: FastifyRequest, reply: FastifyReply): boolean {
     if (isClientAuthorized(headersFromRequest(request), options.masterApiKey)) {
@@ -62,6 +75,27 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       return undefined;
     }
     return buildProviderAuthHeaders(account, options.providerAuthMode);
+  }
+
+  function requireYydsConfigured(reply: FastifyReply): boolean {
+    if (options.yydsMailApiKey) {
+      return true;
+    }
+    void reply.status(503).send({ error: { message: "YYDS Mail API key is not configured", type: "mail_unavailable" } });
+    return false;
+  }
+
+  async function sendYydsError(reply: FastifyReply, error: unknown): Promise<void> {
+    if (error instanceof YydsMailError) {
+      await reply.status(error.status >= 400 && error.status < 600 ? error.status : 502)
+        .send({ error: { message: error.message, type: "yyds_mail_error" } });
+      return;
+    }
+    throw error;
+  }
+
+  function mailboxQuery(request: FastifyRequest): MailboxQuery {
+    return request.query && typeof request.query === "object" ? request.query as MailboxQuery : {};
   }
 
   app.get("/health", async () => ({ ok: true }));
@@ -124,6 +158,69 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     await sendProviderResult(reply, result);
   });
 
+  app.post("/api/mail/yyds/accounts", async (request, reply) => {
+    if (!requireLocalAuth(request, reply) || !requireYydsConfigured(reply)) {
+      return;
+    }
+    try {
+      await reply.send(await yydsMailClient.createMailbox());
+    } catch (error) {
+      await sendYydsError(reply, error);
+    }
+  });
+
+  app.get("/api/mail/yyds/messages", async (request, reply) => {
+    if (!requireLocalAuth(request, reply) || !requireYydsConfigured(reply)) {
+      return;
+    }
+    const query = mailboxQuery(request);
+    if (!query.address) {
+      await reply.status(400).send({ error: { message: "address is required" } });
+      return;
+    }
+    try {
+      await reply.send(await yydsMailClient.listMessages({ address: query.address, token: query.token }));
+    } catch (error) {
+      await sendYydsError(reply, error);
+    }
+  });
+
+  app.get("/api/mail/yyds/messages/:messageId", async (request, reply) => {
+    if (!requireLocalAuth(request, reply) || !requireYydsConfigured(reply)) {
+      return;
+    }
+    const query = mailboxQuery(request);
+    const params = request.params as { messageId?: string };
+    if (!query.address || !params.messageId) {
+      await reply.status(400).send({ error: { message: "address and messageId are required" } });
+      return;
+    }
+    try {
+      await reply.send(await yydsMailClient.getMessage(params.messageId, { address: query.address, token: query.token }));
+    } catch (error) {
+      await sendYydsError(reply, error);
+    }
+  });
+
+  app.post("/api/mail/yyds/verification-code", async (request, reply) => {
+    if (!requireLocalAuth(request, reply) || !requireYydsConfigured(reply)) {
+      return;
+    }
+    const body = bodyRecord(request);
+    if (typeof body.address !== "string") {
+      await reply.status(400).send({ error: { message: "address is required" } });
+      return;
+    }
+    try {
+      await reply.send(await yydsMailClient.findVerificationCode({
+        address: body.address,
+        token: typeof body.token === "string" ? body.token : undefined
+      }));
+    } catch (error) {
+      await sendYydsError(reply, error);
+    }
+  });
+
   app.post("/api/uploads", async (request, reply) => {
     if (!requireLocalAuth(request, reply)) {
       return;
@@ -178,4 +275,3 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
 
   return app;
 }
-
