@@ -110,7 +110,11 @@ describe("BullmqRegistrationQueue", () => {
     await expect(adapter.add({ mode: "single" })).resolves.toBe("job-123");
 
     expect(redis.url).toBe(options.redisUrl);
-    expect(redis.options).toEqual({ maxRetriesPerRequest: null });
+    expect(redis.options).toEqual({
+      maxRetriesPerRequest: 1,
+      connectTimeout: 5000,
+      commandTimeout: 5000
+    });
     expect(queue.name).toBe("registration");
     expect(queue.options).toEqual({ connection: redis, prefix: "navos" });
     expect(queue.add).toHaveBeenCalledWith("registration", { mode: "single" }, {
@@ -177,6 +181,35 @@ describe("BullmqRegistrationQueue", () => {
     expect(queue.getJobs).toHaveBeenCalledWith(["waiting", "active", "completed", "failed", "delayed"], 0, 49, false);
   });
 
+  it("list() globally caps jobs by most recent timestamp and avoids BullMQ log reads", async () => {
+    const { adapter, queue } = buildQueue();
+    const progressLog = { at: 5400, level: "warn" as const, message: "waiting for account" };
+    const jobs = Array.from({ length: 55 }, (_, index) => makeJob({
+      id: `job-${index}`,
+      data: { mode: "single" },
+      progress: {
+        started: index,
+        completed: 0,
+        failed: 0,
+        total: 55,
+        logs: index === 54 ? [progressLog] : []
+      },
+      timestamp: 1000 + index,
+      getState: vi.fn(async () => index % 2 === 0 ? "waiting" : "completed")
+    }));
+    queue.getJobs.mockResolvedValue(jobs);
+    queue.getJobLogs.mockResolvedValue({ logs: ["not-json-from-bullmq"], count: 1 });
+
+    const snapshots = await adapter.list();
+
+    expect(snapshots).toHaveLength(50);
+    expect(snapshots.map((snapshot) => snapshot.id)).toEqual(
+      Array.from({ length: 50 }, (_, index) => `job-${54 - index}`)
+    );
+    expect(snapshots[0]?.logs).toEqual([progressLog]);
+    expect(queue.getJobLogs).not.toHaveBeenCalled();
+  });
+
   it("running job cancellation sets Redis key, marks job data, and returns running snapshot", async () => {
     const { adapter, queue, redis } = buildQueue();
     const job = makeJob({
@@ -202,6 +235,36 @@ describe("BullmqRegistrationQueue", () => {
     expect(redis.set).toHaveBeenCalledWith("navos:registration:cancel:job-2", "1", "EX", 86400);
     expect(job.updateData).toHaveBeenCalledWith({ mode: "fill", target: 8, concurrency: 2, cancelRequested: true });
     expect(job.remove).not.toHaveBeenCalled();
+  });
+
+  it("waiting job cancellation records a running cancel request if remove loses the lock race", async () => {
+    const { adapter, queue, redis } = buildQueue();
+    const job = makeJob({
+      id: "job-race",
+      data: { mode: "single" },
+      progress: { started: 1, completed: 0, failed: 0, total: 1 },
+      timestamp: 1000,
+      processedOn: 1100,
+      getState: vi.fn()
+        .mockResolvedValueOnce("waiting")
+        .mockResolvedValueOnce("active"),
+      remove: vi.fn(async () => {
+        throw new Error("job is locked");
+      })
+    });
+    queue.getJob.mockResolvedValue(job);
+
+    await expect(adapter.cancel("job-race")).resolves.toMatchObject({
+      id: "job-race",
+      mode: "single",
+      state: "running",
+      progress: { started: 1, completed: 0, failed: 0, total: 1 },
+      createdAt: 1000,
+      startedAt: 1100
+    });
+    expect(job.remove).toHaveBeenCalledTimes(1);
+    expect(redis.set).toHaveBeenCalledWith("navos:registration:cancel:job-race", "1", "EX", 86400);
+    expect(job.updateData).toHaveBeenCalledWith({ mode: "single", cancelRequested: true });
   });
 
   it('completed job with returnvalue { canceled: true } maps state canceled', async () => {
@@ -273,6 +336,16 @@ describe("BullmqRegistrationQueue", () => {
     await adapter.close();
 
     expect(queue.close).toHaveBeenCalledTimes(1);
+    expect(redis.quit).toHaveBeenCalledTimes(1);
+    expect(redis.disconnect).not.toHaveBeenCalled();
+  });
+
+  it("close still releases Redis when queue close rejects", async () => {
+    const { adapter, queue, redis } = buildQueue();
+    queue.close.mockRejectedValue(new Error("queue close failed"));
+
+    await expect(adapter.close()).rejects.toThrow("queue close failed");
+
     expect(redis.quit).toHaveBeenCalledTimes(1);
     expect(redis.disconnect).not.toHaveBeenCalled();
   });

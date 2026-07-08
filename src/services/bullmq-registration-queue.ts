@@ -25,13 +25,18 @@ const QUEUE_NAME = "registration";
 const CANCEL_TTL_SECONDS = 86_400;
 const RECENT_JOB_LIMIT = 50;
 const RECENT_JOB_TYPES: JobType[] = ["waiting", "active", "completed", "failed", "delayed"];
+const PRODUCER_REDIS_OPTIONS = {
+  maxRetriesPerRequest: 1,
+  connectTimeout: 5_000,
+  commandTimeout: 5_000
+};
 
 export class BullmqRegistrationQueue implements RegistrationQueuePort {
   private readonly queue: Queue<RegistrationJobPayload, unknown, string>;
   private readonly redis: Redis;
 
   constructor(private readonly options: BullmqRegistrationQueueOptions) {
-    this.redis = new Redis(options.redisUrl, { maxRetriesPerRequest: null });
+    this.redis = new Redis(options.redisUrl, PRODUCER_REDIS_OPTIONS);
     this.queue = new Queue<RegistrationJobPayload, unknown, string>(QUEUE_NAME, {
       connection: this.redis as unknown as ConnectionOptions,
       prefix: options.queuePrefix
@@ -64,7 +69,10 @@ export class BullmqRegistrationQueue implements RegistrationQueuePort {
 
   async list(): Promise<RegistrationJobSnapshot[]> {
     const jobs = await this.queue.getJobs(RECENT_JOB_TYPES, 0, RECENT_JOB_LIMIT - 1, false);
-    return Promise.all(jobs.map((job) => this.toSnapshot(job)));
+    const recentJobs = [...jobs]
+      .sort((left, right) => jobTimestamp(right) - jobTimestamp(left))
+      .slice(0, RECENT_JOB_LIMIT);
+    return Promise.all(recentJobs.map((job) => this.toSnapshot(job, undefined, false)));
   }
 
   async cancel(id: string): Promise<RegistrationJobSnapshot | undefined> {
@@ -75,7 +83,15 @@ export class BullmqRegistrationQueue implements RegistrationQueuePort {
 
     const state = await job.getState();
     if (state === "waiting" || state === "delayed") {
-      await job.remove();
+      try {
+        await job.remove();
+      } catch (error) {
+        const currentState = await job.getState();
+        if (currentState === "active") {
+          return this.recordRunningCancelRequest(id, job, currentState);
+        }
+        throw error;
+      }
       return {
         ...(await this.toSnapshot(job, state)),
         state: "canceled",
@@ -83,14 +99,19 @@ export class BullmqRegistrationQueue implements RegistrationQueuePort {
       };
     }
 
+    return this.recordRunningCancelRequest(id, job, state);
+  }
+
+  private async recordRunningCancelRequest(
+    id: string,
+    job: RegistrationBullJob,
+    knownState: JobState | "unknown"
+  ): Promise<RegistrationJobSnapshot> {
     await this.redis.set(this.cancelKey(id), "1", "EX", CANCEL_TTL_SECONDS);
     if (typeof job.updateData === "function") {
-      await (job.updateData as (data: RegistrationJobPayload) => Promise<void>).call(
-        job,
-        withCancelRequested(job.data)
-      );
+      await job.updateData({ ...job.data, cancelRequested: true });
     }
-    return this.toSnapshot(job, state);
+    return this.toSnapshot(job, knownState);
   }
 
   async isCancelRequested(id: string): Promise<boolean> {
@@ -102,11 +123,14 @@ export class BullmqRegistrationQueue implements RegistrationQueuePort {
   }
 
   async close(): Promise<void> {
-    await this.queue.close();
     try {
-      await this.redis.quit();
-    } catch {
-      this.redis.disconnect();
+      await this.queue.close();
+    } finally {
+      try {
+        await this.redis.quit();
+      } catch {
+        this.redis.disconnect();
+      }
     }
   }
 
@@ -116,10 +140,11 @@ export class BullmqRegistrationQueue implements RegistrationQueuePort {
 
   private async toSnapshot(
     job: RegistrationBullJob,
-    knownState?: JobState | "unknown"
+    knownState?: JobState | "unknown",
+    includeFullLogs = true
   ): Promise<RegistrationJobSnapshot> {
     const bullState = knownState ?? await job.getState();
-    const logs = await this.logsForJob(job);
+    const logs = includeFullLogs ? await this.logsForJob(job) : normalizeLogs(job.progress);
     const snapshot: RegistrationJobSnapshot = {
       id: String(job.id),
       mode: job.data.mode,
@@ -189,19 +214,16 @@ function normalizeProgress(progress: unknown): RegistrationJobProgress {
   };
 }
 
-function withCancelRequested(data: RegistrationJobPayload): RegistrationJobPayload {
-  if (data.mode === "fill") {
-    return { ...data, cancelRequested: true };
-  }
-  return { ...data, cancelRequested: true };
-}
-
 function normalizeLogs(progress: unknown): RegistrationJobLog[] {
   if (!isRecord(progress) || !Array.isArray(progress.logs)) {
     return [];
   }
 
   return progress.logs.filter(isRegistrationJobLog);
+}
+
+function jobTimestamp(job: RegistrationBullJob): number {
+  return job.timestamp ?? 0;
 }
 
 function parseLogRow(row: string): RegistrationJobLog {
