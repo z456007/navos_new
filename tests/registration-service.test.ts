@@ -87,7 +87,7 @@ describe("RegistrationService", () => {
     const accounts = await accountService.listAccounts();
     expect(accounts).toHaveLength(1);
     expect(accounts[0]).toMatchObject({
-      uid: "uid-1", tokenPreview: "tok-1",
+      uid: "uid-1", tokenPreview: "tok-...",
       balanceRemaining: 2000, balanceTotal: 2000, status: "active"
     });
   });
