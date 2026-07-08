@@ -70,6 +70,7 @@ export class BullmqRegistrationQueue implements RegistrationQueuePort {
   async list(): Promise<RegistrationJobSnapshot[]> {
     const jobs = await this.queue.getJobs(RECENT_JOB_TYPES, 0, RECENT_JOB_LIMIT - 1, false);
     const recentJobs = [...jobs]
+      .filter((job) => job !== undefined)
       .sort((left, right) => jobTimestamp(right) - jobTimestamp(left))
       .slice(0, RECENT_JOB_LIMIT);
     return Promise.all(recentJobs.map((job) => this.toSnapshot(job, undefined, false)));
@@ -83,23 +84,35 @@ export class BullmqRegistrationQueue implements RegistrationQueuePort {
 
     const state = await job.getState();
     if (state === "waiting" || state === "delayed") {
-      try {
-        await job.remove();
-      } catch (error) {
-        const currentState = await job.getState();
-        if (currentState === "active") {
-          return this.recordRunningCancelRequest(id, job, currentState);
-        }
-        throw error;
-      }
+      return this.cancelQueuedJob(id, job, state);
+    }
+
+    if (state === "active") {
+      return this.recordRunningCancelRequest(id, job, state);
+    }
+
+    return this.toSnapshot(job, state);
+  }
+
+  private async cancelQueuedJob(
+    id: string,
+    job: RegistrationBullJob,
+    knownState: JobState
+  ): Promise<RegistrationJobSnapshot> {
+    try {
+      await job.remove();
       return {
-        ...(await this.toSnapshot(job, state)),
+        ...(await this.toSnapshot(job, knownState)),
         state: "canceled",
         finishedAt: Date.now()
       };
+    } catch {
+      const currentState = await this.safeJobState(job, "active");
+      if (currentState === "completed" || currentState === "failed" || currentState === "unknown") {
+        return this.toSnapshot(job, currentState);
+      }
+      return this.recordRunningCancelRequest(id, job, currentState);
     }
-
-    return this.recordRunningCancelRequest(id, job, state);
   }
 
   private async recordRunningCancelRequest(
@@ -109,9 +122,24 @@ export class BullmqRegistrationQueue implements RegistrationQueuePort {
   ): Promise<RegistrationJobSnapshot> {
     await this.redis.set(this.cancelKey(id), "1", "EX", CANCEL_TTL_SECONDS);
     if (typeof job.updateData === "function") {
-      await job.updateData({ ...job.data, cancelRequested: true });
+      try {
+        await job.updateData({ ...job.data, cancelRequested: true });
+      } catch {
+        return this.toSnapshot(job, await this.safeJobState(job, knownState));
+      }
     }
     return this.toSnapshot(job, knownState);
+  }
+
+  private async safeJobState(
+    job: RegistrationBullJob,
+    fallback: JobState | "unknown"
+  ): Promise<JobState | "unknown"> {
+    try {
+      return await job.getState();
+    } catch {
+      return fallback;
+    }
   }
 
   async isCancelRequested(id: string): Promise<boolean> {

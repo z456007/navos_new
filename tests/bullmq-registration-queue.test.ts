@@ -210,6 +210,29 @@ describe("BullmqRegistrationQueue", () => {
     expect(queue.getJobLogs).not.toHaveBeenCalled();
   });
 
+  it("list() skips missing BullMQ jobs and keeps remaining snapshots sorted", async () => {
+    const { adapter, queue } = buildQueue();
+    const olderJob = makeJob({
+      id: "job-older",
+      data: { mode: "single" },
+      timestamp: 1000,
+      getState: vi.fn(async () => "waiting")
+    });
+    const newerJob = makeJob({
+      id: "job-newer",
+      data: { mode: "single" },
+      timestamp: 2000,
+      getState: vi.fn(async () => "completed")
+    });
+    queue.getJobs.mockResolvedValue([olderJob, undefined, newerJob] as unknown as MockBullJob[]);
+
+    const snapshots = await adapter.list();
+
+    expect(snapshots).toHaveLength(2);
+    expect(snapshots.map((snapshot) => snapshot.id)).toEqual(["job-newer", "job-older"]);
+    expect(snapshots.map((snapshot) => snapshot.state)).toEqual(["succeeded", "queued"]);
+  });
+
   it("running job cancellation sets Redis key, marks job data, and returns running snapshot", async () => {
     const { adapter, queue, redis } = buildQueue();
     const job = makeJob({
@@ -236,6 +259,65 @@ describe("BullmqRegistrationQueue", () => {
     expect(job.updateData).toHaveBeenCalledWith({ mode: "fill", target: 8, concurrency: 2, cancelRequested: true });
     expect(job.remove).not.toHaveBeenCalled();
   });
+
+  it("running job cancellation still resolves if updateData rejects after Redis cancel key is set", async () => {
+    const { adapter, queue, redis } = buildQueue();
+    const job = makeJob({
+      id: "job-update-race",
+      data: { mode: "single" },
+      progress: { started: 1, completed: 0, failed: 0, total: 1 },
+      timestamp: 1000,
+      processedOn: 1100,
+      getState: vi.fn(async () => "active"),
+      updateData: vi.fn(async () => {
+        throw new Error("job finished before data update");
+      })
+    });
+    queue.getJob.mockResolvedValue(job);
+
+    await expect(adapter.cancel("job-update-race")).resolves.toMatchObject({
+      id: "job-update-race",
+      mode: "single",
+      state: "running",
+      progress: { started: 1, completed: 0, failed: 0, total: 1 },
+      createdAt: 1000,
+      startedAt: 1100
+    });
+    expect(redis.set).toHaveBeenCalledWith("navos:registration:cancel:job-update-race", "1", "EX", 86400);
+    expect(job.updateData).toHaveBeenCalledWith({ mode: "single", cancelRequested: true });
+  });
+
+  it.each(["completed", "failed"] as const)(
+    "cancel on %s job returns the current snapshot without recording a cancel request",
+    async (state) => {
+      const { adapter, queue, redis } = buildQueue();
+      const job = makeJob({
+        id: `job-${state}`,
+        data: { mode: "single" },
+        progress: { started: 1, completed: state === "completed" ? 1 : 0, failed: state === "failed" ? 1 : 0, total: 1 },
+        returnvalue: state === "completed" ? { success: true, uid: "uid-1" } : undefined,
+        failedReason: state === "failed" ? "registration failed" : undefined,
+        timestamp: 1000,
+        processedOn: 1100,
+        finishedOn: 1200,
+        getState: vi.fn(async () => state)
+      });
+      queue.getJob.mockResolvedValue(job);
+
+      await expect(adapter.cancel(`job-${state}`)).resolves.toMatchObject({
+        id: `job-${state}`,
+        mode: "single",
+        state: state === "completed" ? "succeeded" : "failed",
+        progress: { started: 1, completed: state === "completed" ? 1 : 0, failed: state === "failed" ? 1 : 0, total: 1 },
+        createdAt: 1000,
+        startedAt: 1100,
+        finishedAt: 1200
+      });
+      expect(redis.set).not.toHaveBeenCalled();
+      expect(job.updateData).not.toHaveBeenCalled();
+      expect(job.remove).not.toHaveBeenCalled();
+    }
+  );
 
   it("waiting job cancellation records a running cancel request if remove loses the lock race", async () => {
     const { adapter, queue, redis } = buildQueue();
