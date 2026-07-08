@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => {
     readonly getJobs = vi.fn();
     readonly getJobLogs = vi.fn(async () => ({ logs: [], count: 0 }));
     readonly close = vi.fn(async () => undefined);
+    readonly on = vi.fn();
 
     constructor(name: string, options: unknown) {
       this.name = name;
@@ -52,6 +53,7 @@ const mocks = vi.hoisted(() => {
     });
     readonly quit = vi.fn(async () => "OK");
     readonly disconnect = vi.fn();
+    readonly on = vi.fn();
 
     constructor(url: string, options: unknown) {
       this.url = url;
@@ -410,6 +412,21 @@ describe("BullmqRegistrationQueue", () => {
     queue.add.mockRejectedValue(new Error("redis down"));
 
     await expect(adapter.add({ mode: "single" })).rejects.toBeInstanceOf(RegistrationQueueUnavailableError);
+  });
+
+  it("add timeout wraps as RegistrationQueueUnavailableError", async () => {
+    vi.useFakeTimers();
+    try {
+      const { adapter, queue } = buildQueue();
+      queue.add.mockReturnValue(new Promise(() => undefined));
+
+      const result = expect(adapter.add({ mode: "single" })).rejects.toBeInstanceOf(RegistrationQueueUnavailableError);
+      await vi.advanceTimersByTimeAsync(2000);
+
+      await result;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("close closes the queue and Redis connection", async () => {

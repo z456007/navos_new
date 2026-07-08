@@ -30,6 +30,8 @@ const PRODUCER_REDIS_OPTIONS = {
   connectTimeout: 5_000,
   commandTimeout: 5_000
 };
+const PRODUCER_ADD_TIMEOUT_MS = 2_000;
+const PRODUCER_CLOSE_TIMEOUT_MS = 2_000;
 
 export class BullmqRegistrationQueue implements RegistrationQueuePort {
   private readonly queue: Queue<RegistrationJobPayload, unknown, string>;
@@ -37,18 +39,28 @@ export class BullmqRegistrationQueue implements RegistrationQueuePort {
 
   constructor(private readonly options: BullmqRegistrationQueueOptions) {
     this.redis = new Redis(options.redisUrl, PRODUCER_REDIS_OPTIONS);
+    this.redis.on("error", () => {
+      // Queue operations surface failures through explicit API errors.
+    });
     this.queue = new Queue<RegistrationJobPayload, unknown, string>(QUEUE_NAME, {
       connection: this.redis as unknown as ConnectionOptions,
       prefix: options.queuePrefix
+    });
+    this.queue.on("error", () => {
+      // Queue operations surface failures through explicit API errors.
     });
   }
 
   async add(data: RegistrationJobPayload): Promise<string> {
     try {
-      const job = await this.queue.add(QUEUE_NAME, data, {
-        removeOnComplete: this.options.removeOnComplete,
-        removeOnFail: this.options.removeOnFail
-      });
+      const job = await withTimeout(
+        this.queue.add(QUEUE_NAME, data, {
+          removeOnComplete: this.options.removeOnComplete,
+          removeOnFail: this.options.removeOnFail
+        }),
+        PRODUCER_ADD_TIMEOUT_MS,
+        "registration queue add timed out"
+      );
       if (!job.id) {
         throw new Error("BullMQ did not return a job id");
       }
@@ -152,7 +164,7 @@ export class BullmqRegistrationQueue implements RegistrationQueuePort {
 
   async close(): Promise<void> {
     try {
-      await this.queue.close();
+      await withTimeout(this.queue.close(), PRODUCER_CLOSE_TIMEOUT_MS, "registration queue close timed out");
     } finally {
       try {
         await this.redis.quit();
@@ -282,4 +294,16 @@ function finiteNumber(value: unknown): number {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function withTimeout<T>(operation: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+  return Promise.race([operation, deadline]).finally(() => {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  });
 }
