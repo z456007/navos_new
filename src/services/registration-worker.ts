@@ -12,8 +12,6 @@ const MAX_FILL_TARGET = 500;
 const MIN_FILL_CONCURRENCY = 1;
 const MAX_FILL_CONCURRENCY = 20;
 
-let fillRegistrationQueue: Promise<void> = Promise.resolve();
-
 export interface RegistrationWorkerOptions {
   redisUrl: string;
   queuePrefix: string;
@@ -50,9 +48,7 @@ export async function processRegistrationJob(
       return await processSingleRegistration(progress, registrationService);
     }
 
-    return await runSerializedFillRegistration(() => (
-      processFillRegistration(jobId, data, progress, registrationService, options)
-    ));
+    return await processFillRegistration(jobId, data, progress, registrationService, options);
   } finally {
     await clearCancelRequestBestEffort(jobId, options);
   }
@@ -160,15 +156,6 @@ async function processFillRegistration(
     failed,
     results
   };
-}
-
-function runSerializedFillRegistration<T>(operation: () => Promise<T>): Promise<T> {
-  const run = fillRegistrationQueue.then(operation);
-  fillRegistrationQueue = run.then(
-    () => undefined,
-    () => undefined
-  );
-  return run;
 }
 
 function validateFillRegistrationPayload(data: Extract<RegistrationJobPayload, { mode: "fill" }>): void {

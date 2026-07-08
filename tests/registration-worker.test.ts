@@ -295,28 +295,20 @@ describe("processRegistrationJob", () => {
     expect(registrationCallsBeforeBatchProgressResolved).toBe(0);
   });
 
-  it("serializes concurrent fill jobs so the second sees accounts created by the first", async () => {
+  it("starts concurrent fill jobs without waiting for another fill to finish", async () => {
     const firstAttempt = deferredResult(success(1));
     const secondAttempt = deferredResult(success(2));
-    const attemptQueue = [firstAttempt, secondAttempt];
-    let activeCount = 0;
-    const observedActiveCounts: number[] = [];
+    const thirdAttempt = deferredResult(success(3));
+    const fourthAttempt = deferredResult(success(4));
+    const attemptQueue = [firstAttempt, secondAttempt, thirdAttempt, fourthAttempt];
     const registrationService = makeRegistrationService({
-      getStats: vi.fn(async () => {
-        observedActiveCounts.push(activeCount);
-        return stats({ activeCount });
-      }),
+      getStats: vi.fn(async () => stats({ activeCount: 0 })),
       registerOne: vi.fn(() => {
         const attempt = attemptQueue.shift();
         if (!attempt) {
           throw new Error("unexpected registration attempt");
         }
-        return attempt.promise.then((result) => {
-          if (result.success) {
-            activeCount += 1;
-          }
-          return result;
-        });
+        return attempt.promise;
       })
     });
     const firstJob = makeJob({ mode: "fill", target: 2, concurrency: 2 }, "fill-1");
@@ -325,11 +317,25 @@ describe("processRegistrationJob", () => {
     const firstProcessing = processRegistrationJob(firstJob, registrationService);
     const secondProcessing = processRegistrationJob(secondJob, registrationService);
 
-    await vi.waitFor(() => expect(registrationService.registerOne).toHaveBeenCalledTimes(2));
-    expect(registrationService.getStats).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(registrationService.getStats).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(registrationService.registerOne).toHaveBeenCalledTimes(4));
+    expect(lastProgress(firstJob)).toMatchObject({
+      started: 2,
+      completed: 0,
+      failed: 0,
+      total: 2
+    });
+    expect(lastProgress(secondJob)).toMatchObject({
+      started: 2,
+      completed: 0,
+      failed: 0,
+      total: 2
+    });
 
     firstAttempt.resolve();
     secondAttempt.resolve();
+    thirdAttempt.resolve();
+    fourthAttempt.resolve();
 
     await expect(firstProcessing).resolves.toMatchObject({
       target: 2,
@@ -340,37 +346,28 @@ describe("processRegistrationJob", () => {
     });
     await expect(secondProcessing).resolves.toMatchObject({
       target: 2,
-      started: 0,
-      completed: 0,
+      started: 2,
+      completed: 2,
       failed: 0,
-      results: []
+      results: [success(3), success(4)]
     });
-
-    expect(observedActiveCounts).toEqual([0, 2]);
-    expect(registrationService.registerOne).toHaveBeenCalledTimes(2);
   });
 
-  it("returns canceled for a serialized fill canceled after another fill satisfies the target", async () => {
+  it("cancels a concurrent fill while another fill is still registering", async () => {
     const firstAttempt = deferredResult(success(1));
     const secondAttempt = deferredResult(success(2));
     const attemptQueue = [firstAttempt, secondAttempt];
-    let activeCount = 0;
-    let secondJobCancellationChecks = 0;
     const registrationService = makeRegistrationService({
-      getStats: vi.fn(async () => stats({ activeCount })),
+      getStats: vi.fn(async () => stats({ activeCount: 0 })),
       registerOne: vi.fn(() => {
         const attempt = attemptQueue.shift();
         if (!attempt) {
           throw new Error("unexpected registration attempt");
         }
-        return attempt.promise.then((result) => {
-          if (result.success) {
-            activeCount += 1;
-          }
-          return result;
-        });
+        return attempt.promise;
       })
     });
+    let secondJobCancellationChecks = 0;
     const isCancelRequested = vi.fn(async (jobId: string) => {
       if (jobId !== "fill-2") {
         return false;
@@ -392,16 +389,6 @@ describe("processRegistrationJob", () => {
     });
 
     await vi.waitFor(() => expect(registrationService.registerOne).toHaveBeenCalledTimes(2));
-    firstAttempt.resolve();
-    secondAttempt.resolve();
-
-    await expect(firstProcessing).resolves.toMatchObject({
-      target: 2,
-      started: 2,
-      completed: 2,
-      failed: 0,
-      results: [success(1), success(2)]
-    });
     await expect(secondProcessing).resolves.toEqual({
       canceled: true,
       target: 2,
@@ -411,12 +398,22 @@ describe("processRegistrationJob", () => {
       results: []
     });
 
-    expect(secondJobCancellationChecks).toBe(2);
     expect(clearCancelRequest).toHaveBeenCalledWith("fill-2");
     expect(registrationService.registerOne).toHaveBeenCalledTimes(2);
     expect(lastProgress(secondJob).logs.at(-1)).toMatchObject({
       level: "warn",
       message: expect.stringContaining("canceled")
+    });
+
+    firstAttempt.resolve();
+    secondAttempt.resolve();
+
+    await expect(firstProcessing).resolves.toMatchObject({
+      target: 2,
+      started: 2,
+      completed: 2,
+      failed: 0,
+      results: [success(1), success(2)]
     });
   });
 
