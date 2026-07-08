@@ -1,7 +1,10 @@
-import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   Ban,
+  Clapperboard,
+  ExternalLink,
+  Film,
   Inbox,
   KeyRound,
   LogOut,
@@ -16,7 +19,7 @@ import {
   UserPlus
 } from "lucide-react";
 import { ADMIN_KEY_STORAGE, apiRequest, errorMessage } from "./api";
-import type { AccountListItem, Mailbox, PanelId, StatusState } from "./types";
+import type { AccountListItem, Mailbox, PanelId, StatusState, VideoTaskStatus, VideoTaskView } from "./types";
 
 const initialMessagesPayload = `{
   "model": "claude.sonnet-4.6",
@@ -33,6 +36,8 @@ const initialChatPayload = `{
     { "role": "user", "content": "只回复 OK，不要解释" }
   ]
 }`;
+
+const defaultVideoPrompt = "原创极简动画短片：一只小型白色机器人在干净的浅灰色桌面上挥手，柔和自然光，镜头稳定，画面清晰，无文字，无水印，无对白。";
 
 const idleStatus: StatusState = { kind: "idle", message: "" };
 
@@ -154,12 +159,6 @@ function AuthGate({
           <StatusLine status={status} />
         </form>
       </section>
-      <aside className="protocol-rail" aria-hidden="true">
-        <span>AUTH</span>
-        <span>POOL</span>
-        <span>MAIL</span>
-        <span>PROXY</span>
-      </aside>
     </main>
   );
 }
@@ -200,6 +199,9 @@ function ConsoleShell({
           <NavButton active={activePanel === "mail"} icon={<Mail size={17} />} onClick={() => onPanelChange("mail")}>
             YYDS 邮箱
           </NavButton>
+          <NavButton active={activePanel === "video"} icon={<Clapperboard size={17} />} onClick={() => onPanelChange("video")}>
+            视频生成
+          </NavButton>
           <NavButton active={activePanel === "probe"} icon={<MessageSquare size={17} />} onClick={() => onPanelChange("probe")}>
             代理测试
           </NavButton>
@@ -238,6 +240,7 @@ function ConsoleShell({
           />
         )}
         {activePanel === "mail" && <MailPanel apiKey={apiKey} />}
+        {activePanel === "video" && <VideoPanel apiKey={apiKey} />}
         {activePanel === "probe" && (
           <ProbePanel
             apiKey={apiKey}
@@ -444,6 +447,220 @@ function MailPanel({ apiKey }: { apiKey: string }) {
   );
 }
 
+function VideoPanel({ apiKey }: { apiKey: string }) {
+  const [form, setForm] = useState({
+    model: "navos/doubao-seedance-2-0-260128",
+    prompt: defaultVideoPrompt,
+    resolution: "720P",
+    aspectRatio: "1:1",
+    durationSeconds: 5,
+    audio: false
+  });
+  const [status, setStatus] = useState<StatusState>(idleStatus);
+  const [task, setTask] = useState<VideoTaskView | undefined>();
+  const [result, setResult] = useState<unknown>("等待创建任务");
+  const [events, setEvents] = useState<string[]>([]);
+  const pollTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  useEffect(() => () => clearPolling(), []);
+
+  function clearPolling() {
+    if (pollTimer.current) {
+      clearTimeout(pollTimer.current);
+      pollTimer.current = undefined;
+    }
+  }
+
+  function addEvent(message: string) {
+    const timestamp = new Date().toLocaleTimeString();
+    setEvents((current) => [`${timestamp} ${message}`, ...current].slice(0, 8));
+  }
+
+  async function createTask(event: FormEvent) {
+    event.preventDefault();
+    clearPolling();
+    const prompt = form.prompt.trim();
+    if (!prompt) {
+      setStatus({ kind: "error", message: "提示词不能为空" });
+      return;
+    }
+
+    setStatus({ kind: "loading", message: "创建任务中" });
+    setTask(undefined);
+    setResult("创建任务中");
+    setEvents([]);
+
+    try {
+      const response = await apiRequest<unknown>(apiKey, "/api/video/generations", {
+        method: "POST",
+        body: JSON.stringify({
+          model: form.model,
+          prompt,
+          resolution: form.resolution,
+          aspectRatio: form.aspectRatio,
+          durationSeconds: form.durationSeconds,
+          audio: form.audio,
+          timeoutMs: 600000
+        })
+      });
+      setResult(response);
+      const taskId = readVideoString(response, ["task_id", "taskId", "id"]);
+      if (!taskId) {
+        throw new Error("上游没有返回 task id");
+      }
+      const createdTask = normalizeVideoTask(response, taskId);
+      setTask(createdTask);
+      addEvent(`任务已创建 ${taskId}`);
+      setStatus({ kind: "loading", message: "已创建，正在查询状态" });
+      await pollTask(taskId);
+    } catch (error) {
+      const message = errorMessage(error) ?? "创建任务失败";
+      setStatus({ kind: "error", message });
+      setResult(message);
+      addEvent(message);
+    }
+  }
+
+  async function pollTask(taskId = task?.id) {
+    if (!taskId) {
+      setStatus({ kind: "error", message: "没有可查询的 task id" });
+      return;
+    }
+    clearPolling();
+    setStatus({ kind: "loading", message: "查询任务状态" });
+
+    try {
+      const response = await apiRequest<unknown>(apiKey, `/api/video/generations/${encodeURIComponent(taskId)}`, {
+        method: "GET"
+      });
+      const nextTask = normalizeVideoTask(response, taskId);
+      setTask(nextTask);
+      setResult(response);
+      addEvent(`状态 ${nextTask.status}`);
+
+      if (nextTask.status === "succeeded") {
+        setStatus({ kind: "ok", message: "视频已生成" });
+        return;
+      }
+      if (nextTask.status === "failed") {
+        setStatus({ kind: "error", message: nextTask.error ?? "视频生成失败" });
+        return;
+      }
+
+      setStatus({ kind: "loading", message: "生成中，稍后自动刷新" });
+      pollTimer.current = setTimeout(() => {
+        void pollTask(taskId);
+      }, 6000);
+    } catch (error) {
+      const message = errorMessage(error) ?? "查询任务失败";
+      setStatus({ kind: "error", message });
+      addEvent(message);
+    }
+  }
+
+  return (
+    <section className="panel video-panel" aria-labelledby="video-title">
+      <div className="panel-head">
+        <div>
+          <h2 id="video-title">视频生成</h2>
+          <StatusLine status={status} />
+        </div>
+        <button className="button" disabled={!task?.id || status.kind === "loading"} onClick={() => void pollTask()} type="button">
+          <RefreshCw size={16} aria-hidden="true" />
+          查询状态
+        </button>
+      </div>
+
+      <div className="video-grid">
+        <form className="video-form" onSubmit={createTask}>
+          <TextField label="模型" value={form.model} onChange={(model) => setForm((current) => ({ ...current, model }))} />
+          <div className="form-row three compact">
+            <SelectField
+              label="分辨率"
+              value={form.resolution}
+              options={["720P", "480P"]}
+              onChange={(resolution) => setForm((current) => ({ ...current, resolution }))}
+            />
+            <SelectField
+              label="比例"
+              value={form.aspectRatio}
+              options={["1:1", "16:9", "9:16", "4:3", "3:4", "21:9", "adaptive"]}
+              onChange={(aspectRatio) => setForm((current) => ({ ...current, aspectRatio }))}
+            />
+            <label className="text-field">
+              <span>时长</span>
+              <input
+                max={15}
+                min={4}
+                type="number"
+                value={form.durationSeconds}
+                onChange={(event) => setForm((current) => ({ ...current, durationSeconds: Number(event.target.value) }))}
+              />
+            </label>
+          </div>
+          <label className="inline-check">
+            <input
+              checked={form.audio}
+              type="checkbox"
+              onChange={(event) => setForm((current) => ({ ...current, audio: event.target.checked }))}
+            />
+            <span>生成音频</span>
+          </label>
+          <label className="textarea-field video-prompt">
+            <span>提示词</span>
+            <textarea value={form.prompt} onChange={(event) => setForm((current) => ({ ...current, prompt: event.target.value }))} />
+          </label>
+          <div className="toolbar flush">
+            <button className="button primary" disabled={status.kind === "loading"} type="submit">
+              <Clapperboard size={16} aria-hidden="true" />
+              创建视频任务
+            </button>
+          </div>
+        </form>
+
+        <div className="video-output">
+          <div className="task-strip">
+            <div>
+              <span>Task ID</span>
+              <strong className="mono">{task?.id ?? "-"}</strong>
+            </div>
+            <div>
+              <span>状态</span>
+              <strong className={`task-status ${task?.status ?? "unknown"}`}>{task?.status ?? "idle"}</strong>
+            </div>
+          </div>
+
+          <div className="preview-frame">
+            {task?.videoUrl ? (
+              <video controls src={task.videoUrl} title="生成视频" />
+            ) : (
+              <div className="video-empty">
+                <Film size={30} aria-hidden="true" />
+                <span>等待生成结果</span>
+              </div>
+            )}
+          </div>
+
+          <div className="toolbar flush">
+            {task?.videoUrl && (
+              <a className="button" href={task.videoUrl} rel="noreferrer" target="_blank">
+                <ExternalLink size={16} aria-hidden="true" />
+                打开视频
+              </a>
+            )}
+          </div>
+
+          <ol className="event-list" aria-label="视频任务日志">
+            {events.length === 0 ? <li>暂无任务日志</li> : events.map((item) => <li key={item}>{item}</li>)}
+          </ol>
+
+          <JsonBlock value={result} />
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function ProbePanel({
   apiKey,
   onAfterProbe
@@ -560,6 +777,29 @@ function TextField({
   );
 }
 
+function SelectField({
+  label,
+  onChange,
+  options,
+  value
+}: {
+  label: string;
+  onChange: (value: string) => void;
+  options: string[];
+  value: string;
+}) {
+  return (
+    <label className="text-field">
+      <span>{label}</span>
+      <select value={value} onChange={(event) => onChange(event.target.value)}>
+        {options.map((option) => (
+          <option key={option} value={option}>{option}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 function StatusLine({ status }: { status: StatusState }) {
   if (!status.message) {
     return null;
@@ -573,6 +813,67 @@ function JsonBlock({ value }: { value: unknown }) {
       {typeof value === "string" ? value : JSON.stringify(value, null, 2)}
     </pre>
   );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readVideoString(value: unknown, keys: string[]): string | undefined {
+  const queue: unknown[] = [value];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (Array.isArray(current)) {
+      queue.push(...current);
+      continue;
+    }
+    if (!isRecord(current)) {
+      continue;
+    }
+    for (const key of keys) {
+      const item = current[key];
+      if ((typeof item === "string" || typeof item === "number") && String(item).length > 0) {
+        return String(item);
+      }
+    }
+    for (const item of Object.values(current)) {
+      if (isRecord(item) || Array.isArray(item)) {
+        queue.push(item);
+      }
+    }
+  }
+  return undefined;
+}
+
+function mapVideoStatus(status: string | undefined): VideoTaskStatus {
+  const normalized = status?.toLowerCase();
+  if (!normalized) {
+    return "unknown";
+  }
+  if (["queued", "pending", "created"].includes(normalized)) {
+    return "queued";
+  }
+  if (["deducted", "running", "processing", "generating", "in_progress"].includes(normalized)) {
+    return "running";
+  }
+  if (["success", "succeeded", "completed", "done"].includes(normalized)) {
+    return "succeeded";
+  }
+  if (["fail", "failed", "error", "canceled", "cancelled"].includes(normalized)) {
+    return "failed";
+  }
+  return "unknown";
+}
+
+function normalizeVideoTask(raw: unknown, fallbackId?: string): VideoTaskView {
+  const status = mapVideoStatus(readVideoString(raw, ["status", "state"]));
+  return {
+    id: readVideoString(raw, ["id", "task_id", "taskId"]) ?? fallbackId,
+    status,
+    videoUrl: readVideoString(raw, ["videoUrl", "video_url", "url", "output_url"]),
+    error: status === "failed" ? readVideoString(raw, ["error", "error_message", "message"]) : undefined,
+    raw
+  };
 }
 
 function AccountBadge({ account }: { account: AccountListItem }) {
@@ -595,6 +896,9 @@ function accountMetrics(accounts: AccountListItem[]) {
 function panelTitle(panel: PanelId): string {
   if (panel === "mail") {
     return "YYDS 邮箱";
+  }
+  if (panel === "video") {
+    return "视频生成";
   }
   if (panel === "probe") {
     return "代理测试";

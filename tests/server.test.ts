@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AccountService } from "../src/services/account-service.js";
 import { createApp } from "../src/server/app.js";
 import { InMemoryAccountStore } from "../src/store/account-store.js";
+import { InMemoryCosConfigStore } from "../src/store/cos-config-store.js";
+import { InMemoryVideoTaskStore } from "../src/store/video-task-store.js";
 
 describe("server routes", () => {
   it("serves health without auth and protects protocol routes", async () => {
@@ -133,5 +135,130 @@ describe("server routes", () => {
       "POST /api/tasks/navos-seedance-video-generation",
       "GET /api/tasks/video/generations/task_1"
     ]);
+  });
+
+  it("stores COS config encrypted and never returns secrets", async () => {
+    const cosConfigStore = new InMemoryCosConfigStore();
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+      cosConfigStore,
+      cosConfigSecret: "12345678901234567890123456789012",
+      fetchImpl: async () => Response.json({ ok: true })
+    });
+
+    const saved = await app.inject({
+      method: "PUT",
+      url: "/api/cos/config",
+      headers: { authorization: "Bearer sk-test" },
+      payload: {
+        name: "main",
+        secretId: "secret-id",
+        secretKey: "secret-key",
+        bucket: "bucket-123456",
+        region: "ap-shanghai",
+        publicDomain: "https://cdn.example.com",
+        uploadPrefix: "navos/videos",
+        enabled: true
+      }
+    });
+
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json()).toMatchObject({
+      name: "main",
+      bucket: "bucket-123456",
+      region: "ap-shanghai",
+      publicDomain: "https://cdn.example.com",
+      uploadPrefix: "navos/videos",
+      secretIdConfigured: true,
+      secretKeyConfigured: true
+    });
+    expect(JSON.stringify(saved.json())).not.toContain("secret-id");
+    expect(JSON.stringify(saved.json())).not.toContain("secret-key");
+
+    const raw = await cosConfigStore.getRaw();
+    expect(raw?.secretIdEnc).toBeTruthy();
+    expect(raw?.secretKeyEnc).toBeTruthy();
+    expect(raw?.secretIdEnc).not.toContain("secret-id");
+    expect(raw?.secretKeyEnc).not.toContain("secret-key");
+
+    const updated = await app.inject({
+      method: "PUT",
+      url: "/api/cos/config",
+      headers: { authorization: "Bearer sk-test" },
+      payload: {
+        name: "main",
+        secretId: "",
+        secretKey: "",
+        bucket: "bucket-123456",
+        region: "ap-guangzhou",
+        uploadPrefix: "navos/videos",
+        enabled: true
+      }
+    });
+
+    expect(updated.statusCode).toBe(200);
+    expect((await cosConfigStore.getEnabledDecrypted())?.secretId).toBe("secret-id");
+    expect((await cosConfigStore.getEnabledDecrypted())?.secretKey).toBe("secret-key");
+  });
+
+  it("archives successful video output to COS and returns archived URL", async () => {
+    const cosConfigStore = new InMemoryCosConfigStore();
+    const videoTaskStore = new InMemoryVideoTaskStore();
+    await cosConfigStore.saveDecrypted({
+      name: "main",
+      secretId: "secret-id",
+      secretKey: "secret-key",
+      bucket: "bucket-123456",
+      region: "ap-shanghai",
+      publicDomain: "https://cdn.example.com",
+      uploadPrefix: "navos/videos",
+      enabled: true
+    });
+    const archiveVideo = vi.fn(async () => ({
+      cosUrl: "https://cdn.example.com/navos/videos/2026/07/08/task_1.mp4",
+      cosKey: "navos/videos/2026/07/08/task_1.mp4",
+      sizeBytes: 1234,
+      sha256: "hash-1"
+    }));
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+      cosConfigStore,
+      videoTaskStore,
+      archiveVideo,
+      fetchImpl: async (url) => {
+        if (String(url).endsWith("/api/tasks/video/generations/task_1")) {
+          return Response.json({ task_id: "task_1", status: "success", video_url: "https://oss.test/task_1.mp4" });
+        }
+        return Response.json({ task_id: "task_1", status: "queued" });
+      }
+    });
+
+    const polled = await app.inject({
+      method: "GET",
+      url: "/api/video/generations/task_1",
+      headers: { authorization: "Bearer sk-test" }
+    });
+
+    expect(polled.statusCode).toBe(200);
+    expect(polled.json()).toMatchObject({
+      id: "task_1",
+      status: "succeeded",
+      videoUrl: "https://oss.test/task_1.mp4",
+      cosUrl: "https://cdn.example.com/navos/videos/2026/07/08/task_1.mp4",
+      archiveStatus: "archived"
+    });
+    expect(archiveVideo).toHaveBeenCalledOnce();
+    expect(await videoTaskStore.get("task_1")).toMatchObject({
+      taskId: "task_1",
+      sourceUrl: "https://oss.test/task_1.mp4",
+      cosUrl: "https://cdn.example.com/navos/videos/2026/07/08/task_1.mp4",
+      archiveStatus: "archived"
+    });
   });
 });

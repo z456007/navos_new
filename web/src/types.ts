@@ -19,7 +19,17 @@ export interface Mailbox {
   token?: string;
 }
 
-export type PanelId = "accounts" | "mail" | "probe";
+export type PanelId = "accounts" | "mail" | "probe" | "video";
+
+export type VideoTaskStatus = "queued" | "running" | "succeeded" | "failed" | "unknown";
+
+export interface VideoTaskView {
+  id?: string;
+  status: VideoTaskStatus;
+  videoUrl?: string;
+  error?: string;
+  raw: unknown;
+}
 
 export type StatusKind = "idle" | "loading" | "ok" | "error";
 
