@@ -256,6 +256,86 @@ describe("admin app gate", () => {
     expect(screen.queryByText("job-old")).not.toBeInTheDocument();
   });
 
+  it("ignores an old cancel response after a newer registration job starts", async () => {
+    const cancelOldJob = deferred<Response>();
+    let oldJobPolls = 0;
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });
+      const path = String(url);
+      if (path === "/api/accounts") {
+        return Response.json([]);
+      }
+      if (path === "/api/registration/jobs" && init?.method === "GET") {
+        return Response.json([{
+          id: "job-old",
+          mode: "fill",
+          state: "running",
+          progress: { started: 1, completed: 0, failed: 0, total: 3 },
+          logs: [{ at: 1000, level: "info", message: "old registration running" }],
+          createdAt: 900
+        }]);
+      }
+      if (path === "/api/registration/jobs/job-old/cancel" && init?.method === "POST") {
+        return cancelOldJob.promise;
+      }
+      if (path === "/api/registration/jobs" && init?.method === "POST") {
+        return Response.json({ jobId: "job-new" });
+      }
+      if (path === "/api/registration/jobs/job-new" && init?.method === "GET") {
+        return Response.json({
+          id: "job-new",
+          mode: "single",
+          state: "running",
+          progress: { started: 1, completed: 0, failed: 0, total: 1 },
+          logs: [{ at: 2000, level: "info", message: "new registration started" }],
+          createdAt: 1900
+        });
+      }
+      if (path === "/api/registration/jobs/job-old" && init?.method === "GET") {
+        oldJobPolls += 1;
+        return Response.json({
+          id: "job-old",
+          mode: "fill",
+          state: "running",
+          progress: { started: 1, completed: 0, failed: 0, total: 3 },
+          logs: [{ at: 3000, level: "info", message: "old registration polled" }],
+          createdAt: 900
+        });
+      }
+      return Response.json({ error: { message: "unexpected path" } }, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("Master API Key"), { target: { value: "sk-local" } });
+    fireEvent.click(screen.getByRole("button", { name: "进入控制台" }));
+
+    await screen.findByText("job-old");
+    fireEvent.click(screen.getByRole("button", { name: "取消任务" }));
+    fireEvent.click(screen.getByRole("button", { name: "启动单个注册" }));
+
+    await screen.findByText("job-new");
+
+    await act(async () => {
+      cancelOldJob.resolve(Response.json({
+        id: "job-old",
+        mode: "fill",
+        state: "canceled",
+        progress: { started: 1, completed: 0, failed: 0, total: 3 },
+        logs: [{ at: 2500, level: "warn", message: "old registration canceled" }],
+        createdAt: 900,
+        finishedAt: 2500
+      }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("job-new")).toBeInTheDocument();
+    expect(screen.queryByText("job-old")).not.toBeInTheDocument();
+    expect(oldJobPolls).toBe(0);
+  });
+
   it("shows video duration rules and clamps 1080P to five seconds", async () => {
     const fetchMock = vi.fn(async () => Response.json([]));
     vi.stubGlobal("fetch", fetchMock);

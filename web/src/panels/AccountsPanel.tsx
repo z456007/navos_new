@@ -51,7 +51,7 @@ export function AccountsPanel({
           }, nextPollingDelay(0));
         }
       } catch (error) {
-        if (!active || !mounted.current) return;
+        if (!active || !mounted.current || hydrationVersion !== jobInteractionVersion.current) return;
         setStatus({ kind: "error", message: errorMessage(error) ?? "加载注册任务失败" });
       }
     }
@@ -135,6 +135,7 @@ export function AccountsPanel({
       }));
       await pollRegistrationJob(jobId);
     } catch (error) {
+      if (!mounted.current || requestVersion !== jobInteractionVersion.current) return;
       setStatus({ kind: "error", message: errorMessage(error) ?? "创建注册任务失败" });
     }
   }
@@ -191,16 +192,17 @@ export function AccountsPanel({
   async function cancelRegistrationJob() {
     if (!job?.id) return;
     const jobId = job.id;
-    markJobInteraction();
+    const requestVersion = markJobInteraction();
     clearPolling();
     setStatus({ kind: "loading", message: "取消注册任务中" });
     try {
       await apiRequest<unknown>(apiKey, `/api/registration/jobs/${encodeURIComponent(jobId)}/cancel`, {
         method: "POST"
       });
+      if (!mounted.current || requestVersion !== jobInteractionVersion.current) return;
       await pollRegistrationJob(jobId);
     } catch (error) {
-      if (!mounted.current) return;
+      if (!mounted.current || requestVersion !== jobInteractionVersion.current) return;
       const failureCount = pollFailures.current + 1;
       pollFailures.current = failureCount;
       setStatus({ kind: "error", message: errorMessage(error) ?? "取消注册任务失败" });
