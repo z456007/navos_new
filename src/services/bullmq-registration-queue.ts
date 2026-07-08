@@ -129,12 +129,15 @@ export class BullmqRegistrationQueue implements RegistrationQueuePort {
         state: "canceled",
         finishedAt: Date.now()
       };
-    } catch {
-      const currentState = await this.safeJobState(job, "active");
-      if (currentState === "completed" || currentState === "failed" || currentState === "unknown") {
+    } catch (error) {
+      const currentState = await this.safeJobState(job, "unknown");
+      if (currentState === "completed" || currentState === "failed") {
         return this.toSnapshot(job, currentState);
       }
-      return this.recordRunningCancelRequest(id, job, currentState);
+      if (currentState === "active") {
+        return this.recordRunningCancelRequest(id, job, currentState);
+      }
+      throw this.queueUnavailableError(error);
     }
   }
 

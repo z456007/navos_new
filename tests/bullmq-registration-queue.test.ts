@@ -351,6 +351,44 @@ describe("BullmqRegistrationQueue", () => {
     expect(job.updateData).toHaveBeenCalledWith({ mode: "single", cancelRequested: true });
   });
 
+  it("waiting job cancellation rejects remove failures if refreshed state is still waiting", async () => {
+    const { adapter, queue, redis } = buildQueue();
+    const job = makeJob({
+      id: "job-remove-failure",
+      getState: vi.fn()
+        .mockResolvedValueOnce("waiting")
+        .mockResolvedValueOnce("waiting"),
+      remove: vi.fn(async () => {
+        throw new Error("redis down");
+      })
+    });
+    queue.getJob.mockResolvedValue(job);
+
+    await expect(adapter.cancel("job-remove-failure")).rejects.toBeInstanceOf(RegistrationQueueUnavailableError);
+    expect(job.remove).toHaveBeenCalledTimes(1);
+    expect(redis.set).not.toHaveBeenCalled();
+    expect(job.updateData).not.toHaveBeenCalled();
+  });
+
+  it("waiting job cancellation rejects remove failures if refreshed state cannot be read", async () => {
+    const { adapter, queue, redis } = buildQueue();
+    const job = makeJob({
+      id: "job-state-failure",
+      getState: vi.fn()
+        .mockResolvedValueOnce("waiting")
+        .mockRejectedValueOnce(new Error("redis down while refreshing state")),
+      remove: vi.fn(async () => {
+        throw new Error("redis down");
+      })
+    });
+    queue.getJob.mockResolvedValue(job);
+
+    await expect(adapter.cancel("job-state-failure")).rejects.toBeInstanceOf(RegistrationQueueUnavailableError);
+    expect(job.remove).toHaveBeenCalledTimes(1);
+    expect(redis.set).not.toHaveBeenCalled();
+    expect(job.updateData).not.toHaveBeenCalled();
+  });
+
   it('completed job with returnvalue { canceled: true } maps state canceled', async () => {
     const { adapter, queue } = buildQueue();
     queue.getJob.mockResolvedValue(makeJob({
