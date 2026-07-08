@@ -21,6 +21,12 @@ import { InMemoryCosConfigStore, type CosConfigStore } from "../store/cos-config
 import { InMemoryYydsMailConfigStore, type YydsMailConfigStore } from "../store/yyds-mail-config-store.js";
 import { InMemoryVideoTaskStore, type VideoTaskRecord, type VideoTaskStore } from "../store/video-task-store.js";
 import type { RegistrationService } from "../services/registration-service.js";
+import {
+  RegistrationJobNotFoundError,
+  RegistrationQueueUnavailableError,
+  type RegistrationJobServicePort
+} from "../services/registration-job-service.js";
+import type { RegistrationJobCreateInput } from "../services/registration-job-types.js";
 import { adminAssetContentType, adminPageHtml, resolveAdminAsset } from "./admin-page.js";
 
 export interface CreateAppOptions {
@@ -39,6 +45,7 @@ export interface CreateAppOptions {
   archiveVideo?: (input: { taskId: string; sourceUrl: string; config: EnabledCosConfig }) => Promise<ArchiveVideoResult>;
   fetchImpl?: FetchLike;
   registrationService?: RegistrationService;
+  registrationJobService?: RegistrationJobServicePort;
 }
 
 interface UploadRequestBody {
@@ -169,6 +176,15 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
 
   async function sendBadRequest(reply: FastifyReply, error: unknown): Promise<void> {
     await reply.status(400).send({ error: { message: error instanceof Error ? error.message : "Invalid request" } });
+  }
+
+  async function sendRegistrationQueueUnavailable(reply: FastifyReply, error?: unknown): Promise<void> {
+    await reply.status(503).send({
+      error: {
+        message: error instanceof Error ? error.message : "Registration queue is not configured",
+        type: "registration_queue_unavailable"
+      }
+    });
   }
 
   function mailboxQuery(request: FastifyRequest): MailboxQuery {
@@ -662,5 +678,92 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     }
     await reply.send(await svc.getStats());
   });
+
+  app.post("/api/registration/jobs", async (request, reply) => {
+    if (!requireLocalAuth(request, reply)) return;
+    const svc = options.registrationJobService;
+    if (!svc) {
+      await sendRegistrationQueueUnavailable(reply);
+      return;
+    }
+    try {
+      await reply.send(await svc.createJob(bodyRecord(request) as RegistrationJobCreateInput));
+    } catch (error) {
+      if (error instanceof RegistrationQueueUnavailableError) {
+        await sendRegistrationQueueUnavailable(reply, error);
+        return;
+      }
+      await sendBadRequest(reply, error);
+    }
+  });
+
+  app.get("/api/registration/jobs", async (request, reply) => {
+    if (!requireLocalAuth(request, reply)) return;
+    const svc = options.registrationJobService;
+    if (!svc) {
+      await sendRegistrationQueueUnavailable(reply);
+      return;
+    }
+    try {
+      await reply.send(await svc.listJobs());
+    } catch (error) {
+      if (error instanceof RegistrationQueueUnavailableError) {
+        await sendRegistrationQueueUnavailable(reply, error);
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.get("/api/registration/jobs/:jobId", async (request, reply) => {
+    if (!requireLocalAuth(request, reply)) return;
+    const svc = options.registrationJobService;
+    if (!svc) {
+      await sendRegistrationQueueUnavailable(reply);
+      return;
+    }
+    const params = request.params as { jobId?: string };
+    try {
+      const job = params.jobId ? await svc.getJob(params.jobId) : undefined;
+      if (!job) {
+        await reply.status(404).send({ error: { message: "Registration job not found" } });
+        return;
+      }
+      await reply.send(job);
+    } catch (error) {
+      if (error instanceof RegistrationQueueUnavailableError) {
+        await sendRegistrationQueueUnavailable(reply, error);
+        return;
+      }
+      throw error;
+    }
+  });
+
+  app.post("/api/registration/jobs/:jobId/cancel", async (request, reply) => {
+    if (!requireLocalAuth(request, reply)) return;
+    const svc = options.registrationJobService;
+    if (!svc) {
+      await sendRegistrationQueueUnavailable(reply);
+      return;
+    }
+    const params = request.params as { jobId?: string };
+    try {
+      if (!params.jobId) {
+        throw new RegistrationJobNotFoundError();
+      }
+      await reply.send(await svc.cancelJob(params.jobId));
+    } catch (error) {
+      if (error instanceof RegistrationJobNotFoundError) {
+        await reply.status(404).send({ error: { message: "Registration job not found" } });
+        return;
+      }
+      if (error instanceof RegistrationQueueUnavailableError) {
+        await sendRegistrationQueueUnavailable(reply, error);
+        return;
+      }
+      throw error;
+    }
+  });
+
   return app;
 }

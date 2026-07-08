@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { AccountService } from "../src/services/account-service.js";
+import { RegistrationQueueUnavailableError } from "../src/services/registration-job-service.js";
 import { createApp } from "../src/server/app.js";
 import { InMemoryAccountStore } from "../src/store/account-store.js";
 import { InMemoryCosConfigStore } from "../src/store/cos-config-store.js";
@@ -7,6 +8,89 @@ import { InMemoryYydsMailConfigStore } from "../src/store/yyds-mail-config-store
 import { InMemoryVideoTaskStore } from "../src/store/video-task-store.js";
 
 describe("server routes", () => {
+  it("creates and reads registration jobs through protected routes", async () => {
+    const registrationJobService = {
+      createJob: vi.fn(async () => ({ jobId: "job-1" })),
+      getJob: vi.fn(async () => ({
+        id: "job-1",
+        mode: "fill",
+        state: "queued",
+        target: 3,
+        concurrency: 2,
+        progress: { started: 0, completed: 0, failed: 0, total: 3 },
+        logs: [],
+        createdAt: 1000
+      })),
+      listJobs: vi.fn(async () => []),
+      cancelJob: vi.fn(async () => ({
+        id: "job-1",
+        mode: "fill",
+        state: "canceled",
+        target: 3,
+        concurrency: 2,
+        progress: { started: 0, completed: 0, failed: 0, total: 3 },
+        logs: [],
+        createdAt: 1000,
+        finishedAt: 2000
+      }))
+    };
+
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+      registrationJobService,
+      fetchImpl: async () => Response.json({ ok: true })
+    });
+
+    expect((await app.inject({ method: "POST", url: "/api/registration/jobs" })).statusCode).toBe(401);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/registration/jobs",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { mode: "fill", target: 3, concurrency: 2 }
+    });
+    expect(created.statusCode).toBe(200);
+    expect(created.json()).toEqual({ jobId: "job-1" });
+    expect(registrationJobService.createJob).toHaveBeenCalledWith({ mode: "fill", target: 3, concurrency: 2 });
+
+    const listed = await app.inject({
+      method: "GET",
+      url: "/api/registration/jobs",
+      headers: { authorization: "Bearer sk-test" }
+    });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json()).toEqual([]);
+
+    const read = await app.inject({
+      method: "GET",
+      url: "/api/registration/jobs/job-1",
+      headers: { authorization: "Bearer sk-test" }
+    });
+    expect(read.statusCode).toBe(200);
+    expect(read.json()).toMatchObject({ id: "job-1", state: "queued" });
+
+    const canceled = await app.inject({
+      method: "POST",
+      url: "/api/registration/jobs/job-1/cancel",
+      headers: { authorization: "Bearer sk-test" }
+    });
+    expect(canceled.statusCode).toBe(200);
+    expect(canceled.json()).toMatchObject({ id: "job-1", state: "canceled" });
+
+    registrationJobService.createJob.mockRejectedValueOnce(new RegistrationQueueUnavailableError("redis unavailable"));
+    const unavailable = await app.inject({
+      method: "POST",
+      url: "/api/registration/jobs",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { mode: "single" }
+    });
+    expect(unavailable.statusCode).toBe(503);
+    expect(unavailable.json()).toMatchObject({ error: { type: "registration_queue_unavailable" } });
+  });
+
   it("serves health without auth and protects protocol routes", async () => {
     const app = createApp({
       masterApiKey: "sk-test",
