@@ -1,0 +1,24 @@
+import { describe, expect, it } from "vitest";
+import { loadConfig } from "../src/config/env.js";
+
+describe("loadConfig", () => {
+  it("loads required settings and defaults", () => {
+    const config = loadConfig({
+      MASTER_API_KEY: "sk-test",
+      PROVIDER_BASE_URL: "https://upstream.test",
+      PROVIDER_ACCOUNT_UID: "u1",
+      PROVIDER_ACCOUNT_TOKEN: "t1"
+    });
+
+    expect(config.masterApiKey).toBe("sk-test");
+    expect(config.providerBaseUrl).toBe("https://upstream.test");
+    expect(config.providerAuthMode).toBe("uid-token");
+    expect(config.listenPort).toBe(18888);
+  });
+
+  it("rejects missing required settings", () => {
+    expect(() => loadConfig({ PROVIDER_BASE_URL: "https://upstream.test" })).toThrow(/MASTER_API_KEY/);
+    expect(() => loadConfig({ MASTER_API_KEY: "sk-test" })).toThrow(/PROVIDER_BASE_URL/);
+  });
+});
+
