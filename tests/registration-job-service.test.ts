@@ -46,9 +46,6 @@ describe("RegistrationJobService", () => {
       defaultConcurrency: 2
     });
 
-    await expect(service.createJob({ mode: "fill", target: 0, concurrency: 2 })).rejects.toThrow(/target/);
-    await expect(service.createJob({ mode: "fill", target: 8, concurrency: 0 })).rejects.toThrow(/concurrency/);
-
     const single = await service.createJob({ mode: "single" });
     const fill = await service.createJob({ mode: "fill" });
 
@@ -60,6 +57,41 @@ describe("RegistrationJobService", () => {
       target: 8,
       concurrency: 2
     });
+  });
+
+  it.each([
+    ["non-object input", null as never, /object/],
+    ["missing mode", {} as never, /mode/],
+    ["omitted mode with fill-like fields", { target: 8, concurrency: 2 } as never, /mode/],
+    ["unknown mode", { mode: "bulk" } as never, /mode/],
+    ["null mode", { mode: null } as never, /mode/],
+    ["string target", { mode: "fill", target: "8", concurrency: 2 } as never, /target/],
+    ["null target", { mode: "fill", target: null, concurrency: 2 } as never, /target/],
+    ["string concurrency", { mode: "fill", target: 8, concurrency: "2" } as never, /concurrency/],
+    ["null concurrency", { mode: "fill", target: 8, concurrency: null } as never, /concurrency/]
+  ])("rejects malformed runtime input before applying fill defaults: %s", async (_caseName, input, message) => {
+    const queue = new FakeRegistrationQueue();
+    const service = new RegistrationJobService(queue, {
+      defaultTarget: 8,
+      defaultConcurrency: 2
+    });
+
+    await expect(service.createJob(input)).rejects.toThrow(message);
+    expect(queue.jobs).toHaveLength(0);
+  });
+
+  it("rejects fill target and concurrency outside integer ranges", async () => {
+    const service = new RegistrationJobService(new FakeRegistrationQueue(), {
+      defaultTarget: 8,
+      defaultConcurrency: 2
+    });
+
+    await expect(service.createJob({ mode: "fill", target: 0, concurrency: 2 })).rejects.toThrow(/target/);
+    await expect(service.createJob({ mode: "fill", target: 501, concurrency: 2 })).rejects.toThrow(/target/);
+    await expect(service.createJob({ mode: "fill", target: 1.5, concurrency: 2 })).rejects.toThrow(/target/);
+    await expect(service.createJob({ mode: "fill", target: 8, concurrency: 0 })).rejects.toThrow(/concurrency/);
+    await expect(service.createJob({ mode: "fill", target: 8, concurrency: 21 })).rejects.toThrow(/concurrency/);
+    await expect(service.createJob({ mode: "fill", target: 8, concurrency: 1.5 })).rejects.toThrow(/concurrency/);
   });
 
   it("lists and cancels jobs", async () => {

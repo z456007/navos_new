@@ -15,12 +15,21 @@ export interface RegistrationQueuePort {
 export class RegistrationJobNotFoundError extends Error {
   constructor() {
     super("registration job not found");
+    this.name = "RegistrationJobNotFoundError";
   }
 }
 
 export class RegistrationQueueUnavailableError extends Error {
   constructor(message = "registration queue unavailable") {
     super(message);
+    this.name = "RegistrationQueueUnavailableError";
+  }
+}
+
+export class RegistrationJobValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RegistrationJobValidationError";
   }
 }
 
@@ -64,17 +73,31 @@ export class RegistrationJobService implements RegistrationJobServicePort {
   }
 
   private normalizePayload(input: RegistrationJobCreateInput): RegistrationJobPayload {
-    if (input.mode === "single") {
+    const rawInput = this.validateInputObject(input);
+    const mode = rawInput.mode;
+    if (mode !== "single" && mode !== "fill") {
+      throw new RegistrationJobValidationError('mode must be either "single" or "fill"');
+    }
+
+    if (mode === "single") {
       return { mode: "single" };
     }
-    const target = input.target ?? this.options.defaultTarget;
-    const concurrency = input.concurrency ?? this.options.defaultConcurrency;
-    if (!Number.isInteger(target) || target < 1 || target > 500) {
-      throw new Error("target must be an integer from 1 to 500");
+
+    const target = rawInput.target === undefined ? this.options.defaultTarget : rawInput.target;
+    const concurrency = rawInput.concurrency === undefined ? this.options.defaultConcurrency : rawInput.concurrency;
+    if (typeof target !== "number" || !Number.isInteger(target) || target < 1 || target > 500) {
+      throw new RegistrationJobValidationError("target must be an integer from 1 to 500");
     }
-    if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 20) {
-      throw new Error("concurrency must be an integer from 1 to 20");
+    if (typeof concurrency !== "number" || !Number.isInteger(concurrency) || concurrency < 1 || concurrency > 20) {
+      throw new RegistrationJobValidationError("concurrency must be an integer from 1 to 20");
     }
     return { mode: "fill", target, concurrency };
+  }
+
+  private validateInputObject(input: RegistrationJobCreateInput): Record<string, unknown> {
+    if (typeof input !== "object" || input === null || Array.isArray(input)) {
+      throw new RegistrationJobValidationError("registration job input must be an object");
+    }
+    return input;
   }
 }
