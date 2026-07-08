@@ -28,6 +28,52 @@ describe("web helper modules", () => {
     expect(nextPollingDelay(2)).toBe(10000);
   });
 
+  it("uses a deterministic fallback for malformed registration job logs", () => {
+    const job = normalizeRegistrationJob({
+      logs: [
+        { level: "warn", message: "missing at" },
+        { at: Number.NaN, level: "error", message: "invalid at" }
+      ]
+    });
+
+    expect(job.logs).toEqual([
+      { at: 0, level: "warn", message: "missing at" },
+      { at: 0, level: "error", message: "invalid at" }
+    ]);
+  });
+
+  it("maps registration job states from API values", () => {
+    const cases = [
+      ["completed", "succeeded"],
+      ["succeeded", "succeeded"],
+      ["active", "running"],
+      ["running", "running"],
+      ["failed", "failed"],
+      ["canceled", "canceled"],
+      ["unknown", "queued"],
+      [undefined, "queued"]
+    ] as const;
+
+    for (const [rawState, expectedState] of cases) {
+      expect(normalizeRegistrationJob({ state: rawState }).state).toBe(expectedState);
+    }
+  });
+
+  it("treats only final registration job states as terminal", () => {
+    const cases = [
+      ["queued", false],
+      ["running", false],
+      ["succeeded", true],
+      ["failed", true],
+      ["canceled", true]
+    ] as const;
+
+    for (const [state, expected] of cases) {
+      const job = normalizeRegistrationJob({ state });
+      expect(registrationJobIsTerminal(job)).toBe(expected);
+    }
+  });
+
   it("normalizes video task data for the UI", () => {
     const task = normalizeVideoTask(
       {

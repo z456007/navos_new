@@ -45,7 +45,7 @@ function normalizeLog(value: unknown): RegistrationJobView["logs"][number] | und
   const record = value as Record<string, unknown>;
   const level = record.level === "warn" || record.level === "error" ? record.level : "info";
   return {
-    at: readNumber(record.at) ?? Date.now(),
+    at: readNumber(record.at) ?? 0,
     level,
     message: readString(record.message) ?? ""
   };
