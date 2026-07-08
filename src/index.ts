@@ -67,6 +67,10 @@ const registrationWorker = createRegistrationWorker({
   clearCancelRequest: (jobId) => registrationQueue.clearCancelRequest(jobId)
 });
 
+registrationWorker.on("error", () => {
+  console.error("Registration worker infrastructure error");
+});
+
 const app = createApp({
   ...config,
   accountService,
@@ -80,8 +84,11 @@ const app = createApp({
 });
 
 app.addHook("onClose", async () => {
-  await registrationWorker.close();
-  await registrationQueue.close();
+  try {
+    await registrationWorker.close();
+  } finally {
+    await registrationQueue.close();
+  }
 });
 
 await app.listen({ host: "0.0.0.0", port: config.listenPort });
