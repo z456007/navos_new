@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-admin/
 coverage/
 .env
 .env.*
@@ -7,4 +8,3 @@ coverage/
 *.log
 *.db
 *.sqlite
-
