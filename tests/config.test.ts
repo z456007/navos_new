@@ -52,4 +52,18 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ MASTER_API_KEY: "sk-test", VIP_HMAC_SECRET: "x" })).toThrow(/PROVIDER_BASE_URL/);
     expect(() => loadConfig({ MASTER_API_KEY: "sk-test", PROVIDER_BASE_URL: "https://upstream.test" })).toThrow(/VIP_HMAC_SECRET/);
   });
+
+  it("uses default registration queue settings", () => {
+    const config = loadConfig({
+      MASTER_API_KEY: "sk-test",
+      PROVIDER_BASE_URL: "https://upstream.test",
+      VIP_HMAC_SECRET: "test-secret-32-chars-long-key!!"
+    });
+
+    expect(config.redisUrl).toBe("redis://127.0.0.1:6379");
+    expect(config.queuePrefix).toBe("navos");
+    expect(config.registrationJobConcurrency).toBe(2);
+    expect(config.registrationJobRemoveOnComplete).toBe(50);
+    expect(config.registrationJobRemoveOnFail).toBe(100);
+  });
 });
