@@ -35,7 +35,7 @@ export async function processRegistrationJob(
 
   if (await isCancellationRequested(job, jobId, options)) {
     await progress.update(0, 0, 0, 0, "warn", "registration job canceled before start");
-    await clearCancelRequest(jobId, options);
+    await clearCancelRequestBestEffort(jobId, options);
     return { canceled: true };
   }
 
@@ -75,18 +75,18 @@ async function processSingleRegistration(
   } catch (error) {
     const message = errorMessage(error, "single registration failed");
     await progress.update(1, 0, 1, 1, "error", "single registration failed");
-    await clearCancelRequest(jobId, options);
+    await clearCancelRequestBestEffort(jobId, options);
     throw new Error(message);
   }
 
   if (!result.success) {
     await progress.update(1, 0, 1, 1, "error", "single registration failed");
-    await clearCancelRequest(jobId, options);
+    await clearCancelRequestBestEffort(jobId, options);
     throw new Error(result.error ?? "single registration failed");
   }
 
   await progress.update(1, 1, 0, 1, "info", "single registration completed");
-  await clearCancelRequest(jobId, options);
+  await clearCancelRequestBestEffort(jobId, options);
   return result;
 }
 
@@ -106,10 +106,14 @@ async function processFillRegistration(
 
   await progress.update(started, completed, failed, total, "info", "fill registration started");
 
+  if (data.concurrency <= 0) {
+    throw new Error("fill registration concurrency must be greater than 0");
+  }
+
   while (started < total) {
     if (await isCancellationRequestedForId(jobId, options)) {
       await progress.update(started, completed, failed, total, "warn", "fill registration canceled");
-      await clearCancelRequest(jobId, options);
+      await clearCancelRequestBestEffort(jobId, options);
       return {
         canceled: true,
         target: data.target,
@@ -123,6 +127,7 @@ async function processFillRegistration(
     const batchSize = Math.min(data.concurrency, total - started);
     const batch = Array.from({ length: batchSize }, () => registerOneSafely(registrationService));
     started += batchSize;
+    await progress.update(started, completed, failed, total, "info", "fill registration batch started");
 
     const batchResults = await Promise.all(batch);
     results.push(...batchResults);
@@ -132,7 +137,7 @@ async function processFillRegistration(
     await progress.update(started, completed, failed, total, "info", "fill registration batch completed");
   }
 
-  await clearCancelRequest(jobId, options);
+  await clearCancelRequestBestEffort(jobId, options);
   return {
     target: data.target,
     started,
@@ -195,6 +200,17 @@ async function isCancellationRequestedForId(
 async function clearCancelRequest(jobId: string, options: RegistrationProcessorOptions): Promise<void> {
   if (options.clearCancelRequest) {
     await options.clearCancelRequest(jobId);
+  }
+}
+
+async function clearCancelRequestBestEffort(
+  jobId: string,
+  options: RegistrationProcessorOptions
+): Promise<void> {
+  try {
+    await clearCancelRequest(jobId, options);
+  } catch {
+    // Cleanup is best-effort; it must not change the terminal job outcome.
   }
 }
 
