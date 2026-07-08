@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { AccountService } from "../src/services/account-service.js";
-import { RegistrationQueueUnavailableError } from "../src/services/registration-job-service.js";
+import {
+  RegistrationJobNotFoundError,
+  RegistrationQueueUnavailableError
+} from "../src/services/registration-job-service.js";
 import { createApp } from "../src/server/app.js";
 import { InMemoryAccountStore } from "../src/store/account-store.js";
 import { InMemoryCosConfigStore } from "../src/store/cos-config-store.js";
@@ -92,6 +95,7 @@ describe("server routes", () => {
     });
     expect(unavailable.statusCode).toBe(503);
     expect(unavailable.json()).toMatchObject({ error: { type: "registration_queue_unavailable" } });
+    expect(JSON.stringify(unavailable.json())).not.toContain("redis unavailable");
 
     registrationJobService.cancelJob.mockRejectedValueOnce(new RegistrationQueueUnavailableError("redis unavailable"));
     const cancelUnavailable = await app.inject({
@@ -101,6 +105,86 @@ describe("server routes", () => {
     });
     expect(cancelUnavailable.statusCode).toBe(503);
     expect(cancelUnavailable.json()).toMatchObject({ error: { type: "registration_queue_unavailable" } });
+    expect(JSON.stringify(cancelUnavailable.json())).not.toContain("redis unavailable");
+  });
+
+  it("maps registration job route failure branches", async () => {
+    const appOptions = {
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token" as const,
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+      fetchImpl: async () => Response.json({ ok: true })
+    };
+
+    const appWithoutJobs = createApp(appOptions);
+    for (const request of [
+      { method: "POST", url: "/api/registration/jobs", payload: { mode: "single" } },
+      { method: "GET", url: "/api/registration/jobs" },
+      { method: "GET", url: "/api/registration/jobs/job-1" },
+      { method: "POST", url: "/api/registration/jobs/job-1/cancel" }
+    ] as const) {
+      const response = await appWithoutJobs.inject({
+        ...request,
+        headers: { authorization: "Bearer sk-test" }
+      });
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({ error: { type: "registration_queue_unavailable" } });
+    }
+
+    const registrationJobService = {
+      createJob: vi.fn(async () => ({ jobId: "job-1" })),
+      getJob: vi.fn(async () => undefined),
+      listJobs: vi.fn(async () => []),
+      cancelJob: vi.fn(async () => {
+        throw new RegistrationJobNotFoundError();
+      })
+    };
+    const app = createApp({ ...appOptions, registrationJobService });
+
+    const missingRead = await app.inject({
+      method: "GET",
+      url: "/api/registration/jobs/job-missing",
+      headers: { authorization: "Bearer sk-test" }
+    });
+    expect(missingRead.statusCode).toBe(404);
+    expect(missingRead.json()).toMatchObject({ error: { message: "Registration job not found" } });
+
+    const missingCancel = await app.inject({
+      method: "POST",
+      url: "/api/registration/jobs/job-missing/cancel",
+      headers: { authorization: "Bearer sk-test" }
+    });
+    expect(missingCancel.statusCode).toBe(404);
+    expect(missingCancel.json()).toMatchObject({ error: { message: "Registration job not found" } });
+
+    registrationJobService.cancelJob.mockRejectedValueOnce(new Error("unexpected cancel failure"));
+    const unknownCancel = await app.inject({
+      method: "POST",
+      url: "/api/registration/jobs/job-1/cancel",
+      headers: { authorization: "Bearer sk-test" }
+    });
+    expect(unknownCancel.statusCode).toBe(500);
+
+    registrationJobService.listJobs.mockRejectedValueOnce(new RegistrationQueueUnavailableError("redis unavailable"));
+    const listUnavailable = await app.inject({
+      method: "GET",
+      url: "/api/registration/jobs",
+      headers: { authorization: "Bearer sk-test" }
+    });
+    expect(listUnavailable.statusCode).toBe(503);
+    expect(listUnavailable.json()).toMatchObject({ error: { type: "registration_queue_unavailable" } });
+    expect(JSON.stringify(listUnavailable.json())).not.toContain("redis unavailable");
+
+    registrationJobService.getJob.mockRejectedValueOnce(new RegistrationQueueUnavailableError("redis unavailable"));
+    const readUnavailable = await app.inject({
+      method: "GET",
+      url: "/api/registration/jobs/job-1",
+      headers: { authorization: "Bearer sk-test" }
+    });
+    expect(readUnavailable.statusCode).toBe(503);
+    expect(readUnavailable.json()).toMatchObject({ error: { type: "registration_queue_unavailable" } });
+    expect(JSON.stringify(readUnavailable.json())).not.toContain("redis unavailable");
   });
 
   it("serves health without auth and protects protocol routes", async () => {

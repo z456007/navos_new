@@ -178,10 +178,13 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     await reply.status(400).send({ error: { message: error instanceof Error ? error.message : "Invalid request" } });
   }
 
-  async function sendRegistrationQueueUnavailable(reply: FastifyReply, error?: unknown): Promise<void> {
+  async function sendRegistrationQueueUnavailable(
+    reply: FastifyReply,
+    message = "Registration queue is unavailable"
+  ): Promise<void> {
     await reply.status(503).send({
       error: {
-        message: error instanceof Error ? error.message : "Registration queue is not configured",
+        message,
         type: "registration_queue_unavailable"
       }
     });
@@ -683,14 +686,14 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     if (!requireLocalAuth(request, reply)) return;
     const svc = options.registrationJobService;
     if (!svc) {
-      await sendRegistrationQueueUnavailable(reply);
+      await sendRegistrationQueueUnavailable(reply, "Registration job service is not configured");
       return;
     }
     try {
       await reply.send(await svc.createJob(bodyRecord(request) as RegistrationJobCreateInput));
     } catch (error) {
       if (error instanceof RegistrationQueueUnavailableError) {
-        await sendRegistrationQueueUnavailable(reply, error);
+        await sendRegistrationQueueUnavailable(reply);
         return;
       }
       await sendBadRequest(reply, error);
@@ -701,14 +704,14 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     if (!requireLocalAuth(request, reply)) return;
     const svc = options.registrationJobService;
     if (!svc) {
-      await sendRegistrationQueueUnavailable(reply);
+      await sendRegistrationQueueUnavailable(reply, "Registration job service is not configured");
       return;
     }
     try {
       await reply.send(await svc.listJobs());
     } catch (error) {
       if (error instanceof RegistrationQueueUnavailableError) {
-        await sendRegistrationQueueUnavailable(reply, error);
+        await sendRegistrationQueueUnavailable(reply);
         return;
       }
       throw error;
@@ -719,7 +722,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     if (!requireLocalAuth(request, reply)) return;
     const svc = options.registrationJobService;
     if (!svc) {
-      await sendRegistrationQueueUnavailable(reply);
+      await sendRegistrationQueueUnavailable(reply, "Registration job service is not configured");
       return;
     }
     const params = request.params as { jobId?: string };
@@ -732,7 +735,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       await reply.send(job);
     } catch (error) {
       if (error instanceof RegistrationQueueUnavailableError) {
-        await sendRegistrationQueueUnavailable(reply, error);
+        await sendRegistrationQueueUnavailable(reply);
         return;
       }
       throw error;
@@ -743,7 +746,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     if (!requireLocalAuth(request, reply)) return;
     const svc = options.registrationJobService;
     if (!svc) {
-      await sendRegistrationQueueUnavailable(reply);
+      await sendRegistrationQueueUnavailable(reply, "Registration job service is not configured");
       return;
     }
     const params = request.params as { jobId?: string };
@@ -758,7 +761,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
         return;
       }
       if (error instanceof RegistrationQueueUnavailableError) {
-        await sendRegistrationQueueUnavailable(reply, error);
+        await sendRegistrationQueueUnavailable(reply);
         return;
       }
       throw error;

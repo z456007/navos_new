@@ -429,6 +429,38 @@ describe("BullmqRegistrationQueue", () => {
     }
   });
 
+  it("get failure wraps as RegistrationQueueUnavailableError", async () => {
+    const { adapter, queue } = buildQueue();
+    queue.getJob.mockRejectedValue(new Error("redis down"));
+
+    await expect(adapter.get("job-1")).rejects.toBeInstanceOf(RegistrationQueueUnavailableError);
+  });
+
+  it("list failure wraps as RegistrationQueueUnavailableError", async () => {
+    const { adapter, queue } = buildQueue();
+    queue.getJobs.mockRejectedValue(new Error("redis down"));
+
+    await expect(adapter.list()).rejects.toBeInstanceOf(RegistrationQueueUnavailableError);
+  });
+
+  it("cancel failure wraps as RegistrationQueueUnavailableError", async () => {
+    const { adapter, queue } = buildQueue();
+    queue.getJob.mockRejectedValue(new Error("redis down"));
+
+    await expect(adapter.cancel("job-1")).rejects.toBeInstanceOf(RegistrationQueueUnavailableError);
+  });
+
+  it("cancel Redis write failure wraps as RegistrationQueueUnavailableError", async () => {
+    const { adapter, queue, redis } = buildQueue();
+    queue.getJob.mockResolvedValue(makeJob({
+      id: "job-redis-failure",
+      getState: vi.fn(async () => "active")
+    }));
+    redis.set.mockRejectedValue(new Error("redis down"));
+
+    await expect(adapter.cancel("job-redis-failure")).rejects.toBeInstanceOf(RegistrationQueueUnavailableError);
+  });
+
   it("close closes the queue and Redis connection", async () => {
     const { adapter, queue, redis } = buildQueue();
 

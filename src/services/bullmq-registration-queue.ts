@@ -66,44 +66,55 @@ export class BullmqRegistrationQueue implements RegistrationQueuePort {
       }
       return String(job.id);
     } catch (error) {
-      const detail = error instanceof Error ? `: ${error.message}` : "";
-      throw new RegistrationQueueUnavailableError(`registration queue unavailable${detail}`);
+      throw this.queueUnavailableError(error);
     }
   }
 
   async get(id: string): Promise<RegistrationJobSnapshot | undefined> {
-    const job = await this.queue.getJob(id);
-    if (!job) {
-      return undefined;
+    try {
+      const job = await this.queue.getJob(id);
+      if (!job) {
+        return undefined;
+      }
+      return this.toSnapshot(job);
+    } catch (error) {
+      throw this.queueUnavailableError(error);
     }
-    return this.toSnapshot(job);
   }
 
   async list(): Promise<RegistrationJobSnapshot[]> {
-    const jobs = await this.queue.getJobs(RECENT_JOB_TYPES, 0, RECENT_JOB_LIMIT - 1, false);
-    const recentJobs = [...jobs]
-      .filter((job) => job !== undefined)
-      .sort((left, right) => jobTimestamp(right) - jobTimestamp(left))
-      .slice(0, RECENT_JOB_LIMIT);
-    return Promise.all(recentJobs.map((job) => this.toSnapshot(job, undefined, false)));
+    try {
+      const jobs = await this.queue.getJobs(RECENT_JOB_TYPES, 0, RECENT_JOB_LIMIT - 1, false);
+      const recentJobs = [...jobs]
+        .filter((job) => job !== undefined)
+        .sort((left, right) => jobTimestamp(right) - jobTimestamp(left))
+        .slice(0, RECENT_JOB_LIMIT);
+      return await Promise.all(recentJobs.map((job) => this.toSnapshot(job, undefined, false)));
+    } catch (error) {
+      throw this.queueUnavailableError(error);
+    }
   }
 
   async cancel(id: string): Promise<RegistrationJobSnapshot | undefined> {
-    const job = await this.queue.getJob(id);
-    if (!job) {
-      return undefined;
-    }
+    try {
+      const job = await this.queue.getJob(id);
+      if (!job) {
+        return undefined;
+      }
 
-    const state = await job.getState();
-    if (state === "waiting" || state === "delayed") {
-      return this.cancelQueuedJob(id, job, state);
-    }
+      const state = await job.getState();
+      if (state === "waiting" || state === "delayed") {
+        return await this.cancelQueuedJob(id, job, state);
+      }
 
-    if (state === "active") {
-      return this.recordRunningCancelRequest(id, job, state);
-    }
+      if (state === "active") {
+        return await this.recordRunningCancelRequest(id, job, state);
+      }
 
-    return this.toSnapshot(job, state);
+      return await this.toSnapshot(job, state);
+    } catch (error) {
+      throw this.queueUnavailableError(error);
+    }
   }
 
   private async cancelQueuedJob(
@@ -176,6 +187,14 @@ export class BullmqRegistrationQueue implements RegistrationQueuePort {
 
   private cancelKey(id: string): string {
     return `${this.options.queuePrefix}:${QUEUE_NAME}:cancel:${id}`;
+  }
+
+  private queueUnavailableError(error: unknown): RegistrationQueueUnavailableError {
+    if (error instanceof RegistrationQueueUnavailableError) {
+      return error;
+    }
+    const detail = error instanceof Error ? `: ${error.message}` : "";
+    return new RegistrationQueueUnavailableError(`registration queue unavailable${detail}`);
   }
 
   private async toSnapshot(
