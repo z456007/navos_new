@@ -45,6 +45,9 @@ describe("server routes", () => {
     });
 
     expect((await app.inject({ method: "POST", url: "/api/registration/jobs" })).statusCode).toBe(401);
+    expect((await app.inject({ method: "GET", url: "/api/registration/jobs" })).statusCode).toBe(401);
+    expect((await app.inject({ method: "GET", url: "/api/registration/jobs/job-1" })).statusCode).toBe(401);
+    expect((await app.inject({ method: "POST", url: "/api/registration/jobs/job-1/cancel" })).statusCode).toBe(401);
 
     const created = await app.inject({
       method: "POST",
@@ -89,6 +92,15 @@ describe("server routes", () => {
     });
     expect(unavailable.statusCode).toBe(503);
     expect(unavailable.json()).toMatchObject({ error: { type: "registration_queue_unavailable" } });
+
+    registrationJobService.cancelJob.mockRejectedValueOnce(new RegistrationQueueUnavailableError("redis unavailable"));
+    const cancelUnavailable = await app.inject({
+      method: "POST",
+      url: "/api/registration/jobs/job-1/cancel",
+      headers: { authorization: "Bearer sk-test" }
+    });
+    expect(cancelUnavailable.statusCode).toBe(503);
+    expect(cancelUnavailable.json()).toMatchObject({ error: { type: "registration_queue_unavailable" } });
   });
 
   it("serves health without auth and protects protocol routes", async () => {
