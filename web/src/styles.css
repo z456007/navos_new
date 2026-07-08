@@ -373,6 +373,22 @@ a.button {
   white-space: nowrap;
 }
 
+.registration-ops {
+  display: grid;
+  gap: 10px;
+  border-bottom: 1px solid var(--line);
+  background: #fbfcfe;
+  padding: 14px;
+}
+
+.registration-ops .toolbar {
+  padding: 0;
+}
+
+.registration-ops .event-list {
+  margin-top: 2px;
+}
+
 .toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -501,6 +517,36 @@ a.button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.job-strip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 112px 96px 72px;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  padding: 10px;
+}
+
+.job-strip span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.job-strip strong {
+  display: block;
+  margin-top: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.job-result .json-block {
+  margin: 0;
 }
 
 .task-status {
@@ -698,6 +744,7 @@ td {
   .metrics,
   .import-grid,
   .task-strip,
+  .job-strip,
   .video-rule-band,
   .video-grid,
   .form-row.two,

@@ -85,6 +85,56 @@ describe("admin app gate", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/video/generations/task_1", expect.objectContaining({ method: "GET" }));
   });
 
+  it("starts and renders a single registration job from the account pool", async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });
+      const path = String(url);
+      if (path === "/api/accounts") {
+        return Response.json([]);
+      }
+      if (path === "/api/registration/jobs" && init?.method === "GET") {
+        return Response.json([]);
+      }
+      if (path === "/api/registration/jobs" && init?.method === "POST") {
+        expect(JSON.parse(String(init.body))).toEqual({ mode: "single" });
+        return Response.json({ jobId: "job-1" });
+      }
+      if (path === "/api/registration/jobs/job-1") {
+        return Response.json({
+          id: "job-1",
+          mode: "single",
+          state: "succeeded",
+          progress: { started: 1, completed: 1, failed: 0, total: 1 },
+          logs: [{ at: 1000, level: "info", message: "single registration completed" }],
+          results: { uid: "uid-full-1", token: "token-full-1" },
+          createdAt: 900,
+          startedAt: 950,
+          finishedAt: 1000
+        });
+      }
+      return Response.json({ error: { message: "unexpected path" } }, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("Master API Key"), { target: { value: "sk-local" } });
+    fireEvent.click(screen.getByRole("button", { name: "进入控制台" }));
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("heading", { name: "账号池" }).length).toBeGreaterThan(0);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "启动单个注册" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("job-1")).toBeInTheDocument();
+      expect(screen.getByText("succeeded")).toBeInTheDocument();
+      expect(screen.getByText(/single registration completed/)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/uid-full-1/)).toBeInTheDocument();
+    expect(screen.getByText(/token-full-1/)).toBeInTheDocument();
+  });
+
   it("shows video duration rules and clamps 1080P to five seconds", async () => {
     const fetchMock = vi.fn(async () => Response.json([]));
     vi.stubGlobal("fetch", fetchMock);
