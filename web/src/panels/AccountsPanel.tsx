@@ -30,15 +30,17 @@ export function AccountsPanel({
   const pollFailures = useRef(0);
   const mounted = useRef(false);
   const refreshedTerminalJobId = useRef<string | undefined>(undefined);
+  const jobInteractionVersion = useRef(0);
 
   useEffect(() => {
     mounted.current = true;
     let active = true;
+    const hydrationVersion = jobInteractionVersion.current;
 
     async function loadRecentJobs() {
       try {
         const response = await apiRequest<unknown>(apiKey, "/api/registration/jobs", { method: "GET" });
-        if (!active || !mounted.current) return;
+        if (!active || !mounted.current || hydrationVersion !== jobInteractionVersion.current) return;
         const recentJobs = Array.isArray(response) ? response.map(normalizeRegistrationJob) : [];
         const recentJob = recentJobs[0];
         if (!recentJob) return;
@@ -62,6 +64,11 @@ export function AccountsPanel({
       clearPolling();
     };
   }, [apiKey]);
+
+  function markJobInteraction() {
+    jobInteractionVersion.current += 1;
+    return jobInteractionVersion.current;
+  }
 
   function clearPolling() {
     if (pollTimer.current) {
@@ -99,6 +106,7 @@ export function AccountsPanel({
   }
 
   async function startRegistrationJob(mode: "single" | "fill") {
+    const requestVersion = markJobInteraction();
     clearPolling();
     pollFailures.current = 0;
     refreshedTerminalJobId.current = undefined;
@@ -115,6 +123,7 @@ export function AccountsPanel({
       if (!jobId) {
         throw new Error("注册任务没有返回 job id");
       }
+      if (requestVersion !== jobInteractionVersion.current) return;
       setJob(normalizeRegistrationJob({
         id: jobId,
         mode,
@@ -136,6 +145,7 @@ export function AccountsPanel({
       return;
     }
 
+    const requestVersion = markJobInteraction();
     clearPolling();
     setStatus({ kind: "loading", message: "查询注册任务状态" });
 
@@ -143,7 +153,7 @@ export function AccountsPanel({
       const response = await apiRequest<unknown>(apiKey, `/api/registration/jobs/${encodeURIComponent(jobId)}`, {
         method: "GET"
       });
-      if (!mounted.current) return;
+      if (!mounted.current || requestVersion !== jobInteractionVersion.current) return;
       const normalizedJob = normalizeRegistrationJob(response);
       const nextJob = { ...normalizedJob, id: normalizedJob.id || jobId };
       setJob(nextJob);
@@ -168,7 +178,7 @@ export function AccountsPanel({
         void pollRegistrationJob(jobId);
       }, nextPollingDelay(0));
     } catch (error) {
-      if (!mounted.current) return;
+      if (!mounted.current || requestVersion !== jobInteractionVersion.current) return;
       const failureCount = pollFailures.current + 1;
       pollFailures.current = failureCount;
       setStatus({ kind: "error", message: errorMessage(error) ?? "查询注册任务失败" });
@@ -180,15 +190,23 @@ export function AccountsPanel({
 
   async function cancelRegistrationJob() {
     if (!job?.id) return;
+    const jobId = job.id;
+    markJobInteraction();
     clearPolling();
     setStatus({ kind: "loading", message: "取消注册任务中" });
     try {
-      await apiRequest<unknown>(apiKey, `/api/registration/jobs/${encodeURIComponent(job.id)}/cancel`, {
+      await apiRequest<unknown>(apiKey, `/api/registration/jobs/${encodeURIComponent(jobId)}/cancel`, {
         method: "POST"
       });
-      await pollRegistrationJob(job.id);
+      await pollRegistrationJob(jobId);
     } catch (error) {
+      if (!mounted.current) return;
+      const failureCount = pollFailures.current + 1;
+      pollFailures.current = failureCount;
       setStatus({ kind: "error", message: errorMessage(error) ?? "取消注册任务失败" });
+      pollTimer.current = setTimeout(() => {
+        void pollRegistrationJob(jobId);
+      }, nextPollingDelay(failureCount));
     }
   }
 

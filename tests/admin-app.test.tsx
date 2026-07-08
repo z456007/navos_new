@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../web/src/App";
@@ -8,6 +8,7 @@ import { App } from "../web/src/App";
 describe("admin app gate", () => {
   afterEach(() => {
     localStorage.clear();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -135,6 +136,126 @@ describe("admin app gate", () => {
     expect(screen.getByText(/token-full-1/)).toBeInTheDocument();
   });
 
+  it("keeps polling a running registration job after cancel fails", async () => {
+    vi.useFakeTimers();
+    let jobPolls = 0;
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });
+      const path = String(url);
+      if (path === "/api/accounts") {
+        return Response.json([]);
+      }
+      if (path === "/api/registration/jobs" && init?.method === "GET") {
+        return Response.json([{
+          id: "job-cancel",
+          mode: "fill",
+          state: "running",
+          progress: { started: 1, completed: 0, failed: 0, total: 2 },
+          logs: [{ at: 1000, level: "info", message: "fill registration started" }],
+          createdAt: 900
+        }]);
+      }
+      if (path === "/api/registration/jobs/job-cancel/cancel" && init?.method === "POST") {
+        return Response.json({ error: { message: "cancel unavailable" } }, { status: 503 });
+      }
+      if (path === "/api/registration/jobs/job-cancel" && init?.method === "GET") {
+        jobPolls += 1;
+        return Response.json({
+          id: "job-cancel",
+          mode: "fill",
+          state: "running",
+          progress: { started: 1, completed: 0, failed: 0, total: 2 },
+          logs: [{ at: 2000, level: "warn", message: "cancel failed, still running" }],
+          createdAt: 900
+        });
+      }
+      return Response.json({ error: { message: "unexpected path" } }, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("Master API Key"), { target: { value: "sk-local" } });
+    fireEvent.click(screen.getByRole("button", { name: "进入控制台" }));
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText("job-cancel")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "取消任务" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText("cancel unavailable")).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+
+    expect(jobPolls).toBeGreaterThan(0);
+    expect(screen.getByText("job-cancel")).toBeInTheDocument();
+  });
+
+  it("does not let slow recent registration jobs replace a newly started job", async () => {
+    const recentJobs = deferred<Response>();
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });
+      const path = String(url);
+      if (path === "/api/accounts") {
+        return Response.json([]);
+      }
+      if (path === "/api/registration/jobs" && init?.method === "GET") {
+        return recentJobs.promise;
+      }
+      if (path === "/api/registration/jobs" && init?.method === "POST") {
+        return Response.json({ jobId: "job-new" });
+      }
+      if (path === "/api/registration/jobs/job-new" && init?.method === "GET") {
+        return Response.json({
+          id: "job-new",
+          mode: "single",
+          state: "running",
+          progress: { started: 1, completed: 0, failed: 0, total: 1 },
+          logs: [{ at: 2000, level: "info", message: "new registration started" }],
+          createdAt: 1900
+        });
+      }
+      return Response.json({ error: { message: "unexpected path" } }, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("Master API Key"), { target: { value: "sk-local" } });
+    fireEvent.click(screen.getByRole("button", { name: "进入控制台" }));
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("heading", { name: "账号池" }).length).toBeGreaterThan(0);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "启动单个注册" }));
+
+    await screen.findByText("job-new");
+
+    await act(async () => {
+      recentJobs.resolve(Response.json([{
+        id: "job-old",
+        mode: "fill",
+        state: "running",
+        progress: { started: 1, completed: 0, failed: 0, total: 3 },
+        logs: [{ at: 1000, level: "info", message: "old registration running" }],
+        createdAt: 800
+      }]));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("job-new")).toBeInTheDocument();
+    expect(screen.queryByText("job-old")).not.toBeInTheDocument();
+  });
+
   it("shows video duration rules and clamps 1080P to five seconds", async () => {
     const fetchMock = vi.fn(async () => Response.json([]));
     vi.stubGlobal("fetch", fetchMock);
@@ -246,3 +367,13 @@ describe("admin app gate", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/mail/yyds/config", expect.objectContaining({ method: "PUT" }));
   });
 });
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, reject, resolve };
+}
