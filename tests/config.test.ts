@@ -14,7 +14,8 @@ describe("loadConfig", () => {
       MYSQL_PORT: "3307",
       MYSQL_USER: "root",
       MYSQL_PASSWORD: "root",
-      MYSQL_DATABASE: "navos_test"
+      MYSQL_DATABASE: "navos_test",
+      VIP_HMAC_SECRET: "test-secret-32-chars-long-key!!"
     });
 
     expect(config.masterApiKey).toBe("sk-test");
@@ -23,6 +24,10 @@ describe("loadConfig", () => {
     expect(config.listenPort).toBe(18888);
     expect(config.yydsMailApiKey).toBe("ac-test");
     expect(config.yydsMailBaseUrl).toBe("https://mail.test/v1");
+    expect(config.vipBaseUrl).toBe("https://navos-mind-server-vip.tec-do.com");
+    expect(config.vipHmacSecret).toBe("test-secret-32-chars-long-key!!");
+    expect(config.poolTargetSize).toBe(0);
+    expect(config.registrationConcurrency).toBe(5);
     expect(config.mysql).toEqual({
       host: "127.0.0.1",
       port: 3307,
@@ -33,7 +38,8 @@ describe("loadConfig", () => {
   });
 
   it("rejects missing required settings", () => {
-    expect(() => loadConfig({ PROVIDER_BASE_URL: "https://upstream.test" })).toThrow(/MASTER_API_KEY/);
-    expect(() => loadConfig({ MASTER_API_KEY: "sk-test" })).toThrow(/PROVIDER_BASE_URL/);
+    expect(() => loadConfig({ PROVIDER_BASE_URL: "https://upstream.test", VIP_HMAC_SECRET: "x" })).toThrow(/MASTER_API_KEY/);
+    expect(() => loadConfig({ MASTER_API_KEY: "sk-test", VIP_HMAC_SECRET: "x" })).toThrow(/PROVIDER_BASE_URL/);
+    expect(() => loadConfig({ MASTER_API_KEY: "sk-test", PROVIDER_BASE_URL: "https://upstream.test" })).toThrow(/VIP_HMAC_SECRET/);
   });
 });
