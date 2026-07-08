@@ -10,6 +10,10 @@ export interface AppConfig {
   cosConfigSecret?: string;
   mysql: MysqlEnvConfig;
   defaultAccount?: AccountIdentity;
+  vipBaseUrl: string;
+  vipHmacSecret: string;
+  poolTargetSize: number;
+  registrationConcurrency: number;
 }
 
 export interface MysqlEnvConfig {
@@ -62,6 +66,28 @@ function parseMysqlPort(value: string | undefined): number {
   return port;
 }
 
+function parseNonNegativeInt(value: string | undefined, fallback: number): number {
+  if (!value) {
+    return fallback;
+  }
+  const n = Number.parseInt(value, 10);
+  if (!Number.isInteger(n) || n < 0) {
+    return fallback;
+  }
+  return n;
+}
+
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  if (!value) {
+    return fallback;
+  }
+  const n = Number.parseInt(value, 10);
+  if (!Number.isInteger(n) || n < 1) {
+    return fallback;
+  }
+  return n;
+}
+
 export function loadConfig(env: EnvInput = process.env): AppConfig {
   const uid = env.PROVIDER_ACCOUNT_UID?.trim();
   const token = env.PROVIDER_ACCOUNT_TOKEN?.trim();
@@ -82,6 +108,10 @@ export function loadConfig(env: EnvInput = process.env): AppConfig {
       password: env.MYSQL_PASSWORD ?? "",
       database: env.MYSQL_DATABASE?.trim() || "navos_new"
     },
-    defaultAccount
+    defaultAccount,
+    vipBaseUrl: (env.VIP_BASE_URL?.trim() || "https://navos-mind-server-vip.tec-do.com").replace(/\/+$/, ""),
+    vipHmacSecret: requireEnv(env, "VIP_HMAC_SECRET"),
+    poolTargetSize: parseNonNegativeInt(env.POOL_TARGET_SIZE, 0),
+    registrationConcurrency: parsePositiveInt(env.REGISTRATION_CONCURRENCY, 5)
   };
 }

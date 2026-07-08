@@ -1,0 +1,44 @@
+  // ---- Registration routes ----
+
+  app.post("/api/registration/register", async (request, reply) => {
+    if (!requireLocalAuth(request, reply)) {
+      return;
+    }
+    const svc = options.registrationService;
+    if (!svc) {
+      await reply.status(503).send({ error: { message: "Registration service is not configured", type: "registration_unavailable" } });
+      return;
+    }
+    const result = await svc.registerOne();
+    await reply.status(result.success ? 201 : 500).send(result);
+  });
+
+  app.post("/api/registration/fill", async (request, reply) => {
+    if (!requireLocalAuth(request, reply)) {
+      return;
+    }
+    const svc = options.registrationService;
+    if (!svc) {
+      await reply.status(503).send({ error: { message: "Registration service is not configured", type: "registration_unavailable" } });
+      return;
+    }
+    const body = bodyRecord(request);
+    const target = typeof body.target === "number" && body.target > 0 ? body.target : 10;
+    const concurrency = typeof body.concurrency === "number" && body.concurrency > 0 ? body.concurrency : 5;
+    const result = await svc.fillPool(target, concurrency);
+    await reply.send(result);
+  });
+
+  app.get("/api/registration/stats", async (request, reply) => {
+    if (!requireLocalAuth(request, reply)) {
+      return;
+    }
+    const svc = options.registrationService;
+    if (!svc) {
+      await reply.status(503).send({ error: { message: "Registration service is not configured", type: "registration_unavailable" } });
+      return;
+    }
+    await reply.send(await svc.getStats());
+  });
+
+  return app;

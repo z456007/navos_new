@@ -1,0 +1,302 @@
+import type { YydsMailClient } from "../protocols/mail/yyds-mail.js";
+import type { VipClient } from "../protocols/vip-client.js";
+import type { AccountService } from "./account-service.js";
+
+export interface RegistrationServiceOptions {
+  yydsClient: YydsMailClient;
+  vipClient: VipClient;
+  accountService: AccountService;
+  /** Max poll attempts for verification code. Default 20. */
+  maxPollAttempts?: number;
+  /** Poll interval in milliseconds. Default 4000. */
+  pollIntervalMs?: number;
+}
+
+export interface RegistrationResult {
+  success: boolean;
+  uid?: string;
+  token?: string;
+  email?: string;
+  mailboxToken?: string;
+  balance?: number;
+  certCredits?: number;
+  error?: string;
+}
+
+export interface FillResult {
+  target: number;
+  started: number;
+  completed: number;
+  failed: number;
+  elapsedMs: number;
+  results: RegistrationResult[];
+}
+
+export interface RegistrationStats {
+  poolSize: number;
+  activeCount: number;
+  depletedCount: number;
+  disabledCount: number;
+}
+
+// 1x1 white pixel JPEG, embedded so no PIL dependency needed
+const MINI_JPEG_BYTES = Uint8Array.from([
+  0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01,
+  0x00, 0x01, 0x00, 0x00, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x08, 0x06, 0x06, 0x07, 0x06, 0x05, 0x08,
+  0x07, 0x07, 0x07, 0x09, 0x09, 0x08, 0x0a, 0x0c, 0x14, 0x0d, 0x0c, 0x0b, 0x0b, 0x0c, 0x19, 0x12,
+  0x13, 0x0f, 0x14, 0x1d, 0x1a, 0x1f, 0x1e, 0x1d, 0x1a, 0x1c, 0x1c, 0x20, 0x24, 0x2e, 0x27, 0x20,
+  0x22, 0x2c, 0x23, 0x1c, 0x1c, 0x28, 0x37, 0x29, 0x2c, 0x30, 0x31, 0x34, 0x34, 0x34, 0x1f, 0x27,
+  0x39, 0x3d, 0x38, 0x32, 0x3c, 0x2e, 0x33, 0x34, 0x32, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x01,
+  0x00, 0x01, 0x01, 0x01, 0x11, 0x00, 0xff, 0xc4, 0x00, 0x1f, 0x00, 0x00, 0x01, 0x05, 0x01, 0x01,
+  0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03, 0x04,
+  0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0xff, 0xc4, 0x00, 0xb5, 0x10, 0x00, 0x02, 0x01, 0x03,
+  0x03, 0x02, 0x04, 0x03, 0x05, 0x05, 0x04, 0x04, 0x00, 0x00, 0x01, 0x7d, 0x01, 0x02, 0x03, 0x00,
+  0x04, 0x11, 0x05, 0x12, 0x21, 0x31, 0x41, 0x06, 0x13, 0x51, 0x61, 0x07, 0x22, 0x71, 0x14, 0x32,
+  0x81, 0x91, 0xa1, 0x08, 0x23, 0x42, 0xb1, 0xc1, 0x15, 0x52, 0xd1, 0xf0, 0x24, 0x33, 0x62, 0x72,
+  0x82, 0x09, 0x0a, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x34, 0x35,
+  0x36, 0x37, 0x38, 0x39, 0x3a, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x53, 0x54, 0x55,
+  0x56, 0x57, 0x58, 0x59, 0x5a, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6a, 0x73, 0x74, 0x75,
+  0x76, 0x77, 0x78, 0x79, 0x7a, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8a, 0x92, 0x93, 0x94,
+  0x95, 0x96, 0x97, 0x98, 0x99, 0x9a, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xb2,
+  0xb3, 0xb4, 0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9,
+  0xca, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6,
+  0xe7, 0xe8, 0xe9, 0xea, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xff, 0xda,
+  0x00, 0x0c, 0x03, 0x01, 0x00, 0x02, 0x11, 0x03, 0x11, 0x00, 0x3f, 0x00, 0xf7, 0xfa, 0x28, 0xa2,
+  0x80, 0x3f, 0xff, 0xd9
+]);
+
+function miniJpegBase64(): string {
+  return Buffer.from(MINI_JPEG_BYTES).toString("base64");
+}
+
+// Chinese random company info generators
+const COMPANY_PREFIXES = [
+  "星辰", "远航", "鼎新", "锐进", "博创", "智联",
+  "华宇", "腾飞", "启明", "汇通", "鑫源", "蓝图",
+  "恒达", "万通", "丰源"
+];
+
+const COMPANY_SUFFIXES = [
+  "科技", "信息技术", "网络", "数字", "智能",
+  "云计算", "大数据", "物联网"
+];
+
+const INDUSTRIES = [
+  "ELECTRONICS", "BEAUTY", "FASHION", "LIFESTYLE", "FMCG",
+  "TOOL", "FINANCE", "SOCIAL", "SITE_NETWORK", "LIFE_APP"
+];
+
+const SURNAMES = [
+  "Zhang", "Wang", "Li", "Liu", "Chen", "Yang",
+  "Huang", "Zhao", "Wu", "Zhou", "Xu", "Sun", "Ma", "Zhu", "Hu"
+];
+
+const GIVENS = [
+  "Wei", "Jie", "Ming", "Lei", "Fang", "Hong",
+  "Qiang", "Juan", "Na", "Tao", "Lin", "Yu", "Rui", "Hao", "Kai"
+];
+
+function pick<T>(arr: readonly T[]): T {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
+function randLetter(): string {
+  return String.fromCharCode(65 + Math.floor(Math.random() * 26));
+}
+
+export function generateCompanyInfo(): {
+  companyName: string;
+  website: string;
+  contactPerson: string;
+  contactPhone: string;
+  industry: string;
+} {
+  const prefix = pick(COMPANY_PREFIXES);
+  const suffix = pick(COMPANY_SUFFIXES);
+  const letter = randLetter();
+  const companyName = `${prefix}${suffix}(${letter}) Ltd`;
+
+  const domainLen = 5 + Math.floor(Math.random() * 6);
+  let domain = "";
+  for (let i = 0; i < domainLen; i++) {
+    domain += String.fromCharCode(97 + Math.floor(Math.random() * 26));
+  }
+  const website = `https://${domain}.com`;
+
+  const contactPerson = `${pick(SURNAMES)} ${pick(GIVENS)}`;
+
+  const phoneBase = 13800000000 + Math.floor(Math.random() * 200000000);
+  const contactPhone = `86${phoneBase}`;
+
+  const industry = pick(INDUSTRIES);
+
+  return { companyName, website, contactPerson, contactPhone, industry };
+}
+
+export class RegistrationService {
+  private readonly yydsClient: YydsMailClient;
+  private readonly vipClient: VipClient;
+  private readonly accountService: AccountService;
+  private readonly maxPollAttempts: number;
+  private readonly pollIntervalMs: number;
+
+  constructor(options: RegistrationServiceOptions) {
+    this.yydsClient = options.yydsClient;
+    this.vipClient = options.vipClient;
+    this.accountService = options.accountService;
+    this.maxPollAttempts = options.maxPollAttempts ?? 20;
+    this.pollIntervalMs = options.pollIntervalMs ?? 4000;
+  }
+
+  /** Full registration pipeline for a single account. */
+  async registerOne(): Promise<RegistrationResult> {
+    try {
+      // 1. Create temp mailbox via YYDS
+      const mailbox = await this.yydsClient.createMailbox();
+      const email = mailbox.address;
+      const mailboxToken = mailbox.token;
+
+      // 2. Send verification code via VIP API
+      await this.vipClient.sendEmailCode(email);
+
+      // 3. Poll YYDS mailbox for verification code
+      const code = await this.pollVerificationCode(email, mailboxToken);
+      if (!code) {
+        return { success: false, email, error: "verification code not received" };
+      }
+
+      // 4. Login/register via VIP API
+      const { uid, token } = await this.vipClient.login(email, code);
+
+      // 5. Query initial balance (should be 1000 from registration)
+      const balReg = await this.vipClient.queryBalance(uid, token);
+
+      // 6. Enterprise certification (+1000 credits)
+      let certCredits = 0;
+      try {
+        const licenseB64 = miniJpegBase64();
+        const licenseUrl = await this.vipClient.uploadBusinessLicense(uid, token, licenseB64);
+        const company = generateCompanyInfo();
+        certCredits = await this.vipClient.submitEnterpriseCert(uid, token, {
+          businessLicenseUrl: licenseUrl,
+          ...company
+        });
+      } catch {
+        // Enterprise cert failed, but account is still usable (1000 credits)
+        certCredits = 0;
+      }
+
+      const totalBalance = balReg + certCredits;
+
+      // 7. Import into account pool
+      await this.accountService.importAccount({
+        uid,
+        token,
+        mailboxAddr: email,
+        mailboxToken,
+        balanceRemaining: totalBalance,
+        balanceTotal: totalBalance,
+        status: "active"
+      });
+
+      return {
+        success: true,
+        uid,
+        token,
+        email,
+        mailboxToken,
+        balance: totalBalance,
+        certCredits
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "registration failed"
+      };
+    }
+  }
+
+  /** Fill the pool up to `target` active accounts. */
+  async fillPool(target: number, concurrency: number = 5): Promise<FillResult> {
+    const accounts = await this.accountService.listAccounts();
+    const active = accounts.filter((a) => a.status === "active").length;
+    const need = Math.max(0, target - active);
+
+    if (need <= 0) {
+      return {
+        target,
+        started: 0,
+        completed: 0,
+        failed: 0,
+        elapsedMs: 0,
+        results: []
+      };
+    }
+
+    const startedAt = Date.now();
+    const results: RegistrationResult[] = [];
+
+    // Process in batches with concurrency limit
+    for (let i = 0; i < need; i += concurrency) {
+      const batchSize = Math.min(concurrency, need - i);
+      const batch = Array.from({ length: batchSize }, () => this.registerOne());
+      const batchResults = await Promise.all(batch);
+      results.push(...batchResults);
+
+      const completed = results.filter((r) => r.success).length;
+      const failed = results.filter((r) => !r.success).length;
+      console.log(
+        `[registration] batch ${Math.floor(i / concurrency) + 1}: ` +
+        `${completed} ok, ${failed} fail (${completed + failed}/${need})`
+      );
+    }
+
+    return {
+      target,
+      started: need,
+      completed: results.filter((r) => r.success).length,
+      failed: results.filter((r) => !r.success).length,
+      elapsedMs: Date.now() - startedAt,
+      results
+    };
+  }
+
+  /** Get current pool statistics. */
+  async getStats(): Promise<RegistrationStats> {
+    const accounts = await this.accountService.listAccounts();
+    return {
+      poolSize: accounts.length,
+      activeCount: accounts.filter((a) => a.status === "active").length,
+      depletedCount: accounts.filter((a) => a.status === "depleted").length,
+      disabledCount: accounts.filter((a) => a.status === "disabled").length
+    };
+  }
+
+  private async pollVerificationCode(
+    email: string,
+    mailboxToken?: string
+  ): Promise<string | undefined> {
+    const auth = { address: email, token: mailboxToken };
+
+    for (let attempt = 0; attempt < this.maxPollAttempts; attempt++) {
+      if (attempt > 0) {
+        await sleep(this.pollIntervalMs);
+      }
+
+      try {
+        const result = await this.yydsClient.findVerificationCode(auth);
+        if (result.code) {
+          return result.code;
+        }
+      } catch {
+        // Continue polling on transient errors
+      }
+    }
+
+    return undefined;
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}

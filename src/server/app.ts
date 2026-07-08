@@ -20,6 +20,7 @@ import { InMemoryAccountStore, type AccountRecord } from "../store/account-store
 import { InMemoryCosConfigStore, type CosConfigStore } from "../store/cos-config-store.js";
 import { InMemoryYydsMailConfigStore, type YydsMailConfigStore } from "../store/yyds-mail-config-store.js";
 import { InMemoryVideoTaskStore, type VideoTaskRecord, type VideoTaskStore } from "../store/video-task-store.js";
+import type { RegistrationService } from "../services/registration-service.js";
 import { adminAssetContentType, adminPageHtml, resolveAdminAsset } from "./admin-page.js";
 
 export interface CreateAppOptions {
@@ -37,6 +38,7 @@ export interface CreateAppOptions {
   videoTaskStore?: VideoTaskStore;
   archiveVideo?: (input: { taskId: string; sourceUrl: string; config: EnabledCosConfig }) => Promise<ArchiveVideoResult>;
   fetchImpl?: FetchLike;
+  registrationService?: RegistrationService;
 }
 
 interface UploadRequestBody {
@@ -629,5 +631,36 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
   app.get("/api/video/generations/:taskId", handleGetVideoTask);
   app.get("/v1/video/generations/:taskId", handleGetVideoTask);
 
+  app.post("/api/registration/register", async (request, reply) => {
+    if (!requireLocalAuth(request, reply)) return;
+    const svc = options.registrationService;
+    if (!svc) {
+      await reply.status(503).send({ error: { message: "Registration service is not configured" } });
+      return;
+    }
+    const result = await svc.registerOne();
+    await reply.status(result.success ? 201 : 500).send(result);
+  });
+  app.post("/api/registration/fill", async (request, reply) => {
+    if (!requireLocalAuth(request, reply)) return;
+    const svc = options.registrationService;
+    if (!svc) {
+      await reply.status(503).send({ error: { message: "Registration service is not configured" } });
+      return;
+    }
+    const body = bodyRecord(request);
+    const target = typeof body.target === "number" && body.target > 0 ? body.target : 10;
+    const concurrency = typeof body.concurrency === "number" && body.concurrency > 0 ? body.concurrency : 5;
+    await reply.send(await svc.fillPool(target, concurrency));
+  });
+  app.get("/api/registration/stats", async (request, reply) => {
+    if (!requireLocalAuth(request, reply)) return;
+    const svc = options.registrationService;
+    if (!svc) {
+      await reply.status(503).send({ error: { message: "Registration service is not configured" } });
+      return;
+    }
+    await reply.send(await svc.getStats());
+  });
   return app;
 }
