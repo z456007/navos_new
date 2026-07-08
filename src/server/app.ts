@@ -1,5 +1,3 @@
-import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import type { AccountIdentity, HeaderBag, ProviderAuthMode } from "../protocols/auth.js";
@@ -27,7 +25,6 @@ import {
   type RegistrationJobServicePort
 } from "../services/registration-job-service.js";
 import type { RegistrationJobCreateInput } from "../services/registration-job-types.js";
-import { adminAssetContentType, adminPageHtml, resolveAdminAsset } from "./admin-page.js";
 
 export interface CreateAppOptions {
   masterApiKey: string;
@@ -292,29 +289,6 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
   }
 
   app.get("/health", async () => ({ ok: true }));
-
-  app.get("/admin", async (_request, reply) => {
-    await reply.header("content-type", "text/html; charset=utf-8").send(adminPageHtml());
-  });
-
-  app.get("/admin/assets/:file", async (request, reply) => {
-    const params = request.params as { file?: string };
-    const assetPath = params.file ? resolveAdminAsset(params.file) : undefined;
-    if (!assetPath) {
-      await reply.status(404).send({ error: { message: "Admin asset not found" } });
-      return;
-    }
-    try {
-      const assetStat = await stat(assetPath);
-      if (!assetStat.isFile()) {
-        await reply.status(404).send({ error: { message: "Admin asset not found" } });
-        return;
-      }
-      await reply.header("content-type", adminAssetContentType(assetPath)).send(createReadStream(assetPath));
-    } catch {
-      await reply.status(404).send({ error: { message: "Admin asset not found" } });
-    }
-  });
 
   app.get("/v1/models", async (request, reply) => {
     if (!requireLocalAuth(request, reply)) {

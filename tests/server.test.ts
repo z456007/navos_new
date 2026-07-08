@@ -11,6 +11,20 @@ import { InMemoryYydsMailConfigStore } from "../src/store/yyds-mail-config-store
 import { InMemoryVideoTaskStore } from "../src/store/video-task-store.js";
 
 describe("server routes", () => {
+  it("does not serve the built-in admin page from the backend", async () => {
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+      fetchImpl: async () => Response.json({ ok: true })
+    });
+
+    const response = await app.inject({ method: "GET", url: "/admin" });
+
+    expect(response.statusCode).toBe(404);
+  });
+
   it("creates and reads registration jobs through protected routes", async () => {
     const registrationJobService = {
       createJob: vi.fn(async () => ({ jobId: "job-1" })),
