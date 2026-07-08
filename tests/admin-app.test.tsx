@@ -52,6 +52,8 @@ describe("admin app gate", () => {
           id: "task_1",
           status: "succeeded",
           videoUrl: "https://cdn.test/video.mp4",
+          cosUrl: "https://cdn.example.com/navos/videos/task_1.mp4",
+          archiveStatus: "archived",
           raw: { code: 200 }
         });
       }
@@ -77,8 +79,59 @@ describe("admin app gate", () => {
       expect(screen.getByText("succeeded")).toBeInTheDocument();
     });
 
-    expect(screen.getByTitle("生成视频")).toHaveAttribute("src", "https://cdn.test/video.mp4");
+    expect(screen.getByTitle("生成视频")).toHaveAttribute("src", "https://cdn.example.com/navos/videos/task_1.mp4");
+    expect(screen.getByText("archived")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith("/api/video/generations", expect.objectContaining({ method: "POST" }));
     expect(fetchMock).toHaveBeenCalledWith("/api/video/generations/task_1", expect.objectContaining({ method: "GET" }));
+  });
+
+  it("saves COS config from the console without exposing secrets", async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });
+      const path = String(url);
+      if (path === "/api/accounts") {
+        return Response.json([]);
+      }
+      if (path === "/api/cos/config" && init?.method === "GET") {
+        return Response.json({ configured: false });
+      }
+      if (path === "/api/cos/config" && init?.method === "PUT") {
+        const payload = JSON.parse(String(init.body));
+        expect(payload.secretId).toBe("secret-id");
+        expect(payload.secretKey).toBe("secret-key");
+        return Response.json({
+          id: 1,
+          name: "main",
+          enabled: true,
+          secretIdConfigured: true,
+          secretKeyConfigured: true,
+          bucket: "bucket-123456",
+          region: "ap-shanghai",
+          uploadPrefix: "navos/videos",
+          createdAt: 1,
+          updatedAt: 2
+        });
+      }
+      return Response.json({ error: { message: "unexpected path" } }, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("Master API Key"), { target: { value: "sk-local" } });
+    fireEvent.click(screen.getByRole("button", { name: "进入控制台" }));
+
+    await screen.findByRole("button", { name: "COS配置" });
+    fireEvent.click(screen.getByRole("button", { name: "COS配置" }));
+
+    fireEvent.change(await screen.findByLabelText("SecretId"), { target: { value: "secret-id" } });
+    fireEvent.change(screen.getByLabelText("SecretKey"), { target: { value: "secret-key" } });
+    fireEvent.change(screen.getByLabelText("Bucket"), { target: { value: "bucket-123456" } });
+    fireEvent.change(screen.getByLabelText("Region"), { target: { value: "ap-shanghai" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存COS配置" }));
+
+    await screen.findByText("已保存");
+    expect(screen.queryByText("secret-key")).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/api/cos/config", expect.objectContaining({ method: "PUT" }));
   });
 });

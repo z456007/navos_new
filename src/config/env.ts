@@ -7,6 +7,7 @@ export interface AppConfig {
   listenPort: number;
   yydsMailApiKey?: string;
   yydsMailBaseUrl: string;
+  cosConfigSecret?: string;
   mysql: MysqlEnvConfig;
   defaultAccount?: AccountIdentity;
 }
@@ -73,6 +74,7 @@ export function loadConfig(env: EnvInput = process.env): AppConfig {
     listenPort: parsePort(env.PORT),
     yydsMailApiKey: env.YYDS_MAIL_API_KEY?.trim() || undefined,
     yydsMailBaseUrl: (env.YYDS_MAIL_BASE_URL?.trim() || "https://maliapi.215.im/v1").replace(/\/+$/, ""),
+    cosConfigSecret: env.COS_CONFIG_SECRET?.trim() || undefined,
     mysql: {
       host: env.MYSQL_HOST?.trim() || "127.0.0.1",
       port: parseMysqlPort(env.MYSQL_PORT),

@@ -7,6 +7,12 @@ export interface NormalizedVideoTask {
   id?: string;
   status: NormalizedVideoStatus;
   videoUrl?: string;
+  cosUrl?: string;
+  cosKey?: string;
+  archiveStatus?: string;
+  archiveError?: string;
+  sizeBytes?: number;
+  sha256?: string;
   error?: string;
   raw: unknown;
 }
@@ -53,7 +59,7 @@ function mapStatus(status: string | undefined): NormalizedVideoStatus {
   if (["queued", "pending", "created"].includes(normalized)) {
     return "queued";
   }
-  if (["running", "processing", "generating", "in_progress"].includes(normalized)) {
+  if (["deducted", "running", "processing", "generating", "in_progress"].includes(normalized)) {
     return "running";
   }
   if (["success", "succeeded", "completed", "done"].includes(normalized)) {

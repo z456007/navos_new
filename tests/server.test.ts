@@ -179,10 +179,12 @@ describe("server routes", () => {
     expect(JSON.stringify(saved.json())).not.toContain("secret-key");
 
     const raw = await cosConfigStore.getRaw();
-    expect(raw?.secretIdEnc).toBeTruthy();
-    expect(raw?.secretKeyEnc).toBeTruthy();
-    expect(raw?.secretIdEnc).not.toContain("secret-id");
-    expect(raw?.secretKeyEnc).not.toContain("secret-key");
+    const originalSecretIdEnc = raw?.secretIdEnc;
+    const originalSecretKeyEnc = raw?.secretKeyEnc;
+    expect(originalSecretIdEnc).toBeTruthy();
+    expect(originalSecretKeyEnc).toBeTruthy();
+    expect(originalSecretIdEnc).not.toContain("secret-id");
+    expect(originalSecretKeyEnc).not.toContain("secret-key");
 
     const updated = await app.inject({
       method: "PUT",
@@ -200,23 +202,13 @@ describe("server routes", () => {
     });
 
     expect(updated.statusCode).toBe(200);
-    expect((await cosConfigStore.getEnabledDecrypted())?.secretId).toBe("secret-id");
-    expect((await cosConfigStore.getEnabledDecrypted())?.secretKey).toBe("secret-key");
+    expect((await cosConfigStore.getRaw())?.secretIdEnc).toBe(originalSecretIdEnc);
+    expect((await cosConfigStore.getRaw())?.secretKeyEnc).toBe(originalSecretKeyEnc);
   });
 
   it("archives successful video output to COS and returns archived URL", async () => {
     const cosConfigStore = new InMemoryCosConfigStore();
     const videoTaskStore = new InMemoryVideoTaskStore();
-    await cosConfigStore.saveDecrypted({
-      name: "main",
-      secretId: "secret-id",
-      secretKey: "secret-key",
-      bucket: "bucket-123456",
-      region: "ap-shanghai",
-      publicDomain: "https://cdn.example.com",
-      uploadPrefix: "navos/videos",
-      enabled: true
-    });
     const archiveVideo = vi.fn(async () => ({
       cosUrl: "https://cdn.example.com/navos/videos/2026/07/08/task_1.mp4",
       cosKey: "navos/videos/2026/07/08/task_1.mp4",
@@ -229,6 +221,7 @@ describe("server routes", () => {
       providerAuthMode: "uid-token",
       accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
       cosConfigStore,
+      cosConfigSecret: "12345678901234567890123456789012",
       videoTaskStore,
       archiveVideo,
       fetchImpl: async (url) => {
@@ -236,6 +229,22 @@ describe("server routes", () => {
           return Response.json({ task_id: "task_1", status: "success", video_url: "https://oss.test/task_1.mp4" });
         }
         return Response.json({ task_id: "task_1", status: "queued" });
+      }
+    });
+
+    await app.inject({
+      method: "PUT",
+      url: "/api/cos/config",
+      headers: { authorization: "Bearer sk-test" },
+      payload: {
+        name: "main",
+        secretId: "secret-id",
+        secretKey: "secret-key",
+        bucket: "bucket-123456",
+        region: "ap-shanghai",
+        publicDomain: "https://cdn.example.com",
+        uploadPrefix: "navos/videos",
+        enabled: true
       }
     });
 

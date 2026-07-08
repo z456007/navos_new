@@ -1,5 +1,6 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import type { AccountIdentity, HeaderBag, ProviderAuthMode } from "../protocols/auth.js";
 import { buildProviderAuthHeaders, isClientAuthorized } from "../protocols/auth.js";
@@ -8,10 +9,15 @@ import { ProviderHttpClient } from "../protocols/http.js";
 import { forwardModelRequest } from "../protocols/model-proxy.js";
 import { registerAccount } from "../protocols/register.js";
 import { uploadAsset } from "../protocols/upload.js";
-import { createVideoTask, getVideoTask } from "../protocols/video.js";
+import { createVideoTask, getVideoTask, normalizeVideoTaskStatus, type NormalizedVideoTask } from "../protocols/video.js";
 import { YydsMailClient, YydsMailError } from "../protocols/mail/yyds-mail.js";
 import { AccountService } from "../services/account-service.js";
+import { CosConfigService, type CosConfigInput, type EnabledCosConfig } from "../services/cos-config-service.js";
+import { archiveVideoToCos, type ArchiveVideoResult } from "../services/video-archive.js";
+import { SecretBox } from "../security/secretbox.js";
 import { InMemoryAccountStore } from "../store/account-store.js";
+import { InMemoryCosConfigStore, type CosConfigStore } from "../store/cos-config-store.js";
+import { InMemoryVideoTaskStore, type VideoTaskRecord, type VideoTaskStore } from "../store/video-task-store.js";
 import { adminAssetContentType, adminPageHtml, resolveAdminAsset } from "./admin-page.js";
 
 export interface CreateAppOptions {
@@ -22,6 +28,10 @@ export interface CreateAppOptions {
   accountService?: AccountService;
   yydsMailApiKey?: string;
   yydsMailBaseUrl?: string;
+  cosConfigSecret?: string;
+  cosConfigStore?: CosConfigStore;
+  videoTaskStore?: VideoTaskStore;
+  archiveVideo?: (input: { taskId: string; sourceUrl: string; config: EnabledCosConfig }) => Promise<ArchiveVideoResult>;
   fetchImpl?: FetchLike;
 }
 
@@ -59,9 +69,21 @@ async function sendProviderResult(reply: FastifyReply, result: ProviderResult): 
   await reply.status(result.status).send(result.body);
 }
 
+function normalizeSecretRoot(value: string): string {
+  return value.length >= 32 ? value : createHash("sha256").update(value).digest("hex");
+}
+
 export function createApp(options: CreateAppOptions): FastifyInstance {
   const app = Fastify({ logger: false });
   const accountService = options.accountService ?? new AccountService(new InMemoryAccountStore(options.defaultAccount));
+  const cosConfigStore = options.cosConfigStore ?? new InMemoryCosConfigStore();
+  const cosConfigService = new CosConfigService(
+    cosConfigStore,
+    new SecretBox(normalizeSecretRoot(options.cosConfigSecret ?? options.masterApiKey))
+  );
+  const videoTaskStore = options.videoTaskStore ?? new InMemoryVideoTaskStore();
+  const archiveVideo = options.archiveVideo ?? ((input: { taskId: string; sourceUrl: string; config: EnabledCosConfig }) =>
+    archiveVideoToCos({ ...input, fetchImpl: options.fetchImpl }));
   const client = new ProviderHttpClient(options.providerBaseUrl, options.fetchImpl);
   const yydsMailClient = new YydsMailClient({
     baseUrl: options.yydsMailBaseUrl ?? "https://maliapi.215.im/v1",
@@ -103,8 +125,108 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     throw error;
   }
 
+  async function sendBadRequest(reply: FastifyReply, error: unknown): Promise<void> {
+    await reply.status(400).send({ error: { message: error instanceof Error ? error.message : "Invalid request" } });
+  }
+
   function mailboxQuery(request: FastifyRequest): MailboxQuery {
     return request.query && typeof request.query === "object" ? request.query as MailboxQuery : {};
+  }
+
+  async function saveVideoTask(task: NormalizedVideoTask): Promise<VideoTaskRecord | undefined> {
+    if (!task.id) {
+      return undefined;
+    }
+    return videoTaskStore.upsert({
+      taskId: task.id,
+      status: task.status,
+      sourceUrl: task.videoUrl,
+      raw: task.raw,
+      completedAt: task.status === "succeeded" ? Date.now() : undefined
+    });
+  }
+
+  async function archiveVideoTask(task: NormalizedVideoTask): Promise<NormalizedVideoTask> {
+    if (!task.id) {
+      return task;
+    }
+
+    let record = await saveVideoTask(task);
+    if (task.status !== "succeeded" || !task.videoUrl || !record) {
+      return decorateVideoTask(task, record);
+    }
+
+    if (record.archiveStatus === "archived" && record.cosUrl) {
+      return decorateVideoTask(task, record);
+    }
+
+    const config = await cosConfigService.enabledConfig();
+    if (!config) {
+      record = await videoTaskStore.upsert({
+        taskId: task.id,
+        status: task.status,
+        sourceUrl: task.videoUrl,
+        raw: task.raw,
+        archiveStatus: "skipped",
+        archiveError: "COS config is not enabled",
+        completedAt: Date.now()
+      });
+      return decorateVideoTask(task, record);
+    }
+
+    await videoTaskStore.upsert({
+      taskId: task.id,
+      status: task.status,
+      sourceUrl: task.videoUrl,
+      raw: task.raw,
+      archiveStatus: "archiving",
+      completedAt: Date.now()
+    });
+
+    try {
+      const archived = await archiveVideo({ taskId: task.id, sourceUrl: task.videoUrl, config });
+      record = await videoTaskStore.upsert({
+        taskId: task.id,
+        status: task.status,
+        sourceUrl: task.videoUrl,
+        raw: task.raw,
+        archiveStatus: "archived",
+        archiveError: undefined,
+        cosUrl: archived.cosUrl,
+        cosKey: archived.cosKey,
+        sizeBytes: archived.sizeBytes,
+        sha256: archived.sha256,
+        completedAt: Date.now(),
+        archivedAt: Date.now()
+      });
+    } catch (error) {
+      record = await videoTaskStore.upsert({
+        taskId: task.id,
+        status: task.status,
+        sourceUrl: task.videoUrl,
+        raw: task.raw,
+        archiveStatus: "failed",
+        archiveError: error instanceof Error ? error.message : "COS archive failed",
+        completedAt: Date.now()
+      });
+    }
+
+    return decorateVideoTask(task, record);
+  }
+
+  function decorateVideoTask(task: NormalizedVideoTask, record?: VideoTaskRecord): NormalizedVideoTask {
+    if (!record) {
+      return task;
+    }
+    return {
+      ...task,
+      cosUrl: record.cosUrl,
+      cosKey: record.cosKey,
+      archiveStatus: record.archiveStatus,
+      archiveError: record.archiveError,
+      sizeBytes: record.sizeBytes,
+      sha256: record.sha256
+    };
   }
 
   app.get("/health", async () => ({ ok: true }));
@@ -219,6 +341,24 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       return;
     }
     await reply.send(account);
+  });
+
+  app.get("/api/cos/config", async (request, reply) => {
+    if (!requireLocalAuth(request, reply)) {
+      return;
+    }
+    await reply.send(await cosConfigService.get() ?? { configured: false });
+  });
+
+  app.put("/api/cos/config", async (request, reply) => {
+    if (!requireLocalAuth(request, reply)) {
+      return;
+    }
+    try {
+      await reply.send(await cosConfigService.save(bodyRecord(request) as CosConfigInput));
+    } catch (error) {
+      await sendBadRequest(reply, error);
+    }
   });
 
   app.post("/api/accounts/:uid/enable", async (request, reply) => {
@@ -357,6 +497,10 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       return;
     }
     const result = await createVideoTask(client, bodyRecord(request), headers);
+    const createdTask = normalizeVideoTaskStatus(result.body);
+    if (createdTask.id) {
+      await saveVideoTask(createdTask);
+    }
     await sendProviderResult(reply, result);
   }
 
@@ -374,7 +518,8 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       return;
     }
     const result = await getVideoTask(client, params.taskId, headers);
-    await sendProviderResult(reply, result);
+    const body = await archiveVideoTask(result.body);
+    await sendProviderResult(reply, { ...result, body });
   }
 
   app.post("/api/video/generations", handleCreateVideo);

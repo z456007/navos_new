@@ -19,7 +19,23 @@ export interface Mailbox {
   token?: string;
 }
 
-export type PanelId = "accounts" | "mail" | "probe" | "video";
+export type PanelId = "accounts" | "mail" | "probe" | "video" | "cos";
+
+export interface CosConfig {
+  id?: number;
+  name?: string;
+  configured?: boolean;
+  enabled?: boolean;
+  secretIdConfigured?: boolean;
+  secretKeyConfigured?: boolean;
+  bucket?: string;
+  region?: string;
+  appId?: string;
+  publicDomain?: string;
+  uploadPrefix?: string;
+  createdAt?: number;
+  updatedAt?: number;
+}
 
 export type VideoTaskStatus = "queued" | "running" | "succeeded" | "failed" | "unknown";
 
@@ -27,6 +43,12 @@ export interface VideoTaskView {
   id?: string;
   status: VideoTaskStatus;
   videoUrl?: string;
+  cosUrl?: string;
+  cosKey?: string;
+  archiveStatus?: string;
+  archiveError?: string;
+  sizeBytes?: number;
+  sha256?: string;
   error?: string;
   raw: unknown;
 }

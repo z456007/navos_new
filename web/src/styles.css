@@ -340,7 +340,8 @@ a.button {
 
 .import-grid,
 .form-row,
-.probe-grid {
+.probe-grid,
+.cos-form {
   display: grid;
   gap: 12px;
   padding: 14px;
@@ -418,7 +419,7 @@ a.button {
 
 .task-strip {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 132px;
+  grid-template-columns: minmax(0, 1fr) 112px 112px;
   gap: 10px;
   border: 1px solid var(--line);
   border-radius: 7px;
@@ -458,6 +459,41 @@ a.button {
 
 .task-status.failed {
   color: var(--red);
+}
+
+.archive-status {
+  color: var(--muted);
+}
+
+.archive-status.ok {
+  color: var(--green);
+}
+
+.archive-status.wait {
+  color: var(--amber);
+}
+
+.archive-status.bad {
+  color: var(--red);
+}
+
+.secret-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.secret-note span {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fbfcfe;
+  padding: 5px 9px;
+}
+
+.cos-enabled {
+  justify-self: start;
 }
 
 .preview-frame {
@@ -601,6 +637,7 @@ td {
   .app-shell,
   .metrics,
   .import-grid,
+  .task-strip,
   .video-grid,
   .form-row.two,
   .form-row.three,

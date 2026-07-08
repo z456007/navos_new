@@ -3,6 +3,7 @@ import {
   Activity,
   Ban,
   Clapperboard,
+  Cloud,
   ExternalLink,
   Film,
   Inbox,
@@ -19,7 +20,7 @@ import {
   UserPlus
 } from "lucide-react";
 import { ADMIN_KEY_STORAGE, apiRequest, errorMessage } from "./api";
-import type { AccountListItem, Mailbox, PanelId, StatusState, VideoTaskStatus, VideoTaskView } from "./types";
+import type { AccountListItem, CosConfig, Mailbox, PanelId, StatusState, VideoTaskStatus, VideoTaskView } from "./types";
 
 const initialMessagesPayload = `{
   "model": "claude.sonnet-4.6",
@@ -202,6 +203,9 @@ function ConsoleShell({
           <NavButton active={activePanel === "video"} icon={<Clapperboard size={17} />} onClick={() => onPanelChange("video")}>
             视频生成
           </NavButton>
+          <NavButton active={activePanel === "cos"} icon={<Cloud size={17} />} onClick={() => onPanelChange("cos")}>
+            COS配置
+          </NavButton>
           <NavButton active={activePanel === "probe"} icon={<MessageSquare size={17} />} onClick={() => onPanelChange("probe")}>
             代理测试
           </NavButton>
@@ -241,6 +245,7 @@ function ConsoleShell({
         )}
         {activePanel === "mail" && <MailPanel apiKey={apiKey} />}
         {activePanel === "video" && <VideoPanel apiKey={apiKey} />}
+        {activePanel === "cos" && <CosConfigPanel apiKey={apiKey} />}
         {activePanel === "probe" && (
           <ProbePanel
             apiKey={apiKey}
@@ -249,6 +254,138 @@ function ConsoleShell({
         )}
       </main>
     </div>
+  );
+}
+
+type CosConfigForm = {
+  enabled: boolean;
+  secretId: string;
+  secretKey: string;
+  bucket: string;
+  region: string;
+  appId: string;
+  publicDomain: string;
+  uploadPrefix: string;
+};
+
+const emptyCosConfigForm: CosConfigForm = {
+  enabled: true,
+  secretId: "",
+  secretKey: "",
+  bucket: "",
+  region: "",
+  appId: "",
+  publicDomain: "",
+  uploadPrefix: "navos/videos"
+};
+
+function CosConfigPanel({ apiKey }: { apiKey: string }) {
+  const [config, setConfig] = useState<CosConfig | undefined>();
+  const [form, setForm] = useState<CosConfigForm>(emptyCosConfigForm);
+  const [status, setStatus] = useState<StatusState>(idleStatus);
+
+  useEffect(() => {
+    let active = true;
+    async function loadConfig() {
+      setStatus({ kind: "loading", message: "读取配置中" });
+      try {
+        const loaded = await apiRequest<CosConfig>(apiKey, "/api/cos/config", { method: "GET" });
+        if (!active) {
+          return;
+        }
+        setConfig(loaded);
+        setForm(configToCosForm(loaded));
+        setStatus({ kind: "idle", message: "" });
+      } catch (error) {
+        if (active) {
+          setStatus({ kind: "error", message: errorMessage(error) ?? "读取 COS 配置失败" });
+        }
+      }
+    }
+
+    void loadConfig();
+    return () => {
+      active = false;
+    };
+  }, [apiKey]);
+
+  async function saveConfig(event: FormEvent) {
+    event.preventDefault();
+    setStatus({ kind: "loading", message: "保存中" });
+    try {
+      const saved = await apiRequest<CosConfig>(apiKey, "/api/cos/config", {
+        method: "PUT",
+        body: JSON.stringify({
+          enabled: form.enabled,
+          secretId: form.secretId || undefined,
+          secretKey: form.secretKey || undefined,
+          bucket: form.bucket,
+          region: form.region,
+          appId: form.appId || undefined,
+          publicDomain: form.publicDomain || undefined,
+          uploadPrefix: form.uploadPrefix || undefined
+        })
+      });
+      setConfig(saved);
+      setForm({ ...configToCosForm(saved), secretId: "", secretKey: "" });
+      setStatus({ kind: "ok", message: "已保存" });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) ?? "保存 COS 配置失败" });
+    }
+  }
+
+  return (
+    <section className="panel narrow" aria-labelledby="cos-title">
+      <div className="panel-head">
+        <div>
+          <h2 id="cos-title">COS配置</h2>
+          <StatusLine status={status} />
+        </div>
+        <span className={`badge ${config?.enabled === false ? "disabled" : "active"}`}>
+          {config?.configured || config?.secretIdConfigured || config?.secretKeyConfigured ? "已配置" : "未配置"}
+        </span>
+      </div>
+
+      <form className="cos-form" onSubmit={saveConfig}>
+        <label className="inline-check cos-enabled">
+          <input
+            checked={form.enabled}
+            type="checkbox"
+            onChange={(event) => setForm((current) => ({ ...current, enabled: event.target.checked }))}
+          />
+          <span>启用视频归档</span>
+        </label>
+
+        <div className="form-row two compact">
+          <TextField label="SecretId" type="password" value={form.secretId} onChange={(secretId) => setForm((current) => ({ ...current, secretId }))} />
+          <TextField label="SecretKey" type="password" value={form.secretKey} onChange={(secretKey) => setForm((current) => ({ ...current, secretKey }))} />
+        </div>
+
+        <div className="form-row two compact">
+          <TextField label="Bucket" value={form.bucket} onChange={(bucket) => setForm((current) => ({ ...current, bucket }))} />
+          <TextField label="Region" value={form.region} onChange={(region) => setForm((current) => ({ ...current, region }))} />
+        </div>
+
+        <div className="form-row three compact">
+          <TextField label="AppID" value={form.appId} onChange={(appId) => setForm((current) => ({ ...current, appId }))} />
+          <TextField label="Public Domain" value={form.publicDomain} onChange={(publicDomain) => setForm((current) => ({ ...current, publicDomain }))} />
+          <TextField label="Upload Prefix" value={form.uploadPrefix} onChange={(uploadPrefix) => setForm((current) => ({ ...current, uploadPrefix }))} />
+        </div>
+
+        <div className="secret-note">
+          <span>密钥保存后只会加密入库，页面不会再回显。</span>
+          <span>当前 SecretId: {config?.secretIdConfigured ? "已保存" : "未保存"}</span>
+          <span>当前 SecretKey: {config?.secretKeyConfigured ? "已保存" : "未保存"}</span>
+        </div>
+
+        <div className="toolbar flush">
+          <button className="button primary" disabled={status.kind === "loading"} type="submit">
+            <Cloud size={16} aria-hidden="true" />
+            保存COS配置
+          </button>
+        </div>
+      </form>
+    </section>
   );
 }
 
@@ -461,6 +598,7 @@ function VideoPanel({ apiKey }: { apiKey: string }) {
   const [result, setResult] = useState<unknown>("等待创建任务");
   const [events, setEvents] = useState<string[]>([]);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const previewUrl = task?.cosUrl ?? task?.videoUrl;
 
   useEffect(() => () => clearPolling(), []);
 
@@ -628,11 +766,15 @@ function VideoPanel({ apiKey }: { apiKey: string }) {
               <span>状态</span>
               <strong className={`task-status ${task?.status ?? "unknown"}`}>{task?.status ?? "idle"}</strong>
             </div>
+            <div>
+              <span>归档</span>
+              <strong className={`archive-status ${archiveTone(task?.archiveStatus)}`}>{task?.archiveStatus ?? "-"}</strong>
+            </div>
           </div>
 
           <div className="preview-frame">
-            {task?.videoUrl ? (
-              <video controls src={task.videoUrl} title="生成视频" />
+            {previewUrl ? (
+              <video controls src={previewUrl} title="生成视频" />
             ) : (
               <div className="video-empty">
                 <Film size={30} aria-hidden="true" />
@@ -642,8 +784,8 @@ function VideoPanel({ apiKey }: { apiKey: string }) {
           </div>
 
           <div className="toolbar flush">
-            {task?.videoUrl && (
-              <a className="button" href={task.videoUrl} rel="noreferrer" target="_blank">
+            {previewUrl && (
+              <a className="button" href={previewUrl} rel="noreferrer" target="_blank">
                 <ExternalLink size={16} aria-hidden="true" />
                 打开视频
               </a>
@@ -845,6 +987,19 @@ function readVideoString(value: unknown, keys: string[]): string | undefined {
   return undefined;
 }
 
+function configToCosForm(config?: CosConfig): CosConfigForm {
+  return {
+    enabled: config?.enabled ?? true,
+    secretId: "",
+    secretKey: "",
+    bucket: config?.bucket ?? "",
+    region: config?.region ?? "",
+    appId: config?.appId ?? "",
+    publicDomain: config?.publicDomain ?? "",
+    uploadPrefix: config?.uploadPrefix ?? "navos/videos"
+  };
+}
+
 function mapVideoStatus(status: string | undefined): VideoTaskStatus {
   const normalized = status?.toLowerCase();
   if (!normalized) {
@@ -871,9 +1026,37 @@ function normalizeVideoTask(raw: unknown, fallbackId?: string): VideoTaskView {
     id: readVideoString(raw, ["id", "task_id", "taskId"]) ?? fallbackId,
     status,
     videoUrl: readVideoString(raw, ["videoUrl", "video_url", "url", "output_url"]),
+    cosUrl: readVideoString(raw, ["cosUrl", "cos_url"]),
+    cosKey: readVideoString(raw, ["cosKey", "cos_key"]),
+    archiveStatus: readVideoString(raw, ["archiveStatus", "archive_status"]),
+    archiveError: readVideoString(raw, ["archiveError", "archive_error"]),
+    sizeBytes: readVideoNumber(raw, ["sizeBytes", "size_bytes"]),
+    sha256: readVideoString(raw, ["sha256"]),
     error: status === "failed" ? readVideoString(raw, ["error", "error_message", "message"]) : undefined,
     raw
   };
+}
+
+function readVideoNumber(value: unknown, keys: string[]): number | undefined {
+  const found = readVideoString(value, keys);
+  if (!found) {
+    return undefined;
+  }
+  const numeric = Number(found);
+  return Number.isFinite(numeric) ? numeric : undefined;
+}
+
+function archiveTone(status: string | undefined): "ok" | "wait" | "bad" | "muted" {
+  if (status === "archived") {
+    return "ok";
+  }
+  if (status === "failed") {
+    return "bad";
+  }
+  if (status === "archiving" || status === "pending") {
+    return "wait";
+  }
+  return "muted";
 }
 
 function AccountBadge({ account }: { account: AccountListItem }) {
@@ -899,6 +1082,9 @@ function panelTitle(panel: PanelId): string {
   }
   if (panel === "video") {
     return "视频生成";
+  }
+  if (panel === "cos") {
+    return "COS配置";
   }
   if (panel === "probe") {
     return "代理测试";
