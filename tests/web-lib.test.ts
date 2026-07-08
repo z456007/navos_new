@@ -1,9 +1,33 @@
 import { describe, expect, it } from "vitest";
 import { accountMetrics, panelTitle } from "../web/src/lib/accounts";
+import { normalizeRegistrationJob, registrationJobIsTerminal } from "../web/src/lib/registration-job";
+import { nextPollingDelay } from "../web/src/lib/polling";
 import { archiveTone, normalizeVideoTask, videoDurationLimit } from "../web/src/lib/video-task";
 import type { AccountListItem } from "../web/src/types";
 
 describe("web helper modules", () => {
+  it("normalizes registration job data for polling", () => {
+    const job = normalizeRegistrationJob({
+      id: "job-1",
+      mode: "fill",
+      state: "completed",
+      progress: { started: 2, completed: 1, failed: 1, total: 3 },
+      logs: [{ at: 1000, level: "info", message: "started" }],
+      createdAt: 900
+    });
+
+    expect(job).toMatchObject({
+      id: "job-1",
+      mode: "fill",
+      state: "succeeded",
+      progress: { started: 2, completed: 1, failed: 1, total: 3 }
+    });
+    expect(registrationJobIsTerminal(job)).toBe(true);
+    expect(nextPollingDelay(0)).toBe(2000);
+    expect(nextPollingDelay(1)).toBe(5000);
+    expect(nextPollingDelay(2)).toBe(10000);
+  });
+
   it("normalizes video task data for the UI", () => {
     const task = normalizeVideoTask(
       {

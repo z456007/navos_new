@@ -19,6 +19,35 @@ export interface Mailbox {
   token?: string;
 }
 
+export type RegistrationJobState = "queued" | "running" | "succeeded" | "failed" | "canceled";
+export type RegistrationJobMode = "single" | "fill";
+
+export interface RegistrationJobLog {
+  at: number;
+  level: "info" | "warn" | "error";
+  message: string;
+}
+
+export interface RegistrationJobView {
+  id: string;
+  mode: RegistrationJobMode;
+  state: RegistrationJobState;
+  target?: number;
+  concurrency?: number;
+  progress: {
+    started: number;
+    completed: number;
+    failed: number;
+    total: number;
+  };
+  logs: RegistrationJobLog[];
+  results?: unknown;
+  error?: string;
+  createdAt: number;
+  startedAt?: number;
+  finishedAt?: number;
+}
+
 export type PanelId = "accounts" | "mail" | "probe" | "video" | "cos" | "yydsConfig";
 
 export interface CosConfig {
