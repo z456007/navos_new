@@ -107,7 +107,7 @@ async function processFillRegistration(
   await progress.update(started, completed, failed, total, "info", "fill registration started");
 
   while (started < total) {
-    if (started > 0 && await isCancellationRequestedForId(jobId, options)) {
+    if (await isCancellationRequestedForId(jobId, options)) {
       await progress.update(started, completed, failed, total, "warn", "fill registration canceled");
       await clearCancelRequest(jobId, options);
       return {

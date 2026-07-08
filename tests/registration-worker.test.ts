@@ -240,6 +240,43 @@ describe("processRegistrationJob", () => {
     });
   });
 
+  it("cancels fill after stats before the first batch without registering", async () => {
+    const registrationService = makeRegistrationService({
+      getStats: vi.fn(async () => stats({ activeCount: 1 }))
+    });
+    const isCancelRequested = vi.fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    const clearCancelRequest = vi.fn(async () => undefined);
+    const job = makeJob({ mode: "fill", target: 4, concurrency: 2 });
+
+    await expect(
+      processRegistrationJob(job, registrationService, { isCancelRequested, clearCancelRequest })
+    ).resolves.toEqual({
+      canceled: true,
+      target: 4,
+      started: 0,
+      completed: 0,
+      failed: 0,
+      results: []
+    });
+
+    expect(isCancelRequested).toHaveBeenCalledTimes(2);
+    expect(clearCancelRequest).toHaveBeenCalledWith("job-1");
+    expect(registrationService.getStats).toHaveBeenCalledTimes(1);
+    expect(registrationService.registerOne).not.toHaveBeenCalled();
+    expect(lastProgress(job)).toMatchObject({
+      started: 0,
+      completed: 0,
+      failed: 0,
+      total: 3
+    });
+    expect(lastProgress(job).logs.at(-1)).toMatchObject({
+      level: "warn",
+      message: expect.stringContaining("canceled")
+    });
+  });
+
   it("cancels during fill before the next batch and returns partial counters", async () => {
     const partialResults = [success(1), failure("rate limited")];
     const registrationService = makeRegistrationService({
@@ -249,6 +286,7 @@ describe("processRegistrationJob", () => {
         .mockResolvedValueOnce(partialResults[1])
     });
     const isCancelRequested = vi.fn()
+      .mockResolvedValueOnce(false)
       .mockResolvedValueOnce(false)
       .mockResolvedValueOnce(true);
     const clearCancelRequest = vi.fn(async () => undefined);
@@ -265,7 +303,7 @@ describe("processRegistrationJob", () => {
       results: partialResults
     });
 
-    expect(isCancelRequested).toHaveBeenCalledTimes(2);
+    expect(isCancelRequested).toHaveBeenCalledTimes(3);
     expect(clearCancelRequest).toHaveBeenCalledWith("job-1");
     expect(registrationService.registerOne).toHaveBeenCalledTimes(2);
     expect(lastProgress(job)).toMatchObject({
