@@ -14,6 +14,9 @@ export function panelTitle(panel: PanelId): string {
   if (panel === "chat") {
     return "聊天";
   }
+  if (panel === "image") {
+    return "图片生成";
+  }
   if (panel === "yydsConfig") {
     return "YYDS配置";
   }

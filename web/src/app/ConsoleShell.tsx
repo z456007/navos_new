@@ -5,6 +5,7 @@ import {
   Bot,
   Clapperboard,
   Cloud,
+  ImageIcon,
   Inbox,
   KeyRound,
   LogOut,
@@ -17,6 +18,7 @@ import { accountMetrics, panelTitle } from "../lib/accounts";
 import { AccountsPanel } from "../panels/AccountsPanel";
 import { ChatPanel } from "../panels/ChatPanel";
 import { CosConfigPanel } from "../panels/CosConfigPanel";
+import { ImagePanel } from "../panels/ImagePanel";
 import { ProbePanel } from "../panels/ProbePanel";
 import { VideoPanel } from "../panels/VideoPanel";
 import { YydsMailConfigPanel } from "../panels/YydsMailConfigPanel";
@@ -58,6 +60,9 @@ export function ConsoleShell({
             </NavButton>
             <NavButton active={activePanel === "chat"} icon={<Bot size={17} />} onClick={() => onPanelChange("chat")}>
               聊天
+            </NavButton>
+            <NavButton active={activePanel === "image"} icon={<ImageIcon size={17} />} onClick={() => onPanelChange("image")}>
+              图片生成
             </NavButton>
             <NavButton active={activePanel === "video"} icon={<Clapperboard size={17} />} onClick={() => onPanelChange("video")}>
               视频生成
@@ -107,6 +112,7 @@ export function ConsoleShell({
           />
         )}
         {activePanel === "chat" && <ChatPanel apiKey={apiKey} />}
+        {activePanel === "image" && <ImagePanel apiKey={apiKey} />}
         {activePanel === "yydsConfig" && <YydsMailConfigPanel apiKey={apiKey} />}
         {activePanel === "video" && <VideoPanel apiKey={apiKey} />}
         {activePanel === "cos" && <CosConfigPanel apiKey={apiKey} />}

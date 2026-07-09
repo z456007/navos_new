@@ -447,6 +447,58 @@ describe("server routes", () => {
     });
   });
 
+  it("creates and polls image generations through the protected local route", async () => {
+    const paths: string[] = [];
+    let forwardedBody: Record<string, unknown> | undefined;
+    let forwardedAuth = "";
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+      fetchImpl: async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        paths.push(`${init?.method ?? "GET"} ${path}`);
+        forwardedAuth = String((init?.headers as Record<string, string>).authorization ?? "");
+        if (path === "/api/tasks/navos-gpt-image-t2i") {
+          forwardedBody = JSON.parse(String(init?.body));
+          return Response.json({ code: 200, data: { task_id: "img_task_1", status: "queued" } });
+        }
+        if (path === "/api/tasks/image/generations/img_task_1") {
+          return Response.json({ code: 200, data: { status: "succeeded", url: "https://cdn.test/image.png" } });
+        }
+        return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/images/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "white robot", n: 9, quality: "high", size: "1536x1024" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      status: "succeeded",
+      task_id: "img_task_1",
+      data: [{ url: "https://cdn.test/image.png" }]
+    });
+    expect(forwardedAuth).toBe("Bearer u1:t1");
+    expect(paths).toEqual([
+      "POST /api/tasks/navos-gpt-image-t2i",
+      "GET /api/tasks/image/generations/img_task_1"
+    ]);
+    expect(forwardedBody).toEqual({
+      prompt: "white robot",
+      n: 4,
+      quality: "high",
+      size: "1536x1024",
+      response_format: "b64_json",
+      output_format: "png"
+    });
+  });
+
   it("exposes v1 video generation compatibility routes", async () => {
     const paths: string[] = [];
     const accountService = new AccountService(new InMemoryAccountStore());

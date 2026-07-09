@@ -4,6 +4,7 @@ import type { AccountIdentity, HeaderBag, ProviderAuthMode } from "../protocols/
 import { buildProviderAuthHeaders, isClientAuthorized } from "../protocols/auth.js";
 import type { FetchLike, ProviderResult } from "../protocols/http.js";
 import { ProviderHttpClient } from "../protocols/http.js";
+import { buildImageGenerationPayload, createImageGeneration } from "../protocols/image.js";
 import { forwardModelRequest, LOCAL_MODEL_IDS } from "../protocols/model-proxy.js";
 import { registerAccount } from "../protocols/register.js";
 import { uploadAsset } from "../protocols/upload.js";
@@ -786,6 +787,26 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     const body = await archiveVideoTask(result.body);
     await sendProviderResult(reply, { ...result, body });
   }
+
+  app.post("/api/images/generations", async (request, reply) => {
+    if (!requireLocalAuth(request, reply)) {
+      return;
+    }
+    const auth = await providerAuth(reply);
+    if (!auth) {
+      return;
+    }
+    let payload: Record<string, unknown>;
+    try {
+      payload = buildImageGenerationPayload(bodyRecord(request));
+    } catch (error) {
+      await sendBadRequest(reply, error);
+      return;
+    }
+    const result = await createImageGeneration(client, payload, auth.headers);
+    await depleteProviderAccountIfNeeded(auth.account.uid, result);
+    await sendProviderResult(reply, result);
+  });
 
   app.post("/api/video/generations", handleCreateVideo);
   app.post("/v1/video/generations", handleCreateVideo);

@@ -94,10 +94,50 @@ describe("admin app gate", () => {
 
     expect(within(primaryNav).getByRole("button", { name: "账号池" })).toBeInTheDocument();
     expect(within(primaryNav).getByRole("button", { name: "聊天" })).toBeInTheDocument();
+    expect(within(primaryNav).getByRole("button", { name: "图片生成" })).toBeInTheDocument();
     expect(within(primaryNav).getByRole("button", { name: "视频生成" })).toBeInTheDocument();
     expect(within(primaryNav).queryByRole("button", { name: "YYDS配置" })).not.toBeInTheDocument();
     expect(within(configNav).getByRole("button", { name: "YYDS配置" })).toBeInTheDocument();
     expect(within(configNav).getByRole("button", { name: "COS配置" })).toBeInTheDocument();
+  });
+
+  it("generates images from the image workbench", async () => {
+    const prompt = "白色机器人站在霓虹雨夜的天桥上";
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });
+      const path = String(url);
+      if (path === "/api/accounts") {
+        return Response.json([]);
+      }
+      if (path === "/api/images/generations" && init?.method === "POST") {
+        const payload = JSON.parse(String(init.body));
+        expect(payload).toMatchObject({
+          model: "gpt-image-2",
+          prompt,
+          n: 1,
+          quality: "auto",
+          size: "1024x1024"
+        });
+        return Response.json({ data: [{ b64_json: "aGVsbG8=" }] });
+      }
+      return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("Master API Key"), { target: { value: "sk-local" } });
+    fireEvent.click(screen.getByRole("button", { name: "进入控制台" }));
+
+    await screen.findByRole("button", { name: "图片生成" });
+    fireEvent.click(screen.getByRole("button", { name: "图片生成" }));
+
+    fireEvent.change(screen.getByLabelText("图片提示词"), { target: { value: prompt } });
+    fireEvent.click(screen.getByRole("button", { name: "生成图片" }));
+
+    const generated = await screen.findByAltText("生成图片 1");
+    expect(generated).toHaveAttribute("src", "data:image/png;base64,aGVsbG8=");
+    expect(fetchMock).toHaveBeenCalledWith("/api/images/generations", expect.objectContaining({ method: "POST" }));
   });
 
   it("sends chat messages with the selected model from the console", async () => {
