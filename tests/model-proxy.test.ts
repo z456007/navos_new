@@ -3,31 +3,53 @@ import { forwardModelRequest } from "../src/protocols/model-proxy.js";
 import { ProviderHttpClient } from "../src/protocols/http.js";
 
 describe("model proxy", () => {
-  it("forwards chat completions to the upstream v1 path unchanged", async () => {
+  it("routes Claude chat completions through Anthropic messages and wraps the response", async () => {
     let capturedUrl = "";
-    let capturedInit: RequestInit | undefined;
+    let capturedBody: Record<string, unknown> = {};
     const client = new ProviderHttpClient("https://upstream.test", async (url, init) => {
       capturedUrl = String(url);
-      capturedInit = init;
-      return Response.json({ id: "chatcmpl_1" });
+      capturedBody = JSON.parse(String(init?.body));
+      return Response.json({
+        id: "msg_1",
+        model: "claude.opus-4.8",
+        content: [{ type: "text", text: "OK" }],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 10, output_tokens: 2 }
+      });
     });
 
     const result = await forwardModelRequest(client, {
       method: "POST",
       path: "/v1/chat/completions",
-      body: { model: "example", messages: [] },
+      body: {
+        model: "ospu-4.8",
+        messages: [{ role: "user", content: "Reply OK only." }],
+        max_completion_tokens: 1024,
+        stream: false
+      },
       headers: { authorization: "Bearer t" }
     });
 
     expect(result.status).toBe(200);
-    expect(result.body).toEqual({ id: "chatcmpl_1" });
-    expect(capturedUrl).toBe("https://upstream.test/v1/chat/completions");
-    expect(capturedInit?.method).toBe("POST");
+    expect(capturedUrl).toBe("https://upstream.test/v1/messages");
+    expect(capturedBody).toMatchObject({
+      model: "claude.opus-4.8",
+      max_tokens: 1024,
+      messages: [{ role: "user", content: "Reply OK only." }]
+    });
+    expect(result.body).toMatchObject({
+      object: "chat.completion",
+      model: "claude.opus-4.8",
+      choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 }
+    });
   });
 
-  it("normalizes legacy UI chat payload aliases before forwarding", async () => {
+  it("routes GPT chat completions through the backend OpenAI completions path", async () => {
+    let capturedUrl = "";
     let capturedBody: Record<string, unknown> = {};
-    const client = new ProviderHttpClient("https://upstream.test", async (_url, init) => {
+    const client = new ProviderHttpClient("https://upstream.test", async (url, init) => {
+      capturedUrl = String(url);
       capturedBody = JSON.parse(String(init?.body));
       return Response.json({ id: "chatcmpl_1" });
     });
@@ -36,17 +58,18 @@ describe("model proxy", () => {
       method: "POST",
       path: "/v1/chat/completions",
       body: {
-        model: "claude.opus-4.8",
-        messages: [{ role: "user", content: "你是什么模型？" }],
-        max_completion_tokens: 1024,
+        model: "gpt-5.5",
+        messages: [{ role: "user", content: "Reply OK only." }],
+        max_tokens: 8,
         stream: false
       },
       headers: { authorization: "Bearer t" }
     });
 
-    expect(capturedBody.model).toBe("ospu-4.8");
-    expect(capturedBody.max_tokens).toBe(1024);
-    expect(capturedBody).not.toHaveProperty("max_completion_tokens");
+    expect(capturedUrl).toBe("https://upstream.test/chat/completions");
+    expect(capturedBody.model).toBe("openai.gpt-5.5");
+    expect(capturedBody.max_completion_tokens).toBe(8);
+    expect(capturedBody).not.toHaveProperty("max_tokens");
   });
 
   it("rejects unsupported proxy paths", async () => {

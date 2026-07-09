@@ -245,6 +245,8 @@ describe("server routes", () => {
     expect(response.json()).toMatchObject({
       object: "list",
       data: expect.arrayContaining([
+        expect.objectContaining({ id: "gpt-5.5" }),
+        expect.objectContaining({ id: "openai.gpt-5.5" }),
         expect.objectContaining({ id: "ospu-4.8" }),
         expect.objectContaining({ id: "ospu-4.6" }),
         expect.objectContaining({ id: "sonnet-4.6" }),

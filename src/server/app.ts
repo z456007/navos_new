@@ -4,7 +4,7 @@ import type { AccountIdentity, HeaderBag, ProviderAuthMode } from "../protocols/
 import { buildProviderAuthHeaders, isClientAuthorized } from "../protocols/auth.js";
 import type { FetchLike, ProviderResult } from "../protocols/http.js";
 import { ProviderHttpClient } from "../protocols/http.js";
-import { forwardModelRequest } from "../protocols/model-proxy.js";
+import { forwardModelRequest, LOCAL_MODEL_IDS } from "../protocols/model-proxy.js";
 import { registerAccount } from "../protocols/register.js";
 import { uploadAsset } from "../protocols/upload.js";
 import type { VipBalanceClient } from "../protocols/vip-client.js";
@@ -69,16 +69,6 @@ interface ProviderAuthContext {
 const CORS_ALLOW_METHODS = "GET,POST,PUT,PATCH,DELETE,OPTIONS";
 const CORS_DEFAULT_ALLOW_HEADERS = "authorization,content-type,x-api-key";
 const CORS_MAX_AGE_SECONDS = "86400";
-const LOCAL_MODEL_IDS = [
-  "ospu-4.8",
-  "ospu-4.6",
-  "ospu-4.5",
-  "sonnet-4.6",
-  "sonnet-4.5",
-  "haiku-4.5",
-  "gpt-image-2",
-  "doubao-seedance-2-0-260128"
-];
 
 function headersFromRequest(request: FastifyRequest): HeaderBag {
   const headers: HeaderBag = {};
