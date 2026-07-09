@@ -245,10 +245,10 @@ describe("server routes", () => {
     expect(response.json()).toMatchObject({
       object: "list",
       data: expect.arrayContaining([
-        expect.objectContaining({ id: "openai.gpt-5.5" }),
-        expect.objectContaining({ id: "claude.sonnet-4.6" }),
-        expect.objectContaining({ id: "claude.opus-4.8" }),
-        expect.objectContaining({ id: "claude.opus-4.6" })
+        expect.objectContaining({ id: "ospu-4.8" }),
+        expect.objectContaining({ id: "ospu-4.6" }),
+        expect.objectContaining({ id: "sonnet-4.6" }),
+        expect.objectContaining({ id: "haiku-4.5" })
       ])
     });
   });
@@ -447,11 +447,18 @@ describe("server routes", () => {
 
   it("exposes v1 video generation compatibility routes", async () => {
     const paths: string[] = [];
+    const accountService = new AccountService(new InMemoryAccountStore());
+    await accountService.importAccount({
+      uid: "u1",
+      token: "t1",
+      balanceRemaining: 2000,
+      balanceTotal: 2000
+    });
     const app = createApp({
       masterApiKey: "sk-test",
       providerBaseUrl: "https://upstream.test",
       providerAuthMode: "uid-token",
-      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+      accountService,
       fetchImpl: async (url, init) => {
         paths.push(`${init?.method ?? "GET"} ${new URL(String(url)).pathname}`);
         if (String(url).endsWith("/api/tasks/navos-seedance-video-generation")) {
@@ -508,8 +515,8 @@ describe("server routes", () => {
   it("uses one leased account per concurrent video create and depletes successful accounts", async () => {
     const store = new InMemoryAccountStore();
     const accountService = new AccountService(store);
-    await accountService.importAccount({ uid: "u1", token: "t1" });
-    await accountService.importAccount({ uid: "u2", token: "t2" });
+    await accountService.importAccount({ uid: "u1", token: "t1", balanceRemaining: 2000, balanceTotal: 2000 });
+    await accountService.importAccount({ uid: "u2", token: "t2", balanceRemaining: 2000, balanceTotal: 2000 });
     const usedUids: string[] = [];
     const app = createApp({
       masterApiKey: "sk-test",
@@ -551,6 +558,100 @@ describe("server routes", () => {
     expect((await store.get("u2"))?.status).toBe("depleted");
   });
 
+  it("uses an existing 2000-credit video account before registering a new one", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    await accountService.importAccount({ uid: "low", token: "t-low", balanceRemaining: 1000, balanceTotal: 2000 });
+    await accountService.importAccount({ uid: "ready", token: "t-ready", balanceRemaining: 2000, balanceTotal: 2000 });
+    const registrationService = {
+      registerOne: vi.fn(async () => ({
+        success: true,
+        uid: "auto-video-should-not-run",
+        token: "auto-token",
+        balance: 2000
+      }))
+    };
+    const usedUids: string[] = [];
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      registrationService: registrationService as never,
+      fetchImpl: async (_url, init) => {
+        const authorization = String((init?.headers as Record<string, string>).authorization ?? "");
+        usedUids.push(authorization.replace(/^Bearer\s+/, "").split(":")[0]);
+        return Response.json({ task_id: "task_ready", status: "queued" });
+      }
+    });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/video/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "city skyline", durationSeconds: 10, resolution: "720P" }
+    });
+
+    expect(created.statusCode).toBe(200);
+    expect(registrationService.registerOne).not.toHaveBeenCalled();
+    expect(usedUids).toEqual(["ready"]);
+    expect((await store.get("low"))?.status).toBe("active");
+    expect((await store.get("low"))?.leaseId).toBeUndefined();
+    expect((await store.get("ready"))?.status).toBe("depleted");
+  });
+
+  it("auto-registers for video when existing accounts are below 2000 credits", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    await accountService.importAccount({ uid: "low", token: "t-low", balanceRemaining: 1000, balanceTotal: 2000 });
+    const registrationService = {
+      registerOne: vi.fn(async () => {
+        await accountService.importAccount({
+          uid: "auto-video-2k",
+          token: "auto-token-2k",
+          mailboxAddr: "auto-video-2k@mail.test",
+          mailboxToken: "mail-token",
+          balanceRemaining: 2000,
+          balanceTotal: 2000,
+          status: "active"
+        });
+        return {
+          success: true,
+          uid: "auto-video-2k",
+          token: "auto-token-2k",
+          email: "auto-video-2k@mail.test",
+          mailboxToken: "mail-token",
+          balance: 2000
+        };
+      })
+    };
+    const usedHeaders: string[] = [];
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      registrationService: registrationService as never,
+      fetchImpl: async (_url, init) => {
+        usedHeaders.push(String((init?.headers as Record<string, string>).authorization ?? ""));
+        return Response.json({ task_id: "task_auto_2k", status: "queued" });
+      }
+    });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/video/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "city skyline", durationSeconds: 10, resolution: "720P" }
+    });
+
+    expect(created.statusCode).toBe(200);
+    expect(registrationService.registerOne).toHaveBeenCalledOnce();
+    expect(usedHeaders).toEqual(["Bearer auto-video-2k:auto-token-2k"]);
+    expect((await store.get("low"))?.status).toBe("active");
+    expect((await store.get("auto-video-2k"))?.status).toBe("depleted");
+  });
+
   it("auto-registers a one-shot video account when the pool has no available account", async () => {
     const store = new InMemoryAccountStore();
     const accountService = new AccountService(store);
@@ -561,8 +662,8 @@ describe("server routes", () => {
           token: "auto-token-1",
           mailboxAddr: "auto-video-1@mail.test",
           mailboxToken: "mail-token",
-          balanceRemaining: 1000,
-          balanceTotal: 1000,
+          balanceRemaining: 2000,
+          balanceTotal: 2000,
           status: "active"
         });
         return {
@@ -570,7 +671,8 @@ describe("server routes", () => {
           uid: "auto-video-1",
           token: "auto-token-1",
           email: "auto-video-1@mail.test",
-          mailboxToken: "mail-token"
+          mailboxToken: "mail-token",
+          balance: 2000
         };
       })
     };
@@ -633,7 +735,7 @@ describe("server routes", () => {
   it("depletes a leased video account when upstream reports insufficient balance", async () => {
     const store = new InMemoryAccountStore();
     const accountService = new AccountService(store);
-    await accountService.importAccount({ uid: "u1", token: "t1" });
+    await accountService.importAccount({ uid: "u1", token: "t1", balanceRemaining: 2000, balanceTotal: 2000 });
     const app = createApp({
       masterApiKey: "sk-test",
       providerBaseUrl: "https://upstream.test",

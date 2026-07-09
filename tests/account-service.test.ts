@@ -39,8 +39,8 @@ describe("AccountService", () => {
   it("leases different accounts for concurrent video jobs", async () => {
     const store = new InMemoryAccountStore();
     const service = new AccountService(store);
-    await service.importAccount({ uid: "u1", token: "t1" });
-    await service.importAccount({ uid: "u2", token: "t2" });
+    await service.importAccount({ uid: "u1", token: "t1", balanceRemaining: 2000, balanceTotal: 2000 });
+    await service.importAccount({ uid: "u2", token: "t2", balanceRemaining: 2000, balanceTotal: 2000 });
 
     const [first, second, third] = await Promise.all([
       service.leaseVideoAccount("job_1"),
@@ -50,6 +50,20 @@ describe("AccountService", () => {
 
     expect([first?.uid, second?.uid].sort()).toEqual(["u1", "u2"]);
     expect(third).toBeUndefined();
+  });
+
+  it("leases only video accounts with at least 2000 remaining balance", async () => {
+    const store = new InMemoryAccountStore();
+    const service = new AccountService(store);
+    await service.importAccount({ uid: "low", token: "t1", balanceRemaining: 1000, balanceTotal: 2000 });
+    await service.importAccount({ uid: "enough", token: "t2", balanceRemaining: 2000, balanceTotal: 2000 });
+
+    const leased = await service.leaseVideoAccount("video-job");
+    const second = await service.leaseVideoAccount("video-job-2");
+
+    expect(leased?.uid).toBe("enough");
+    expect(second).toBeUndefined();
+    expect((await store.get("low"))?.leaseId).toBeUndefined();
   });
 
   it("skips disabled and cooling-down accounts", async () => {

@@ -147,17 +147,25 @@ export class MysqlAccountStore implements AccountStore {
     return rows[0] ? fromRow(rows[0]) : undefined;
   }
 
-  async leaseActive(leaseId: string, leaseUntilMs: number, nowMs: number = Date.now()): Promise<AccountRecord | undefined> {
+  async leaseActive(
+    leaseId: string,
+    leaseUntilMs: number,
+    nowMs: number = Date.now(),
+    minimumBalanceRemaining: number = 0
+  ): Promise<AccountRecord | undefined> {
     const connection = await this.pool.getConnection();
     try {
       await connection.beginTransaction();
       const [rows] = await connection.execute<AccountRow[]>(
         `SELECT * FROM accounts
-         WHERE status = 'active' AND rate_limited_until <= :nowMs AND lease_until <= :nowMs
+         WHERE status = 'active'
+           AND rate_limited_until <= :nowMs
+           AND lease_until <= :nowMs
+           AND balance_remaining >= :minimumBalanceRemaining
          ORDER BY last_used_at ASC, created_at ASC
          LIMIT 1
          FOR UPDATE`,
-        { nowMs }
+        { nowMs, minimumBalanceRemaining }
       );
       const row = rows[0];
       if (!row) {

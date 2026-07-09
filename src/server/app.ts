@@ -70,10 +70,14 @@ const CORS_ALLOW_METHODS = "GET,POST,PUT,PATCH,DELETE,OPTIONS";
 const CORS_DEFAULT_ALLOW_HEADERS = "authorization,content-type,x-api-key";
 const CORS_MAX_AGE_SECONDS = "86400";
 const LOCAL_MODEL_IDS = [
-  "openai.gpt-5.5",
-  "claude.sonnet-4.6",
-  "claude.opus-4.8",
-  "claude.opus-4.6"
+  "ospu-4.8",
+  "ospu-4.6",
+  "ospu-4.5",
+  "sonnet-4.6",
+  "sonnet-4.5",
+  "haiku-4.5",
+  "gpt-image-2",
+  "doubao-seedance-2-0-260128"
 ];
 
 function headersFromRequest(request: FastifyRequest): HeaderBag {

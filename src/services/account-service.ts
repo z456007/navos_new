@@ -5,6 +5,8 @@ import type {
   AccountStore
 } from "../store/account-store.js";
 
+export const VIDEO_ACCOUNT_REQUIRED_BALANCE = 2000;
+
 export interface AccountListItem {
   uid: string;
   tokenPreview: string;
@@ -62,8 +64,12 @@ export class AccountService {
     return account;
   }
 
-  async leaseVideoAccount(leaseId: string, ttlMs: number = 10 * 60 * 1000): Promise<AccountRecord | undefined> {
-    return this.store.leaseActive(leaseId, Date.now() + ttlMs);
+  async leaseVideoAccount(
+    leaseId: string,
+    ttlMs: number = 10 * 60 * 1000,
+    minimumBalanceRemaining: number = VIDEO_ACCOUNT_REQUIRED_BALANCE
+  ): Promise<AccountRecord | undefined> {
+    return this.store.leaseActive(leaseId, Date.now() + ttlMs, undefined, minimumBalanceRemaining);
   }
 
   async releaseVideoAccount(uid: string, leaseId?: string): Promise<void> {

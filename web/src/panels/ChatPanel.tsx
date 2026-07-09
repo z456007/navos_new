@@ -14,10 +14,11 @@ interface ChatMessage {
 }
 
 const FALLBACK_MODELS = [
-  "openai.gpt-5.5",
-  "claude.sonnet-4.6",
-  "claude.opus-4.8",
-  "claude.opus-4.6"
+  "ospu-4.8",
+  "ospu-4.6",
+  "sonnet-4.6",
+  "sonnet-4.5",
+  "haiku-4.5"
 ];
 
 export function ChatPanel({ apiKey }: { apiKey: string }) {
