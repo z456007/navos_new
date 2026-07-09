@@ -20,7 +20,8 @@ describe("loadConfig", () => {
       QUEUE_PREFIX: "navos-test",
       REGISTRATION_JOB_CONCURRENCY: "3",
       REGISTRATION_JOB_REMOVE_ON_COMPLETE: "25",
-      REGISTRATION_JOB_REMOVE_ON_FAIL: "75"
+      REGISTRATION_JOB_REMOVE_ON_FAIL: "75",
+      PUBLIC_PROXY_API_KEYS: " sk-public-1,sk-public-2 ,, "
     });
 
     expect(config.masterApiKey).toBe("sk-test");
@@ -38,6 +39,7 @@ describe("loadConfig", () => {
     expect(config.registrationJobConcurrency).toBe(3);
     expect(config.registrationJobRemoveOnComplete).toBe(25);
     expect(config.registrationJobRemoveOnFail).toBe(75);
+    expect(config.publicProxyApiKeys).toEqual(["sk-public-1", "sk-public-2"]);
     expect(config.mysql).toEqual({
       host: "127.0.0.1",
       port: 3307,

@@ -5,7 +5,7 @@ import { buildProviderAuthHeaders, isClientAuthorized } from "../protocols/auth.
 import type { FetchLike, ProviderResult } from "../protocols/http.js";
 import { ProviderHttpClient } from "../protocols/http.js";
 import { buildImageGenerationPayload, createImageGeneration } from "../protocols/image.js";
-import { forwardModelRequest, LOCAL_MODEL_IDS } from "../protocols/model-proxy.js";
+import { forwardModelRequest, LOCAL_MODEL_IDS, PUBLIC_PROXY_MODEL_IDS } from "../protocols/model-proxy.js";
 import { registerAccount } from "../protocols/register.js";
 import { uploadAsset } from "../protocols/upload.js";
 import type { VipBalanceClient } from "../protocols/vip-client.js";
@@ -38,6 +38,7 @@ import type { RegistrationJobCreateInput } from "../services/registration-job-ty
 
 export interface CreateAppOptions {
   masterApiKey: string;
+  publicProxyApiKeys?: string[];
   providerBaseUrl: string;
   providerAuthMode: ProviderAuthMode;
   defaultAccount?: AccountIdentity;
@@ -151,6 +152,52 @@ function localModelCatalog() {
   };
 }
 
+function publicModelCatalog() {
+  return {
+    object: "list",
+    data: PUBLIC_PROXY_MODEL_IDS.map((id) => ({
+      id,
+      object: "model",
+      owned_by: "navos"
+    }))
+  };
+}
+
+function readBodyModel(body: Record<string, unknown>): string | undefined {
+  return typeof body.model === "string" && body.model.trim() ? body.model.trim() : undefined;
+}
+
+function isPublicChatModelAllowed(model: string | undefined): boolean {
+  if (!model) {
+    return false;
+  }
+  return [
+    "claude.opus-4.8",
+    "claude.sonnet-4.6",
+    "claude.sonnet-4.5",
+    "claude.haiku-4.5",
+    "codex",
+    "gpt-5.3-codex",
+    "gpt-5.2-codex"
+  ].includes(model);
+}
+
+function isPublicMessagesModelAllowed(model: string | undefined): boolean {
+  if (!model) {
+    return false;
+  }
+  return [
+    "claude.opus-4.8",
+    "claude.sonnet-4.6",
+    "claude.sonnet-4.5",
+    "claude.haiku-4.5"
+  ].includes(model);
+}
+
+function isPublicImageModelAllowed(model: string | undefined): boolean {
+  return model === undefined || model === "gpt-image-2";
+}
+
 function normalizeSecretRoot(value: string): string {
   return value.length >= 32 ? value : createHash("sha256").update(value).digest("hex");
 }
@@ -185,12 +232,37 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     }
   });
 
+  function isLocalAuthorized(request: FastifyRequest): boolean {
+    return isClientAuthorized(headersFromRequest(request), options.masterApiKey);
+  }
+
+  function isPublicProxyAuthorized(request: FastifyRequest): boolean {
+    const publicKeys = options.publicProxyApiKeys ?? [];
+    return publicKeys.some((key) => isClientAuthorized(headersFromRequest(request), key));
+  }
+
   function requireLocalAuth(request: FastifyRequest, reply: FastifyReply): boolean {
-    if (isClientAuthorized(headersFromRequest(request), options.masterApiKey)) {
+    if (isLocalAuthorized(request)) {
       return true;
     }
     void reply.status(401).send({ error: { message: "Invalid API key", type: "authentication_error" } });
     return false;
+  }
+
+  function requirePublicProxyAuth(request: FastifyRequest, reply: FastifyReply): boolean {
+    if (isLocalAuthorized(request) || isPublicProxyAuthorized(request)) {
+      return true;
+    }
+    void reply.status(401).send({ error: { message: "Invalid API key", type: "authentication_error" } });
+    return false;
+  }
+
+  function isPublicProxyOnly(request: FastifyRequest): boolean {
+    return !isLocalAuthorized(request) && isPublicProxyAuthorized(request);
+  }
+
+  async function sendModelNotAllowed(reply: FastifyReply, message: string): Promise<void> {
+    await reply.status(400).send({ error: { message, type: "model_not_allowed" } });
   }
 
   async function providerAuth(reply: FastifyReply): Promise<ProviderAuthContext | undefined> {
@@ -544,7 +616,11 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
   app.get("/health", async () => ({ ok: true }));
 
   app.get("/v1/models", async (request, reply) => {
-    if (!requireLocalAuth(request, reply)) {
+    if (!requirePublicProxyAuth(request, reply)) {
+      return;
+    }
+    if (isPublicProxyOnly(request)) {
+      await reply.send(publicModelCatalog());
       return;
     }
     const auth = await providerAuth(reply);
@@ -561,7 +637,11 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
   });
 
   app.post("/v1/chat/completions", async (request, reply) => {
-    if (!requireLocalAuth(request, reply)) {
+    if (!requirePublicProxyAuth(request, reply)) {
+      return;
+    }
+    if (isPublicProxyOnly(request) && !isPublicChatModelAllowed(readBodyModel(bodyRecord(request)))) {
+      await sendModelNotAllowed(reply, "Only public Claude and Codex models are allowed on this endpoint");
       return;
     }
     const auth = await providerAuth(reply);
@@ -579,7 +659,11 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
   });
 
   app.post("/v1/messages", async (request, reply) => {
-    if (!requireLocalAuth(request, reply)) {
+    if (!requirePublicProxyAuth(request, reply)) {
+      return;
+    }
+    if (isPublicProxyOnly(request) && !isPublicMessagesModelAllowed(readBodyModel(bodyRecord(request)))) {
+      await sendModelNotAllowed(reply, "Only public Claude models are allowed on this endpoint");
       return;
     }
     const auth = await providerAuth(reply);
@@ -932,10 +1016,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     await sendProviderResult(reply, { ...result, body });
   }
 
-  app.post("/api/images/generations", async (request, reply) => {
-    if (!requireLocalAuth(request, reply)) {
-      return;
-    }
+  async function handleImageGeneration(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     let payload: Record<string, unknown>;
     try {
       payload = buildImageGenerationPayload(bodyRecord(request));
@@ -981,6 +1062,24 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       body: { error: { message: "All image accounts attempted — none succeeded", type: "server_error" } },
       headers: new Headers()
     });
+  }
+
+  app.post("/api/images/generations", async (request, reply) => {
+    if (!requireLocalAuth(request, reply)) {
+      return;
+    }
+    await handleImageGeneration(request, reply);
+  });
+
+  app.post("/v1/images/generations", async (request, reply) => {
+    if (!requirePublicProxyAuth(request, reply)) {
+      return;
+    }
+    if (!isPublicImageModelAllowed(readBodyModel(bodyRecord(request)))) {
+      await sendModelNotAllowed(reply, "Only gpt-image-2 is allowed on this endpoint");
+      return;
+    }
+    await handleImageGeneration(request, reply);
   });
 
   app.post("/api/video/generations", handleCreateVideo);

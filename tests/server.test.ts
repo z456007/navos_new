@@ -255,6 +255,119 @@ describe("server routes", () => {
     });
   });
 
+  it("lets public proxy keys access only the public model catalog and not admin routes", async () => {
+    const app = createApp({
+      masterApiKey: "sk-master",
+      publicProxyApiKeys: ["sk-public"],
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+      fetchImpl: async () => Response.json({ error: { message: "public models should not hit upstream" } }, { status: 500 })
+    });
+
+    const models = await app.inject({
+      method: "GET",
+      url: "/v1/models",
+      headers: { authorization: "Bearer sk-public" }
+    });
+    expect(models.statusCode).toBe(200);
+    const ids = models.json().data.map((item: { id: string }) => item.id);
+    expect(ids).toEqual([
+      "claude.opus-4.8",
+      "claude.sonnet-4.6",
+      "claude.sonnet-4.5",
+      "claude.haiku-4.5",
+      "codex",
+      "gpt-5.3-codex",
+      "gpt-5.2-codex",
+      "gpt-image-2"
+    ]);
+    expect(ids).not.toContain("gpt-5.5");
+    expect(ids).not.toContain("qwen.qwen3.6-plus");
+
+    const admin = await app.inject({
+      method: "GET",
+      url: "/api/accounts",
+      headers: { authorization: "Bearer sk-public" }
+    });
+    expect(admin.statusCode).toBe(401);
+  });
+
+  it("proxies public chat only for claude and codex models", async () => {
+    const forwarded: Array<{ path: string; body: Record<string, unknown> }> = [];
+    const app = createApp({
+      masterApiKey: "sk-master",
+      publicProxyApiKeys: ["sk-public"],
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+      fetchImpl: async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        forwarded.push({ path, body: JSON.parse(String(init?.body ?? "{}")) });
+        return Response.json({
+          id: "chatcmpl-1",
+          choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }]
+        });
+      }
+    });
+
+    const codex = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: { authorization: "Bearer sk-public" },
+      payload: { model: "codex", messages: [{ role: "user", content: "hi" }] }
+    });
+    expect(codex.statusCode).toBe(200);
+    expect(forwarded[0]).toMatchObject({
+      path: "/chat/completions",
+      body: { model: "openai.gpt-5.3-codex" }
+    });
+
+    const blocked = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: { authorization: "Bearer sk-public" },
+      payload: { model: "gpt-5.5", messages: [{ role: "user", content: "hi" }] }
+    });
+    expect(blocked.statusCode).toBe(400);
+    expect(blocked.json()).toMatchObject({ error: { type: "model_not_allowed" } });
+    expect(forwarded).toHaveLength(1);
+  });
+
+  it("allows public Anthropic messages only for Claude models", async () => {
+    const forwarded: Record<string, unknown>[] = [];
+    const app = createApp({
+      masterApiKey: "sk-master",
+      publicProxyApiKeys: ["sk-public"],
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+      fetchImpl: async (_url, init) => {
+        forwarded.push(JSON.parse(String(init?.body ?? "{}")));
+        return Response.json({ id: "msg-1", content: [{ type: "text", text: "ok" }] });
+      }
+    });
+
+    const claude = await app.inject({
+      method: "POST",
+      url: "/v1/messages",
+      headers: { authorization: "Bearer sk-public" },
+      payload: { model: "claude.opus-4.8", max_tokens: 64, messages: [{ role: "user", content: "hi" }] }
+    });
+    expect(claude.statusCode).toBe(200);
+    expect(forwarded[0]).toMatchObject({ model: "claude.opus-4.8" });
+
+    const blocked = await app.inject({
+      method: "POST",
+      url: "/v1/messages",
+      headers: { authorization: "Bearer sk-public" },
+      payload: { model: "codex", max_tokens: 64, messages: [{ role: "user", content: "hi" }] }
+    });
+    expect(blocked.statusCode).toBe(400);
+    expect(blocked.json()).toMatchObject({ error: { type: "model_not_allowed" } });
+    expect(forwarded).toHaveLength(1);
+  });
+
   it("handles browser CORS preflight and auth failures without a dev proxy", async () => {
     const app = createApp({
       masterApiKey: "sk-test",
@@ -505,6 +618,58 @@ describe("server routes", () => {
       status: "active",
       leaseUntil: 0
     });
+  });
+
+  it("exposes public OpenAI-compatible image generations only for gpt-image-2", async () => {
+    const paths: string[] = [];
+    const store = new InMemoryAccountStore();
+    await store.upsert({ uid: "u1", token: "t1", balanceRemaining: 200, balanceTotal: 200 });
+    const app = createApp({
+      masterApiKey: "sk-master",
+      publicProxyApiKeys: ["sk-public"],
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(store),
+      fetchImpl: async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        paths.push(`${init?.method ?? "GET"} ${path}`);
+        if (path === "/api/tasks/navos-gpt-image-t2i") {
+          return Response.json({ code: 200, data: { task_id: "img_task_public", status: "queued" } });
+        }
+        if (path === "/api/tasks/image/generations/img_task_public") {
+          return Response.json({ code: 200, data: { status: "succeeded", url: "https://cdn.test/public.png" } });
+        }
+        return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+      }
+    });
+
+    const generated = await app.inject({
+      method: "POST",
+      url: "/v1/images/generations",
+      headers: { authorization: "Bearer sk-public" },
+      payload: { model: "gpt-image-2", prompt: "white robot", n: 1, quality: "low", size: "1024x1024" }
+    });
+
+    expect(generated.statusCode).toBe(200);
+    expect(generated.json()).toMatchObject({
+      task_id: "img_task_public",
+      data: [{ url: "https://cdn.test/public.png" }]
+    });
+    expect(paths).toEqual([
+      "POST /api/tasks/navos-gpt-image-t2i",
+      "GET /api/tasks/image/generations/img_task_public"
+    ]);
+    expect(await store.get("u1")).toMatchObject({ balanceRemaining: 100 });
+
+    const blocked = await app.inject({
+      method: "POST",
+      url: "/v1/images/generations",
+      headers: { authorization: "Bearer sk-public" },
+      payload: { model: "dall-e-3", prompt: "white robot" }
+    });
+    expect(blocked.statusCode).toBe(400);
+    expect(blocked.json()).toMatchObject({ error: { type: "model_not_allowed" } });
+    expect(paths).toHaveLength(2);
   });
 
   it("creates image edits with reference images through the protected local route", async () => {

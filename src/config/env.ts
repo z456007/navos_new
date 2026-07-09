@@ -2,6 +2,7 @@ import type { AccountIdentity, ProviderAuthMode } from "../protocols/auth.js";
 
 export interface AppConfig {
   masterApiKey: string;
+  publicProxyApiKeys: string[];
   providerBaseUrl: string;
   providerAuthMode: ProviderAuthMode;
   listenPort: number;
@@ -94,6 +95,13 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
   return n;
 }
 
+function parseCsv(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 export function loadConfig(env: EnvInput = process.env): AppConfig {
   const uid = env.PROVIDER_ACCOUNT_UID?.trim();
   const token = env.PROVIDER_ACCOUNT_TOKEN?.trim();
@@ -101,6 +109,7 @@ export function loadConfig(env: EnvInput = process.env): AppConfig {
 
   return {
     masterApiKey: requireEnv(env, "MASTER_API_KEY"),
+    publicProxyApiKeys: parseCsv(env.PUBLIC_PROXY_API_KEYS),
     providerBaseUrl: requireEnv(env, "PROVIDER_BASE_URL").replace(/\/+$/, ""),
     providerAuthMode: parseProviderAuthMode(env.PROVIDER_AUTH_MODE),
     listenPort: parsePort(env.PORT),

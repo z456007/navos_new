@@ -43,6 +43,7 @@ const OPENAI_FAMILY_MODELS: Record<string, string> = {
 };
 
 const OPENAI_FAMILY_ALIASES: Record<string, string> = {
+  "codex": "openai.gpt-5.3-codex",
   "gpt-5.5": "openai.gpt-5.5",
   "lgpt5.5": "openai.gpt-5.5",
   "gpt-5.5-pro": "openai.gpt-5.4-pro",
@@ -62,6 +63,17 @@ const OPENAI_FAMILY_ALIASES: Record<string, string> = {
   "glm-5.1": "zai.glm-5.1",
   "glm5.1": "zai.glm-5.1"
 };
+
+export const PUBLIC_PROXY_MODEL_IDS = [
+  "claude.opus-4.8",
+  "claude.sonnet-4.6",
+  "claude.sonnet-4.5",
+  "claude.haiku-4.5",
+  "codex",
+  "gpt-5.3-codex",
+  "gpt-5.2-codex",
+  "gpt-image-2"
+];
 
 export const LOCAL_MODEL_IDS = [
   ...CLAUDE_MODEL_IDS,
