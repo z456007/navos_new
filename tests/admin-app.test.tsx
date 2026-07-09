@@ -308,6 +308,99 @@ describe("admin app gate", () => {
     expect(screen.getByText(/token-full-1/)).toBeInTheDocument();
   });
 
+  it("does not restore completed registration jobs when the account pool reloads", async () => {
+    const recentJobs = deferred<Response>();
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });
+      const path = String(url);
+      if (path === "/api/accounts") {
+        return Response.json([]);
+      }
+      if (path === "/api/registration/jobs" && init?.method === "GET") {
+        return recentJobs.promise;
+      }
+      return Response.json({ error: { message: "unexpected path" } }, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("Master API Key"), { target: { value: "sk-local" } });
+    fireEvent.click(screen.getByRole("button", { name: "进入控制台" }));
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("heading", { name: "账号池" }).length).toBeGreaterThan(0);
+    });
+
+    await act(async () => {
+      recentJobs.resolve(Response.json([{
+        id: "job-done",
+        mode: "fill",
+        state: "succeeded",
+        progress: { started: 1, completed: 1, failed: 0, total: 1 },
+        logs: [{ at: 1000, level: "info", message: "old registration completed" }],
+        results: { uid: "uid-old", token: "token-old" },
+        createdAt: 900,
+        finishedAt: 1000
+      }]));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("暂无注册任务")).toBeInTheDocument();
+    expect(screen.queryByText("job-done")).not.toBeInTheDocument();
+    expect(screen.queryByText(/uid-old/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/token-old/)).not.toBeInTheDocument();
+  });
+
+  it("lets a completed registration job result be closed after a manual run", async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });
+      const path = String(url);
+      if (path === "/api/accounts") {
+        return Response.json([]);
+      }
+      if (path === "/api/registration/jobs" && init?.method === "GET") {
+        return Response.json([]);
+      }
+      if (path === "/api/registration/jobs" && init?.method === "POST") {
+        return Response.json({ jobId: "job-close" });
+      }
+      if (path === "/api/registration/jobs/job-close" && init?.method === "GET") {
+        return Response.json({
+          id: "job-close",
+          mode: "single",
+          state: "succeeded",
+          progress: { started: 1, completed: 1, failed: 0, total: 1 },
+          logs: [{ at: 1000, level: "info", message: "single registration completed" }],
+          results: { uid: "uid-close", token: "token-close" },
+          createdAt: 900,
+          startedAt: 950,
+          finishedAt: 1000
+        });
+      }
+      return Response.json({ error: { message: "unexpected path" } }, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("Master API Key"), { target: { value: "sk-local" } });
+    fireEvent.click(screen.getByRole("button", { name: "进入控制台" }));
+
+    await screen.findByRole("button", { name: "启动单个注册" });
+    fireEvent.click(screen.getByRole("button", { name: "启动单个注册" }));
+
+    await screen.findByText("job-close");
+    expect(screen.getByText(/uid-close/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭任务结果" }));
+
+    expect(screen.getByText("暂无注册任务")).toBeInTheDocument();
+    expect(screen.queryByText("job-close")).not.toBeInTheDocument();
+    expect(screen.queryByText(/uid-close/)).not.toBeInTheDocument();
+  });
+
   it("keeps polling a running registration job after cancel fails", async () => {
     vi.useFakeTimers();
     let jobPolls = 0;

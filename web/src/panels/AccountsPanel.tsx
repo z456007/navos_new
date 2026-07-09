@@ -42,7 +42,7 @@ export function AccountsPanel({
         const response = await apiRequest<unknown>(apiKey, "/api/registration/jobs", { method: "GET" });
         if (!active || !mounted.current || hydrationVersion !== jobInteractionVersion.current) return;
         const recentJobs = Array.isArray(response) ? response.map(normalizeRegistrationJob) : [];
-        const recentJob = recentJobs[0];
+        const recentJob = recentJobs.find((item) => !registrationJobIsTerminal(item));
         if (!recentJob) return;
         setJob(recentJob);
         if (!registrationJobIsTerminal(recentJob)) {
@@ -188,6 +188,15 @@ export function AccountsPanel({
         void pollRegistrationJob(jobId);
       }, nextPollingDelay(failureCount));
     }
+  }
+
+  function closeRegistrationJobResult() {
+    markJobInteraction();
+    clearPolling();
+    pollFailures.current = 0;
+    refreshedTerminalJobId.current = undefined;
+    setJob(undefined);
+    setStatus(idleStatus);
   }
 
   async function updateAccount(uid: string, action: "enable" | "disable" | "cooldown") {
@@ -338,6 +347,11 @@ export function AccountsPanel({
           {job && !registrationJobIsTerminal(job) && (
             <AntButton icon={<Square size={16} />} onClick={() => void cancelRegistrationJob()}>
               取消任务
+            </AntButton>
+          )}
+          {job && registrationJobIsTerminal(job) && (
+            <AntButton onClick={closeRegistrationJobResult}>
+              关闭任务结果
             </AntButton>
           )}
         </div>
