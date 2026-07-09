@@ -1,4 +1,4 @@
-import type { YydsMailClient } from "../protocols/mail/yyds-mail.js";
+import { YydsMailError, type YydsMailClient, type YydsMailbox } from "../protocols/mail/yyds-mail.js";
 import type { VipBalance, VipClient } from "../protocols/vip-client.js";
 import type { AccountService } from "./account-service.js";
 
@@ -10,6 +10,12 @@ export interface RegistrationServiceOptions {
   maxPollAttempts?: number;
   /** Poll interval in milliseconds. Default 4000. */
   pollIntervalMs?: number;
+  /** Max YYDS mailbox creation attempts when the provider rate-limits. Default 5. */
+  maxMailboxCreateAttempts?: number;
+  /** Base delay before retrying YYDS mailbox creation. Default 5000. */
+  mailboxRetryDelayMs?: number;
+  /** Minimum spacing between YYDS mailbox creation requests in this process. Default 1200. */
+  mailboxMinIntervalMs?: number;
 }
 
 export interface RegistrationResult {
@@ -139,6 +145,11 @@ export class RegistrationService {
   private readonly accountService: AccountService;
   private readonly maxPollAttempts: number;
   private readonly pollIntervalMs: number;
+  private readonly maxMailboxCreateAttempts: number;
+  private readonly mailboxRetryDelayMs: number;
+  private readonly mailboxMinIntervalMs: number;
+  private mailboxCreateGate: Promise<void> = Promise.resolve();
+  private lastMailboxCreateStartedAt = 0;
 
   constructor(options: RegistrationServiceOptions) {
     this.yydsClient = options.yydsClient;
@@ -146,13 +157,16 @@ export class RegistrationService {
     this.accountService = options.accountService;
     this.maxPollAttempts = options.maxPollAttempts ?? 20;
     this.pollIntervalMs = options.pollIntervalMs ?? 4000;
+    this.maxMailboxCreateAttempts = Math.max(1, options.maxMailboxCreateAttempts ?? 5);
+    this.mailboxRetryDelayMs = Math.max(0, options.mailboxRetryDelayMs ?? 5000);
+    this.mailboxMinIntervalMs = Math.max(0, options.mailboxMinIntervalMs ?? 1200);
   }
 
   /** Full registration pipeline for a single account. */
   async registerOne(): Promise<RegistrationResult> {
     try {
       // 1. Create temp mailbox via YYDS
-      const mailbox = await this.yydsClient.createMailbox();
+      const mailbox = await this.createMailboxWithRetry();
       const email = mailbox.address;
       const mailboxToken = mailbox.token;
 
@@ -304,8 +318,55 @@ export class RegistrationService {
       return { availableBalance: 0, totalBalance: 0 };
     }
   }
+
+  private async createMailboxWithRetry(): Promise<YydsMailbox> {
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= this.maxMailboxCreateAttempts; attempt++) {
+      try {
+        return await this.createMailboxInThrottledSlot();
+      } catch (error) {
+        lastError = error;
+        if (!isMailboxRateLimitError(error) || attempt >= this.maxMailboxCreateAttempts) {
+          throw error;
+        }
+        await sleep(this.mailboxRetryDelayMs * attempt);
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error("YYDS mailbox creation failed");
+  }
+
+  private async createMailboxInThrottledSlot(): Promise<YydsMailbox> {
+    const previousGate = this.mailboxCreateGate;
+    let releaseGate!: () => void;
+    this.mailboxCreateGate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+
+    await previousGate;
+    try {
+      const elapsed = Date.now() - this.lastMailboxCreateStartedAt;
+      const waitMs = this.lastMailboxCreateStartedAt > 0
+        ? Math.max(0, this.mailboxMinIntervalMs - elapsed)
+        : 0;
+      if (waitMs > 0) {
+        await sleep(waitMs);
+      }
+      this.lastMailboxCreateStartedAt = Date.now();
+      return await this.yydsClient.createMailbox();
+    } finally {
+      releaseGate();
+    }
+  }
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isMailboxRateLimitError(error: unknown): boolean {
+  if (error instanceof YydsMailError && error.status === 429) {
+    return true;
+  }
+  return error instanceof Error
+    && /too many account creation requests|rate.?limit|429/i.test(error.message);
 }

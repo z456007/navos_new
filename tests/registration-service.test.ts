@@ -4,6 +4,7 @@ import { AccountService } from "../src/services/account-service.js";
 import { InMemoryAccountStore } from "../src/store/account-store.js";
 import { VipClient } from "../src/protocols/vip-client.js";
 import { YydsMailClient } from "../src/protocols/mail/yyds-mail.js";
+import type { RegistrationServiceOptions } from "../src/services/registration-service.js";
 
 describe("generateCompanyInfo", () => {
   it("generates randomized Chinese company info", () => {
@@ -63,10 +64,22 @@ describe("RegistrationService", () => {
     });
   }
 
-  function buildService(vipFetch: ReturnType<typeof vi.fn>, mailFetch: ReturnType<typeof vi.fn>) {
+  function buildService(
+    vipFetch: ReturnType<typeof vi.fn>,
+    mailFetch: ReturnType<typeof vi.fn>,
+    overrides: Partial<RegistrationServiceOptions> = {}
+  ) {
     const vipClient = new VipClient({ baseUrl: "https://vip.test", hmacSecret: "test-secret-32!!", fetchImpl: vipFetch });
     const yydsClient = new YydsMailClient({ baseUrl: "https://mail.test/v1", apiKey: "ac-test", fetchImpl: mailFetch });
-    const service = new RegistrationService({ yydsClient, vipClient, accountService, maxPollAttempts: 2, pollIntervalMs: 1 });
+    const service = new RegistrationService({
+      yydsClient,
+      vipClient,
+      accountService,
+      maxPollAttempts: 2,
+      pollIntervalMs: 1,
+      mailboxMinIntervalMs: 0,
+      ...overrides
+    });
     return service;
   }
 
@@ -90,6 +103,38 @@ describe("RegistrationService", () => {
       uid: "uid-1", tokenPreview: "tok-...",
       balanceRemaining: 2000, balanceTotal: 2000, status: "active"
     });
+  });
+
+  it("retries YYDS mailbox creation when bulk registration hits rate limits", async () => {
+    let accountCreateAttempts = 0;
+    const mailFetch = vi.fn(async (url: string, init?: RequestInit) => {
+      const u = String(url);
+      if (u.includes("/accounts") && init?.method === "POST") {
+        accountCreateAttempts += 1;
+        if (accountCreateAttempts < 3) {
+          return Response.json(
+            { success: false, error: "Too many account creation requests. Please try again later." },
+            { status: 429 }
+          );
+        }
+        return Response.json({ success: true, data: { address: "retry@mail.test", token: "retry-token" } });
+      }
+      if (u.includes("/messages")) {
+        return Response.json({ data: [{ id: "msg-1", body: "验证码 112233" }] });
+      }
+      return Response.json({ success: true, data: {} });
+    });
+
+    const service = buildService(vipFetchForPipeline({}), mailFetch, {
+      maxMailboxCreateAttempts: 3,
+      mailboxRetryDelayMs: 1
+    });
+
+    const result = await service.registerOne();
+
+    expect(result.success).toBe(true);
+    expect(result.email).toBe("retry@mail.test");
+    expect(accountCreateAttempts).toBe(3);
   });
 
   it("returns success without cert credits when enterprise cert fails", async () => {

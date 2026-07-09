@@ -11,6 +11,7 @@ const MIN_FILL_TARGET = 1;
 const MAX_FILL_TARGET = 500;
 const MIN_FILL_CONCURRENCY = 1;
 const MAX_FILL_CONCURRENCY = 20;
+const SAFE_FILL_BATCH_CONCURRENCY = 2;
 
 export interface RegistrationWorkerOptions {
   redisUrl: string;
@@ -136,7 +137,7 @@ async function processFillRegistration(
       };
     }
 
-    const batchSize = Math.min(data.concurrency, total - started);
+    const batchSize = Math.min(data.concurrency, SAFE_FILL_BATCH_CONCURRENCY, total - started);
     started += batchSize;
     await progress.update(started, completed, failed, total, "info", "fill registration batch started");
 

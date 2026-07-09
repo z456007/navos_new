@@ -69,6 +69,12 @@ interface ProviderAuthContext {
 const CORS_ALLOW_METHODS = "GET,POST,PUT,PATCH,DELETE,OPTIONS";
 const CORS_DEFAULT_ALLOW_HEADERS = "authorization,content-type,x-api-key";
 const CORS_MAX_AGE_SECONDS = "86400";
+const LOCAL_MODEL_IDS = [
+  "openai.gpt-5.5",
+  "claude.sonnet-4.6",
+  "claude.opus-4.8",
+  "claude.opus-4.6"
+];
 
 function headersFromRequest(request: FastifyRequest): HeaderBag {
   const headers: HeaderBag = {};
@@ -118,6 +124,17 @@ function providerResultIndicatesQuotaExhausted(result: ProviderResult): boolean 
     ? result.body
     : JSON.stringify(result.body);
   return /insufficient_balance|积分不足|余额不足/.test(bodyText);
+}
+
+function localModelCatalog() {
+  return {
+    object: "list",
+    data: LOCAL_MODEL_IDS.map((id) => ({
+      id,
+      object: "model",
+      owned_by: "navos"
+    }))
+  };
 }
 
 function normalizeSecretRoot(value: string): string {
@@ -389,6 +406,10 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       return;
     }
     const result = await forwardModelRequest(client, { method: "GET", path: "/v1/models", headers: auth.headers });
+    if (result.status === 404) {
+      await reply.send(localModelCatalog());
+      return;
+    }
     await depleteProviderAccountIfNeeded(auth.account.uid, result);
     await sendProviderResult(reply, result);
   });

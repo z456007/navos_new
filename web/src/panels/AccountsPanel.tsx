@@ -321,10 +321,10 @@ export function AccountsPanel({
             <span>并发数</span>
             <InputNumber
               aria-label="并发数"
-              max={20}
+              max={2}
               min={1}
               value={jobConcurrency}
-              onChange={(value) => setJobConcurrency(clampJobNumber(value, 1, 20))}
+              onChange={(value) => setJobConcurrency(clampJobNumber(value, 1, 2))}
             />
           </label>
         </div>

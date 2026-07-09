@@ -224,6 +224,53 @@ describe("processRegistrationJob", () => {
     });
   });
 
+  it("throttles a large fill concurrency to avoid YYDS account creation rate limits", async () => {
+    const attempts = [
+      deferredResult(success(1)),
+      deferredResult(success(2)),
+      deferredResult(success(3)),
+      deferredResult(success(4)),
+      deferredResult(success(5))
+    ];
+    const attemptQueue = [...attempts];
+    let active = 0;
+    let maxActive = 0;
+    const registrationService = makeRegistrationService({
+      getStats: vi.fn(async () => stats({ activeCount: 0 })),
+      registerOne: vi.fn(() => {
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        const attempt = attemptQueue.shift();
+        if (!attempt) {
+          throw new Error("unexpected registration attempt");
+        }
+        return attempt.promise.finally(() => {
+          active -= 1;
+        });
+      })
+    });
+    const job = makeJob({ mode: "fill", target: 5, concurrency: 10 });
+
+    const processing = processRegistrationJob(job, registrationService);
+
+    await vi.waitFor(() => expect(registrationService.registerOne).toHaveBeenCalledTimes(2));
+    attempts[0].resolve();
+    attempts[1].resolve();
+    await vi.waitFor(() => expect(registrationService.registerOne).toHaveBeenCalledTimes(4));
+    attempts[2].resolve();
+    attempts[3].resolve();
+    await vi.waitFor(() => expect(registrationService.registerOne).toHaveBeenCalledTimes(5));
+    attempts[4].resolve();
+
+    await expect(processing).resolves.toMatchObject({
+      target: 5,
+      started: 5,
+      completed: 5,
+      failed: 0
+    });
+    expect(maxActive).toBeLessThanOrEqual(2);
+  });
+
   it("updates fill progress after a batch starts before registrations resolve", async () => {
     const firstAttempt = deferredResult(success(1));
     const secondAttempt = deferredResult(success(2));

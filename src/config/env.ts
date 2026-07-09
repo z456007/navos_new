@@ -30,6 +30,7 @@ export interface MysqlEnvConfig {
 }
 
 type EnvInput = Record<string, string | undefined>;
+const YYDS_SAFE_REGISTRATION_CONCURRENCY = 2;
 
 function requireEnv(env: EnvInput, name: string): string {
   const value = env[name]?.trim();
@@ -117,7 +118,10 @@ export function loadConfig(env: EnvInput = process.env): AppConfig {
     vipBaseUrl: (env.VIP_BASE_URL?.trim() || "https://navos-mind-server-vip.tec-do.com").replace(/\/+$/, ""),
     vipHmacSecret: requireEnv(env, "VIP_HMAC_SECRET"),
     poolTargetSize: parseNonNegativeInt(env.POOL_TARGET_SIZE, 0),
-    registrationConcurrency: parsePositiveInt(env.REGISTRATION_CONCURRENCY, 5),
+    registrationConcurrency: Math.min(
+      parsePositiveInt(env.REGISTRATION_CONCURRENCY, YYDS_SAFE_REGISTRATION_CONCURRENCY),
+      YYDS_SAFE_REGISTRATION_CONCURRENCY
+    ),
     redisUrl: env.REDIS_URL?.trim() || "redis://127.0.0.1:6379",
     queuePrefix: env.QUEUE_PREFIX?.trim() || "navos",
     registrationJobConcurrency: parsePositiveInt(env.REGISTRATION_JOB_CONCURRENCY, 2),

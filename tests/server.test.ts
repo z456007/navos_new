@@ -226,6 +226,33 @@ describe("server routes", () => {
     expect(authorized.statusCode).toBe(200);
   });
 
+  it("serves the local model catalog when the upstream models endpoint is missing", async () => {
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+      fetchImpl: async () => Response.json({ detail: "Not Found" }, { status: 404 })
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/models",
+      headers: { authorization: "Bearer sk-test" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      object: "list",
+      data: expect.arrayContaining([
+        expect.objectContaining({ id: "openai.gpt-5.5" }),
+        expect.objectContaining({ id: "claude.sonnet-4.6" }),
+        expect.objectContaining({ id: "claude.opus-4.8" }),
+        expect.objectContaining({ id: "claude.opus-4.6" })
+      ])
+    });
+  });
+
   it("handles browser CORS preflight and auth failures without a dev proxy", async () => {
     const app = createApp({
       masterApiKey: "sk-test",

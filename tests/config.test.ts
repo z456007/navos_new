@@ -32,7 +32,7 @@ describe("loadConfig", () => {
     expect(config.vipBaseUrl).toBe("https://navos-mind-server-vip.tec-do.com");
     expect(config.vipHmacSecret).toBe("test-secret-32-chars-long-key!!");
     expect(config.poolTargetSize).toBe(0);
-    expect(config.registrationConcurrency).toBe(5);
+    expect(config.registrationConcurrency).toBe(2);
     expect(config.redisUrl).toBe("redis://127.0.0.1:6380");
     expect(config.queuePrefix).toBe("navos-test");
     expect(config.registrationJobConcurrency).toBe(3);
@@ -65,5 +65,16 @@ describe("loadConfig", () => {
     expect(config.registrationJobConcurrency).toBe(2);
     expect(config.registrationJobRemoveOnComplete).toBe(50);
     expect(config.registrationJobRemoveOnFail).toBe(100);
+  });
+
+  it("caps registration fill concurrency to the YYDS-safe value", () => {
+    const config = loadConfig({
+      MASTER_API_KEY: "sk-test",
+      PROVIDER_BASE_URL: "https://upstream.test",
+      VIP_HMAC_SECRET: "test-secret-32-chars-long-key!!",
+      REGISTRATION_CONCURRENCY: "10"
+    });
+
+    expect(config.registrationConcurrency).toBe(2);
   });
 });
