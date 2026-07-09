@@ -54,7 +54,7 @@ interface VideoTaskRow extends RowDataPacket {
   archive_error: string | null;
   size_bytes: number | null;
   sha256: string | null;
-  raw_json: string | null;
+  raw_json: unknown;
   created_at: number;
   updated_at: number;
   completed_at: number | null;
@@ -228,10 +228,20 @@ function fromRow(row: VideoTaskRow): VideoTaskRecord {
     archiveError: row.archive_error ?? undefined,
     sizeBytes: row.size_bytes ?? undefined,
     sha256: row.sha256 ?? undefined,
-    raw: row.raw_json ? JSON.parse(row.raw_json) : undefined,
+    raw: parseVideoTaskRawJson(row.raw_json),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
     completedAt: row.completed_at === null ? undefined : Number(row.completed_at),
     archivedAt: row.archived_at === null ? undefined : Number(row.archived_at)
   };
+}
+
+export function parseVideoTaskRawJson(value: unknown): unknown | undefined {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    return JSON.parse(value) as unknown;
+  }
+  return value;
 }
