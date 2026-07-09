@@ -426,7 +426,7 @@ describe("admin app gate", () => {
     const fetchMock = vi.fn(async () => Response.json([]));
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<App />);
+    const { container } = render(<App />);
 
     fireEvent.change(screen.getByLabelText("Master API Key"), { target: { value: "sk-local" } });
     fireEvent.click(screen.getByRole("button", { name: "进入控制台" }));
@@ -434,6 +434,7 @@ describe("admin app gate", () => {
     await screen.findByRole("button", { name: "视频生成" });
     fireEvent.click(screen.getByRole("button", { name: "视频生成" }));
 
+    expect(container.querySelector("select")).toBeNull();
     expect(screen.getByText("480P / 15秒")).toBeInTheDocument();
     expect(screen.getByText("720P / 10秒")).toBeInTheDocument();
     expect(screen.getByText("1080P / 5秒")).toBeInTheDocument();

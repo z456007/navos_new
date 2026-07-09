@@ -1,9 +1,9 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
-import { Alert, Button as AntButton, Progress, Space, Tag } from "antd";
+import { Alert, Button as AntButton, InputNumber, Progress, Space, Switch, Tag } from "antd";
 import { Clapperboard, ExternalLink, Film, RefreshCw } from "lucide-react";
 import { apiRequest, errorMessage } from "../api";
 import { JsonBlock, StatusLine } from "../components/feedback";
-import { SelectField, TextField } from "../components/fields";
+import { SelectField, TextAreaField, TextField } from "../components/fields";
 import { defaultVideoPrompt, idleStatus } from "../app/defaults";
 import {
   archiveTone,
@@ -198,15 +198,15 @@ export function VideoPanel({ apiKey }: { apiKey: string }) {
               options={["1:1", "16:9", "9:16", "4:3", "3:4", "21:9", "adaptive"]}
               onChange={(aspectRatio) => setForm((current) => ({ ...current, aspectRatio }))}
             />
-            <label className="text-field">
+            <label className="text-field ant-field">
               <span>时长</span>
-              <input
+              <InputNumber
+                aria-label="时长"
                 max={durationLimit}
                 min={4}
-                type="number"
                 value={form.durationSeconds}
-                onChange={(event) => setForm((current) => {
-                  const nextDuration = Number(event.target.value);
+                onChange={(value) => setForm((current) => {
+                  const nextDuration = typeof value === "number" && Number.isFinite(value) ? value : 4;
                   return {
                     ...current,
                     durationSeconds: Math.min(nextDuration, videoDurationLimit(current.resolution))
@@ -215,18 +215,20 @@ export function VideoPanel({ apiKey }: { apiKey: string }) {
               />
             </label>
           </div>
-          <label className="inline-check">
-            <input
+          <label className="inline-check ant-switch-row">
+            <Switch
+              aria-label="生成音频"
               checked={form.audio}
-              type="checkbox"
-              onChange={(event) => setForm((current) => ({ ...current, audio: event.target.checked }))}
+              onChange={(checked) => setForm((current) => ({ ...current, audio: checked }))}
             />
             <span>生成音频</span>
           </label>
-          <label className="textarea-field video-prompt">
-            <span>提示词</span>
-            <textarea value={form.prompt} onChange={(event) => setForm((current) => ({ ...current, prompt: event.target.value }))} />
-          </label>
+          <TextAreaField
+            className="video-prompt"
+            label="提示词"
+            value={form.prompt}
+            onChange={(prompt) => setForm((current) => ({ ...current, prompt }))}
+          />
           <div className="toolbar flush">
             <AntButton className="create-video-button" disabled={status.kind === "loading"} htmlType="submit" icon={<Clapperboard size={16} />} type="primary">
               创建视频任务
