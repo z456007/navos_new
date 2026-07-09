@@ -715,6 +715,55 @@ describe("server routes", () => {
     expect(await store.get("u1")).toMatchObject({ balanceRemaining: 200, leaseUntil: 0 });
   });
 
+  it("accepts large uploaded reference images instead of rejecting them at the JSON body limit", async () => {
+    const paths: string[] = [];
+    const largeReferenceImage = `data:image/png;base64,${"A".repeat(1_200_000)}`;
+    const store = new InMemoryAccountStore();
+    await store.upsert({ uid: "u1", token: "t1", balanceRemaining: 300, balanceTotal: 300 });
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(store),
+      fetchImpl: async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        paths.push(`${init?.method ?? "GET"} ${path}`);
+        if (path === "/api/tasks/navos-gpt-image-i2i") {
+          expect(init?.body).toBeInstanceOf(FormData);
+          expect((init?.body as FormData).getAll("image")).toHaveLength(1);
+          return Response.json({ code: 200, data: { task_id: "img_large_ref", status: "queued" } });
+        }
+        if (path === "/api/tasks/image/edits/img_large_ref") {
+          return Response.json({ code: 200, data: { status: "succeeded", url: "https://cdn.test/large-ref.png" } });
+        }
+        return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/images/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: {
+        prompt: "turn a large uploaded reference into an icon",
+        images: [largeReferenceImage],
+        n: 1,
+        quality: "low",
+        size: "1024x1024"
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      task_id: "img_large_ref",
+      data: [{ url: "https://cdn.test/large-ref.png" }]
+    });
+    expect(paths).toEqual([
+      "POST /api/tasks/navos-gpt-image-i2i",
+      "GET /api/tasks/image/edits/img_large_ref"
+    ]);
+  });
+
   it("archives successful image outputs to COS when COS is enabled", async () => {
     const cosConfigStore = new InMemoryCosConfigStore();
     const archiveImage = vi.fn(async () => ({

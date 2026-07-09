@@ -79,6 +79,7 @@ interface ProviderAuthContext {
 const CORS_ALLOW_METHODS = "GET,POST,PUT,PATCH,DELETE,OPTIONS";
 const CORS_DEFAULT_ALLOW_HEADERS = "authorization,content-type,x-api-key";
 const CORS_MAX_AGE_SECONDS = "86400";
+const JSON_BODY_LIMIT_BYTES = 64 * 1024 * 1024;
 
 function headersFromRequest(request: FastifyRequest): HeaderBag {
   const headers: HeaderBag = {};
@@ -202,7 +203,7 @@ function normalizeSecretRoot(value: string): string {
 }
 
 export function createApp(options: CreateAppOptions): FastifyInstance {
-  const app = Fastify({ logger: false });
+  const app = Fastify({ logger: false, bodyLimit: JSON_BODY_LIMIT_BYTES });
   const accountService = options.accountService ?? new AccountService(new InMemoryAccountStore(options.defaultAccount));
   const cosConfigStore = options.cosConfigStore ?? new InMemoryCosConfigStore();
   const cosConfigService = new CosConfigService(
