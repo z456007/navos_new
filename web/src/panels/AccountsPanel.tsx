@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+﻿import { useEffect, useRef, useState } from "react";
+import { Button as AntButton, InputNumber, Table, type TableColumnsType } from "antd";
 import { Ban, Play, Power, RefreshCw, Square, Timer } from "lucide-react";
 import { apiRequest, errorMessage } from "../api";
 import { AccountBadge } from "../components/account-badge";
@@ -76,7 +77,7 @@ export function AccountsPanel({
     }
   }
 
-  function clampJobNumber(value: string, min: number, max: number) {
+  function clampJobNumber(value: number | null, min: number, max: number) {
     const next = Number(value);
     if (!Number.isFinite(next)) return min;
     return Math.min(max, Math.max(min, Math.trunc(next)));
@@ -222,6 +223,76 @@ export function AccountsPanel({
     }
   }
 
+  const accountColumns: TableColumnsType<AccountListItem> = [
+    {
+      title: "UID",
+      dataIndex: "uid",
+      render: (uid: string) => <span className="mono" title={uid}>{shortText(uid, 22)}</span>
+    },
+    {
+      title: "Token",
+      dataIndex: "tokenPreview",
+      render: (tokenPreview: string) => <span className="mono">{tokenPreview}</span>
+    },
+    {
+      title: "邮箱",
+      dataIndex: "mailboxAddr",
+      render: (mailboxAddr?: string) => shortText(mailboxAddr, 24)
+    },
+    {
+      title: "剩余额度",
+      key: "balance",
+      render: (_, account) => <span className="mono">{account.balanceRemaining} / {account.balanceTotal}</span>
+    },
+    {
+      title: "状态",
+      dataIndex: "status",
+      render: (_, account) => <AccountBadge account={account} />
+    },
+    {
+      title: "最后使用",
+      dataIndex: "lastUsedAt",
+      render: (lastUsedAt: number) => formatTime(lastUsedAt)
+    },
+    {
+      title: "操作",
+      key: "actions",
+      render: (_, account) => (
+        <div className="row-actions">
+          <AntButton
+            aria-label={`刷新 ${account.uid} 余额`}
+            disabled={refreshingBalanceUid === account.uid}
+            icon={<RefreshCw size={15} />}
+            title="刷新余额"
+            type="text"
+            onClick={() => void refreshAccountBalance(account.uid)}
+          />
+          <AntButton
+            aria-label="启用"
+            icon={<Power size={15} />}
+            title="启用"
+            type="text"
+            onClick={() => void updateAccount(account.uid, "enable")}
+          />
+          <AntButton
+            aria-label="停用"
+            icon={<Ban size={15} />}
+            title="停用"
+            type="text"
+            onClick={() => void updateAccount(account.uid, "disable")}
+          />
+          <AntButton
+            aria-label="冷却"
+            icon={<Timer size={15} />}
+            title="冷却"
+            type="text"
+            onClick={() => void updateAccount(account.uid, "cooldown")}
+          />
+        </div>
+      )
+    }
+  ];
+
   return (
     <section className="panel" aria-labelledby="accounts-title">
       <div className="panel-head">
@@ -229,49 +300,45 @@ export function AccountsPanel({
           <h2 id="accounts-title">账号池</h2>
           <StatusLine status={status} />
         </div>
-        <button className="button" onClick={() => void onRefresh()} type="button">
-          <RefreshCw size={16} aria-hidden="true" />
+        <AntButton icon={<RefreshCw size={16} />} onClick={() => void onRefresh()}>
           刷新
-        </button>
+        </AntButton>
       </div>
 
       <div className="registration-ops" aria-label="注册任务">
         <div className="form-row two compact">
-          <label className="text-field">
+          <label className="text-field ant-field">
             <span>目标数量</span>
-            <input
+            <InputNumber
+              aria-label="目标数量"
               max={500}
               min={1}
-              type="number"
               value={jobTarget}
-              onChange={(event) => setJobTarget(clampJobNumber(event.target.value, 1, 500))}
+              onChange={(value) => setJobTarget(clampJobNumber(value, 1, 500))}
             />
           </label>
-          <label className="text-field">
+          <label className="text-field ant-field">
             <span>并发数</span>
-            <input
+            <InputNumber
+              aria-label="并发数"
               max={20}
               min={1}
-              type="number"
               value={jobConcurrency}
-              onChange={(event) => setJobConcurrency(clampJobNumber(event.target.value, 1, 20))}
+              onChange={(value) => setJobConcurrency(clampJobNumber(value, 1, 20))}
             />
           </label>
         </div>
         <div className="toolbar flush">
-          <button className="button primary" onClick={() => void startRegistrationJob("single")} type="button">
-            <Play size={16} aria-hidden="true" />
+          <AntButton icon={<Play size={16} />} type="primary" onClick={() => void startRegistrationJob("single")}>
             启动单个注册
-          </button>
-          <button className="button" onClick={() => void startRegistrationJob("fill")} type="button">
-            <Play size={16} aria-hidden="true" />
+          </AntButton>
+          <AntButton icon={<Play size={16} />} onClick={() => void startRegistrationJob("fill")}>
             补齐账号池
-          </button>
+          </AntButton>
           {job && !registrationJobIsTerminal(job) && (
-            <button className="button ghost" onClick={() => void cancelRegistrationJob()} type="button">
-              <Square size={16} aria-hidden="true" />
+            <AntButton icon={<Square size={16} />} onClick={() => void cancelRegistrationJob()}>
               取消任务
-            </button>
+            </AntButton>
           )}
         </div>
 
@@ -318,58 +385,16 @@ export function AccountsPanel({
         )}
       </div>
 
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>UID</th>
-              <th>Token</th>
-              <th>邮箱</th>
-              <th>剩余额度</th>
-              <th>状态</th>
-              <th>最后使用</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {accounts.length === 0 ? (
-              <tr><td className="empty" colSpan={7}>暂无账号</td></tr>
-            ) : accounts.map((account) => (
-              <tr key={account.uid}>
-                <td className="mono" title={account.uid}>{shortText(account.uid, 22)}</td>
-                <td className="mono">{account.tokenPreview}</td>
-                <td>{shortText(account.mailboxAddr, 24)}</td>
-                <td className="mono">{account.balanceRemaining} / {account.balanceTotal}</td>
-                <td><AccountBadge account={account} /></td>
-                <td>{formatTime(account.lastUsedAt)}</td>
-                <td>
-                  <div className="row-actions">
-                    <button
-                      aria-label={`刷新 ${account.uid} 余额`}
-                      className="icon-button"
-                      disabled={refreshingBalanceUid === account.uid}
-                      onClick={() => void refreshAccountBalance(account.uid)}
-                      title="刷新余额"
-                      type="button"
-                    >
-                      <RefreshCw size={15} aria-hidden="true" />
-                    </button>
-                    <button className="icon-button" onClick={() => void updateAccount(account.uid, "enable")} title="启用" type="button">
-                      <Power size={15} aria-hidden="true" />
-                    </button>
-                    <button className="icon-button" onClick={() => void updateAccount(account.uid, "disable")} title="停用" type="button">
-                      <Ban size={15} aria-hidden="true" />
-                    </button>
-                    <button className="icon-button" onClick={() => void updateAccount(account.uid, "cooldown")} title="冷却" type="button">
-                      <Timer size={15} aria-hidden="true" />
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <Table<AccountListItem>
+        className="accounts-table"
+        columns={accountColumns}
+        dataSource={accounts}
+        locale={{ emptyText: "暂无账号" }}
+        pagination={false}
+        rowKey="uid"
+        scroll={{ x: 900 }}
+        size="middle"
+      />
     </section>
   );
 }

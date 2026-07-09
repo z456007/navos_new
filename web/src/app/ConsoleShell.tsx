@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { Button as AntButton } from "antd";
 import {
   Activity,
   Clapperboard,
@@ -65,10 +66,9 @@ export function ConsoleShell({
             代理测试
           </NavButton>
         </nav>
-        <button className="button ghost sidebar-exit" onClick={onSignOut} type="button">
-          <LogOut size={16} aria-hidden="true" />
+        <AntButton className="sidebar-exit" icon={<LogOut size={16} />} onClick={onSignOut}>
           退出
-        </button>
+        </AntButton>
       </aside>
 
       <main className="workspace">
@@ -77,10 +77,9 @@ export function ConsoleShell({
             <p className="eyebrow">Navos 控制台</p>
             <h1>{panelTitle(activePanel)}</h1>
           </div>
-          <button className="button" onClick={() => void onRefreshAccounts()} type="button">
-            <RefreshCw size={16} aria-hidden="true" />
+          <AntButton icon={<RefreshCw size={16} />} onClick={() => void onRefreshAccounts()}>
             刷新账号
-          </button>
+          </AntButton>
         </header>
 
         <section className="metrics" aria-label="账号概览">

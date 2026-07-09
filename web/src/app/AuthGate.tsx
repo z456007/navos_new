@@ -1,4 +1,5 @@
 import { type FormEvent, useEffect, useState } from "react";
+import { Button as AntButton, Input } from "antd";
 import { KeyRound, ShieldCheck } from "lucide-react";
 import { StatusLine } from "../components/feedback";
 import type { StatusState } from "../types";
@@ -34,18 +35,17 @@ export function AuthGate({
         <form className="gate-form" onSubmit={submit}>
           <label>
             <span>Master API Key</span>
-            <input
+            <Input.Password
+              aria-label="Master API Key"
               autoComplete="off"
               autoFocus
               onChange={(event) => setValue(event.target.value)}
-              type="password"
               value={value}
             />
           </label>
-          <button className="button primary" disabled={status.kind === "loading"} type="submit">
-            <KeyRound size={16} aria-hidden="true" />
+          <AntButton disabled={status.kind === "loading"} htmlType="submit" icon={<KeyRound size={16} />} type="primary">
             进入控制台
-          </button>
+          </AntButton>
           <StatusLine status={status} />
         </form>
       </section>

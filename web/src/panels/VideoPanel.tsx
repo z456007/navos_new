@@ -265,10 +265,9 @@ export function VideoPanel({ apiKey }: { apiKey: string }) {
 
           <div className="toolbar flush">
             {previewUrl && (
-              <a className="button" href={previewUrl} rel="noreferrer" target="_blank">
-                <ExternalLink size={16} aria-hidden="true" />
+              <AntButton href={previewUrl} icon={<ExternalLink size={16} />} rel="noreferrer" target="_blank">
                 打开视频
-              </a>
+              </AntButton>
             )}
           </div>
 

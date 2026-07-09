@@ -1,4 +1,5 @@
 import { type FormEvent, useEffect, useState } from "react";
+import { Button as AntButton, Switch } from "antd";
 import { Cloud } from "lucide-react";
 import { apiRequest, errorMessage } from "../api";
 import { StatusLine } from "../components/feedback";
@@ -75,11 +76,11 @@ export function CosConfigPanel({ apiKey }: { apiKey: string }) {
       </div>
 
       <form className="cos-form" onSubmit={saveConfig}>
-        <label className="inline-check cos-enabled">
-          <input
+        <label className="inline-check ant-switch-row cos-enabled">
+          <Switch
+            aria-label="启用视频归档"
             checked={form.enabled}
-            type="checkbox"
-            onChange={(event) => setForm((current) => ({ ...current, enabled: event.target.checked }))}
+            onChange={(enabled) => setForm((current) => ({ ...current, enabled }))}
           />
           <span>启用视频归档</span>
         </label>
@@ -107,10 +108,9 @@ export function CosConfigPanel({ apiKey }: { apiKey: string }) {
         </div>
 
         <div className="toolbar flush">
-          <button className="button primary" disabled={status.kind === "loading"} type="submit">
-            <Cloud size={16} aria-hidden="true" />
+          <AntButton disabled={status.kind === "loading"} htmlType="submit" icon={<Cloud size={16} />} type="primary">
             保存COS配置
-          </button>
+          </AntButton>
         </div>
       </form>
     </section>

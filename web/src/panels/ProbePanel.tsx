@@ -1,7 +1,9 @@
 import { useState } from "react";
+import { Button as AntButton } from "antd";
 import { MessageSquare, Send } from "lucide-react";
 import { apiRequest, errorMessage } from "../api";
 import { JsonBlock, StatusLine } from "../components/feedback";
+import { TextAreaField } from "../components/fields";
 import { idleStatus, initialChatPayload, initialMessagesPayload } from "../app/defaults";
 import type { AccountListItem, StatusState } from "../types";
 
@@ -50,24 +52,16 @@ export function ProbePanel({
         </div>
       </div>
       <div className="probe-grid">
-        <label className="textarea-field">
-          <span>/v1/messages payload</span>
-          <textarea value={messagesPayload} onChange={(event) => setMessagesPayload(event.target.value)} />
-        </label>
-        <label className="textarea-field">
-          <span>/v1/chat/completions payload</span>
-          <textarea value={chatPayload} onChange={(event) => setChatPayload(event.target.value)} />
-        </label>
+        <TextAreaField label="/v1/messages payload" value={messagesPayload} onChange={setMessagesPayload} />
+        <TextAreaField label="/v1/chat/completions payload" value={chatPayload} onChange={setChatPayload} />
       </div>
       <div className="toolbar">
-        <button className="button primary" onClick={() => void runProbe("/v1/messages", messagesPayload)} type="button">
-          <Send size={16} aria-hidden="true" />
+        <AntButton icon={<Send size={16} />} type="primary" onClick={() => void runProbe("/v1/messages", messagesPayload)}>
           测试 messages
-        </button>
-        <button className="button" onClick={() => void runProbe("/v1/chat/completions", chatPayload)} type="button">
-          <MessageSquare size={16} aria-hidden="true" />
+        </AntButton>
+        <AntButton icon={<MessageSquare size={16} />} onClick={() => void runProbe("/v1/chat/completions", chatPayload)}>
           测试 chat
-        </button>
+        </AntButton>
       </div>
       <JsonBlock value={result} />
     </section>
