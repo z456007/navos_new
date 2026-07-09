@@ -72,7 +72,7 @@ export class YydsMailClient {
       headers: this.headers({ token: auth.token }),
       address: auth.address
     });
-    return Array.isArray(data) ? data : [];
+    return normalizeMessageList(data);
   }
 
   async getMessage(messageId: string, auth: YydsMailboxAuth): Promise<unknown> {
@@ -176,6 +176,29 @@ function unwrapData(value: unknown): unknown {
   return value;
 }
 
+function normalizeMessageList(value: unknown): unknown[] {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+  const record = value as Record<string, unknown>;
+  for (const key of ["messages", "items", "list", "rows", "data"]) {
+    const candidate = record[key];
+    if (Array.isArray(candidate)) {
+      return candidate;
+    }
+    if (candidate && typeof candidate === "object") {
+      const nested = normalizeMessageList(candidate);
+      if (nested.length > 0) {
+        return nested;
+      }
+    }
+  }
+  return [];
+}
+
 function errorMessage(parsed: unknown, raw: string): string {
   if (parsed && typeof parsed === "object") {
     const record = parsed as Record<string, unknown>;
@@ -210,7 +233,7 @@ function collectText(value: unknown): string {
   }
   if (value && typeof value === "object") {
     const record = value as Record<string, unknown>;
-    return ["text", "html", "body", "content", "subject", "summary"]
+    return ["text", "textBody", "html", "htmlBody", "body", "content", "subject", "summary", "snippet"]
       .map((key) => collectText(record[key]))
       .join("\n");
   }
@@ -225,4 +248,3 @@ export function extractVerificationCode(value: unknown): string | undefined {
   }
   return /\b(\d{6})\b/.exec(text)?.[1];
 }
-

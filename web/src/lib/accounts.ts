@@ -11,6 +11,9 @@ export function accountMetrics(accounts: AccountListItem[]) {
 }
 
 export function panelTitle(panel: PanelId): string {
+  if (panel === "chat") {
+    return "聊天";
+  }
   if (panel === "yydsConfig") {
     return "YYDS配置";
   }

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../web/src/App";
@@ -68,6 +68,91 @@ describe("admin app gate", () => {
     expect(screen.queryByRole("button", { name: "导入账号" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("UID")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("邮箱 Token")).not.toBeInTheDocument();
+  });
+
+  it("puts config navigation at the bottom and adds a chat menu", async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });
+      const path = String(url);
+      if (path === "/api/accounts") {
+        return Response.json([]);
+      }
+      if (path === "/api/registration/jobs" && init?.method === "GET") {
+        return Response.json([]);
+      }
+      return Response.json({ error: { message: "unexpected path" } }, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("Master API Key"), { target: { value: "sk-local" } });
+    fireEvent.click(screen.getByRole("button", { name: "进入控制台" }));
+
+    const primaryNav = await screen.findByLabelText("主功能菜单");
+    const configNav = screen.getByLabelText("配置菜单");
+
+    expect(within(primaryNav).getByRole("button", { name: "账号池" })).toBeInTheDocument();
+    expect(within(primaryNav).getByRole("button", { name: "聊天" })).toBeInTheDocument();
+    expect(within(primaryNav).getByRole("button", { name: "视频生成" })).toBeInTheDocument();
+    expect(within(primaryNav).queryByRole("button", { name: "YYDS配置" })).not.toBeInTheDocument();
+    expect(within(configNav).getByRole("button", { name: "YYDS配置" })).toBeInTheDocument();
+    expect(within(configNav).getByRole("button", { name: "COS配置" })).toBeInTheDocument();
+  });
+
+  it("sends chat messages with the selected model from the console", async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });
+      const path = String(url);
+      if (path === "/api/accounts") {
+        return Response.json([]);
+      }
+      if (path === "/api/registration/jobs" && init?.method === "GET") {
+        return Response.json([]);
+      }
+      if (path === "/v1/models" && init?.method === "GET") {
+        return Response.json({
+          data: [
+            { id: "openai.gpt-5.5" },
+            { id: "claude.sonnet-4.6" }
+          ]
+        });
+      }
+      if (path === "/v1/chat/completions" && init?.method === "POST") {
+        const payload = JSON.parse(String(init.body));
+        expect(payload).toMatchObject({
+          model: "claude.sonnet-4.6",
+          stream: false,
+          messages: [{ role: "user", content: "你好，介绍一下自己" }]
+        });
+        return Response.json({
+          choices: [
+            { message: { role: "assistant", content: "你好，我是 Navos 聊天助手。" } }
+          ]
+        });
+      }
+      return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("Master API Key"), { target: { value: "sk-local" } });
+    fireEvent.click(screen.getByRole("button", { name: "进入控制台" }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "聊天" }));
+    await screen.findByRole("heading", { name: "聊天" });
+
+    fireEvent.mouseDown(screen.getByLabelText("模型"));
+    fireEvent.click(await screen.findByRole("option", { name: "claude.sonnet-4.6" }));
+    fireEvent.change(screen.getByLabelText("输入消息"), {
+      target: { value: "你好，介绍一下自己" }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    await screen.findByText("你好，我是 Navos 聊天助手。");
+    expect(fetchMock).toHaveBeenCalledWith("/v1/models", expect.objectContaining({ method: "GET" }));
+    expect(fetchMock).toHaveBeenCalledWith("/v1/chat/completions", expect.objectContaining({ method: "POST" }));
   });
 
   it("refreshes a row balance from the account pool", async () => {

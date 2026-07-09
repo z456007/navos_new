@@ -59,6 +59,48 @@ describe("YydsMailClient", () => {
     ]);
   });
 
+  it("unwraps YYDS message container shapes used by the live protocol", async () => {
+    const client = new YydsMailClient({
+      baseUrl: "https://mail.test/v1",
+      apiKey: "ac-test",
+      fetchImpl: async () => Response.json({
+        success: true,
+        data: {
+          messages: [
+            { id: "msg_1", subject: "验证码" }
+          ]
+        }
+      })
+    });
+
+    await expect(client.listMessages({ address: "a@mail.test", token: "mail-token" }))
+      .resolves.toEqual([{ id: "msg_1", subject: "验证码" }]);
+  });
+
+  it("finds verification codes from YYDS detail fields used by the live protocol", async () => {
+    const client = new YydsMailClient({
+      baseUrl: "https://mail.test/v1",
+      apiKey: "ac-test",
+      fetchImpl: async (url) => {
+        if (String(url).includes("/messages/msg_1")) {
+          return Response.json({
+            success: true,
+            data: { id: "msg_1", textBody: "您的验证码是 654321，5 分钟内有效。" }
+          });
+        }
+        return Response.json({
+          success: true,
+          data: {
+            messages: [{ id: "msg_1", subject: "登录确认" }]
+          }
+        });
+      }
+    });
+
+    await expect(client.findVerificationCode({ address: "a@mail.test", token: "mail-token" }))
+      .resolves.toMatchObject({ code: "654321" });
+  });
+
   it("raises a typed error for YYDS failure responses", async () => {
     const client = new YydsMailClient({
       baseUrl: "https://mail.test/v1",
@@ -76,8 +118,13 @@ describe("extractVerificationCode", () => {
     expect(extractVerificationCode("verification code: 527100")).toBe("527100");
   });
 
+  it("extracts verification codes from YYDS textBody, htmlBody, and snippet fields", () => {
+    expect(extractVerificationCode({ textBody: "验证码：123456" })).toBe("123456");
+    expect(extractVerificationCode({ htmlBody: "<p>verification code: 234567</p>" })).toBe("234567");
+    expect(extractVerificationCode({ snippet: "动态码 345678" })).toBe("345678");
+  });
+
   it("returns undefined when no code is present", () => {
     expect(extractVerificationCode("welcome to navos")).toBeUndefined();
   });
 });
-

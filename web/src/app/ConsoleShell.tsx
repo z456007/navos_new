@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { Button as AntButton } from "antd";
 import {
   Activity,
+  Bot,
   Clapperboard,
   Cloud,
   Inbox,
@@ -14,6 +15,7 @@ import { Metric } from "../components/metric";
 import { NavButton } from "../components/nav-button";
 import { accountMetrics, panelTitle } from "../lib/accounts";
 import { AccountsPanel } from "../panels/AccountsPanel";
+import { ChatPanel } from "../panels/ChatPanel";
 import { CosConfigPanel } from "../panels/CosConfigPanel";
 import { ProbePanel } from "../panels/ProbePanel";
 import { VideoPanel } from "../panels/VideoPanel";
@@ -49,23 +51,30 @@ export function ConsoleShell({
             <span>protocol desk</span>
           </div>
         </div>
-        <nav className="nav-list" aria-label="管理面板">
-          <NavButton active={activePanel === "accounts"} icon={<Inbox size={17} />} onClick={() => onPanelChange("accounts")}>
-            账号池
-          </NavButton>
-          <NavButton active={activePanel === "yydsConfig"} icon={<KeyRound size={17} />} onClick={() => onPanelChange("yydsConfig")}>
-            YYDS配置
-          </NavButton>
-          <NavButton active={activePanel === "video"} icon={<Clapperboard size={17} />} onClick={() => onPanelChange("video")}>
-            视频生成
-          </NavButton>
-          <NavButton active={activePanel === "cos"} icon={<Cloud size={17} />} onClick={() => onPanelChange("cos")}>
-            COS配置
-          </NavButton>
-          <NavButton active={activePanel === "probe"} icon={<MessageSquare size={17} />} onClick={() => onPanelChange("probe")}>
-            代理测试
-          </NavButton>
-        </nav>
+        <div className="sidebar-navs">
+          <nav className="nav-list primary-nav" aria-label="主功能菜单">
+            <NavButton active={activePanel === "accounts"} icon={<Inbox size={17} />} onClick={() => onPanelChange("accounts")}>
+              账号池
+            </NavButton>
+            <NavButton active={activePanel === "chat"} icon={<Bot size={17} />} onClick={() => onPanelChange("chat")}>
+              聊天
+            </NavButton>
+            <NavButton active={activePanel === "video"} icon={<Clapperboard size={17} />} onClick={() => onPanelChange("video")}>
+              视频生成
+            </NavButton>
+            <NavButton active={activePanel === "probe"} icon={<MessageSquare size={17} />} onClick={() => onPanelChange("probe")}>
+              代理测试
+            </NavButton>
+          </nav>
+          <nav className="nav-list config-nav" aria-label="配置菜单">
+            <NavButton active={activePanel === "yydsConfig"} icon={<KeyRound size={17} />} onClick={() => onPanelChange("yydsConfig")}>
+              YYDS配置
+            </NavButton>
+            <NavButton active={activePanel === "cos"} icon={<Cloud size={17} />} onClick={() => onPanelChange("cos")}>
+              COS配置
+            </NavButton>
+          </nav>
+        </div>
         <AntButton className="sidebar-exit" icon={<LogOut size={16} />} onClick={onSignOut}>
           退出
         </AntButton>
@@ -97,6 +106,7 @@ export function ConsoleShell({
             onRefresh={onRefreshAccounts}
           />
         )}
+        {activePanel === "chat" && <ChatPanel apiKey={apiKey} />}
         {activePanel === "yydsConfig" && <YydsMailConfigPanel apiKey={apiKey} />}
         {activePanel === "video" && <VideoPanel apiKey={apiKey} />}
         {activePanel === "cos" && <CosConfigPanel apiKey={apiKey} />}
