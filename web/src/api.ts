@@ -1,4 +1,9 @@
 export const ADMIN_KEY_STORAGE = "navos.admin.apiKey";
+const DEFAULT_DEV_API_BASE_URL = "http://127.0.0.1:18888";
+const configuredApiBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim();
+const API_BASE_URL = (
+  configuredApiBaseUrl || (import.meta.env.MODE === "development" ? DEFAULT_DEV_API_BASE_URL : "")
+).replace(/\/+$/, "");
 
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) {
@@ -20,7 +25,7 @@ export async function apiRequest<T>(
     headers["content-type"] = "application/json";
   }
 
-  const response = await fetch(path, {
+  const response = await fetch(apiUrl(path), {
     ...init,
     headers
   });
@@ -38,6 +43,16 @@ export async function apiRequest<T>(
   }
 
   return body as T;
+}
+
+function apiUrl(path: string): string {
+  if (/^https?:\/\//i.test(path)) {
+    return path;
+  }
+  if (!API_BASE_URL) {
+    return path;
+  }
+  return `${API_BASE_URL}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
 export function errorMessage(error: unknown): string | undefined {

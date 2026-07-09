@@ -64,6 +64,10 @@ interface ProviderAuthContext {
   headers: Record<string, string>;
 }
 
+const CORS_ALLOW_METHODS = "GET,POST,PUT,PATCH,DELETE,OPTIONS";
+const CORS_DEFAULT_ALLOW_HEADERS = "authorization,content-type,x-api-key";
+const CORS_MAX_AGE_SECONDS = "86400";
+
 function headersFromRequest(request: FastifyRequest): HeaderBag {
   const headers: HeaderBag = {};
   for (const [key, value] of Object.entries(request.headers)) {
@@ -72,6 +76,26 @@ function headersFromRequest(request: FastifyRequest): HeaderBag {
     }
   }
   return headers;
+}
+
+function headerString(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value.join(",") : value;
+}
+
+function applyCorsHeaders(request: FastifyRequest, reply: FastifyReply): void {
+  const origin = headerString(request.headers.origin);
+  if (!origin) {
+    return;
+  }
+
+  reply.header("access-control-allow-origin", origin);
+  reply.header("vary", "Origin");
+  reply.header("access-control-allow-methods", CORS_ALLOW_METHODS);
+  reply.header(
+    "access-control-allow-headers",
+    headerString(request.headers["access-control-request-headers"]) ?? CORS_DEFAULT_ALLOW_HEADERS
+  );
+  reply.header("access-control-max-age", CORS_MAX_AGE_SECONDS);
 }
 
 function bodyRecord(request: FastifyRequest): Record<string, unknown> {
@@ -118,6 +142,13 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
   const archiveVideo = options.archiveVideo ?? ((input: { taskId: string; sourceUrl: string; config: EnabledCosConfig }) =>
     archiveVideoToCos({ ...input, fetchImpl: options.fetchImpl }));
   const client = new ProviderHttpClient(options.providerBaseUrl, options.fetchImpl);
+
+  app.addHook("onRequest", async (request, reply) => {
+    applyCorsHeaders(request, reply);
+    if (request.method === "OPTIONS") {
+      await reply.status(204).send();
+    }
+  });
 
   function requireLocalAuth(request: FastifyRequest, reply: FastifyReply): boolean {
     if (isClientAuthorized(headersFromRequest(request), options.masterApiKey)) {

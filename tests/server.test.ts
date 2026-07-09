@@ -226,6 +226,41 @@ describe("server routes", () => {
     expect(authorized.statusCode).toBe(200);
   });
 
+  it("handles browser CORS preflight and auth failures without a dev proxy", async () => {
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+      fetchImpl: async () => Response.json({ ok: true })
+    });
+
+    const origin = "http://127.0.0.1:15173";
+    const preflight = await app.inject({
+      method: "OPTIONS",
+      url: "/api/mail/yyds/config",
+      headers: {
+        origin,
+        "access-control-request-method": "GET",
+        "access-control-request-headers": "authorization,content-type"
+      }
+    });
+
+    expect(preflight.statusCode).toBe(204);
+    expect(preflight.headers["access-control-allow-origin"]).toBe(origin);
+    expect(String(preflight.headers["access-control-allow-methods"])).toContain("GET");
+    expect(String(preflight.headers["access-control-allow-headers"]).toLowerCase()).toContain("authorization");
+    expect(String(preflight.headers["access-control-allow-headers"]).toLowerCase()).toContain("content-type");
+
+    const unauthorized = await app.inject({
+      method: "GET",
+      url: "/api/mail/yyds/config",
+      headers: { origin }
+    });
+    expect(unauthorized.statusCode).toBe(401);
+    expect(unauthorized.headers["access-control-allow-origin"]).toBe(origin);
+  });
+
   it("protects and serves yyds mailbox creation", async () => {
     const app = createApp({
       masterApiKey: "sk-test",

@@ -13,4 +13,14 @@ describe("web dev entry", () => {
     expect(html).toContain('type="module"');
     expect(html).toContain('/web/src/main.tsx');
   });
+
+  it("opens the admin app without proxying backend APIs in dev", () => {
+    const configPath = resolve(process.cwd(), "vite.config.ts");
+    const config = readFileSync(configPath, "utf8");
+
+    expect(config).toContain("open: true");
+    expect(config).toContain("port: 15173");
+    expect(config).not.toContain("proxy:");
+    expect(config).not.toContain('target: "http://127.0.0.1:18888"');
+  });
 });
