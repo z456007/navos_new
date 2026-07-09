@@ -241,7 +241,7 @@ describe("admin app gate", () => {
     await screen.findByRole("button", { name: "视频生成" });
     fireEvent.click(screen.getByRole("button", { name: "视频生成" }));
 
-    fireEvent.change(screen.getByLabelText("提示词"), {
+    fireEvent.change(screen.getByLabelText("任务描述"), {
       target: { value: "原创极简动画短片：白色机器人在桌面挥手。" }
     });
     fireEvent.click(screen.getByRole("button", { name: "创建视频任务" }));
@@ -277,7 +277,7 @@ describe("admin app gate", () => {
           audioRoles: ["reference_audio"],
           audio: true
         });
-        expect(payload.prompt).toContain("参考文字：keep the same character");
+        expect(payload.prompt).toContain("keep the same character");
         return Response.json({
           code: 200,
           data: { task_id: "task_ref", status: "deducted" }
@@ -303,7 +303,7 @@ describe("admin app gate", () => {
     await screen.findByRole("button", { name: "视频生成" });
     fireEvent.click(screen.getByRole("button", { name: "视频生成" }));
 
-    fireEvent.change(screen.getByLabelText("文字参考"), {
+    fireEvent.change(screen.getByLabelText("任务描述"), {
       target: { value: "keep the same character" }
     });
     fireEvent.change(screen.getByLabelText("图片参考 URL（每行一个）"), {

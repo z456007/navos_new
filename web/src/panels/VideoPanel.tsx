@@ -1,11 +1,11 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
-import { Alert, Button as AntButton, Card, InputNumber, Progress, Select, Space, Switch, Tag, Upload } from "antd";
+import { Alert, Button as AntButton, Card, Input, InputNumber, Progress, Select, Space, Switch, Tag, Upload } from "antd";
 import type { UploadFile } from "antd/es/upload/interface";
-import { Clapperboard, ExternalLink, Film, RefreshCw } from "lucide-react";
+import { Clapperboard, ExternalLink, Film, ImageIcon, Link2, Music2, RefreshCw, UploadCloud } from "lucide-react";
 import { apiRequest, errorMessage } from "../api";
 import { JsonBlock, StatusLine } from "../components/feedback";
-import { SelectField, TextAreaField, TextField } from "../components/fields";
-import { defaultVideoPrompt, idleStatus } from "../app/defaults";
+import { SelectField, TextField } from "../components/fields";
+import { idleStatus } from "../app/defaults";
 import {
   buildVideoGenerationPayload,
   parseReferenceUrls,
@@ -23,7 +23,7 @@ import type { StatusState, VideoTaskView } from "../types";
 export function VideoPanel({ apiKey }: { apiKey: string }) {
   const [form, setForm] = useState({
     model: "navos/doubao-seedance-2-0-260128",
-    prompt: defaultVideoPrompt,
+    prompt: "",
     resolution: "720P",
     aspectRatio: "1:1",
     durationSeconds: 5,
@@ -33,7 +33,6 @@ export function VideoPanel({ apiKey }: { apiKey: string }) {
   const [task, setTask] = useState<VideoTaskView | undefined>();
   const [result, setResult] = useState<unknown>("等待创建任务");
   const [events, setEvents] = useState<string[]>([]);
-  const [referenceText, setReferenceText] = useState("");
   const [referenceUrls, setReferenceUrls] = useState({ images: "", videos: "", audios: "" });
   const [referenceRoles, setReferenceRoles] = useState({
     image: "reference_image",
@@ -69,7 +68,7 @@ export function VideoPanel({ apiKey }: { apiKey: string }) {
     clearPolling();
     const prompt = form.prompt.trim();
     if (!prompt) {
-      setStatus({ kind: "error", message: "提示词不能为空" });
+      setStatus({ kind: "error", message: "任务描述不能为空" });
       return;
     }
     if (form.durationSeconds > durationLimit) {
@@ -122,12 +121,7 @@ export function VideoPanel({ apiKey }: { apiKey: string }) {
       ...await filesToReferences(audioFiles, referenceRoles.audio)
     ].slice(0, 3);
 
-    return {
-      referenceText,
-      images,
-      videos,
-      audios
-    };
+    return { images, videos, audios };
   }
 
   async function pollTask(taskId = task?.id) {
@@ -213,6 +207,17 @@ export function VideoPanel({ apiKey }: { apiKey: string }) {
             title="生成前会自动准备一个一次性账号"
             description="账号池没有可用账号时会自动注册；每个账号只用于一个视频任务。"
           />
+          <label className="video-brief-field">
+            <span>任务描述</span>
+            <Input
+              aria-label="任务描述"
+              autoComplete="off"
+              placeholder="一句话说明画面、动作和风格；参考图/视频/音频放下面素材通道。"
+              size="large"
+              value={form.prompt}
+              onChange={(event) => setForm((current) => ({ ...current, prompt: event.target.value }))}
+            />
+          </label>
           <TextField label="模型" value={form.model} onChange={(model) => setForm((current) => ({ ...current, model }))} />
           <div className="form-row three compact">
             <SelectField
@@ -259,29 +264,23 @@ export function VideoPanel({ apiKey }: { apiKey: string }) {
             />
             <span>生成音频</span>
           </label>
-          <TextAreaField
-            className="video-prompt"
-            label="提示词"
-            value={form.prompt}
-            onChange={(prompt) => setForm((current) => ({ ...current, prompt }))}
-          />
           <Card
             className="video-reference-card"
             size="small"
-            title="全能参考素材"
-            extra={<Tag color="processing">自动上传</Tag>}
+            title={(
+              <div className="reference-card-title">
+                <span>全能参考素材</span>
+                <small>图片 / 视频 / 音频提交时自动上传并写入协议</small>
+              </div>
+            )}
+            extra={<Tag className="reference-auto-tag" color="processing">自动上传</Tag>}
           >
-            <TextAreaField
-              className="video-reference-text"
-              label="文字参考"
-              value={referenceText}
-              onChange={setReferenceText}
-            />
             <div className="reference-grid">
               <ReferenceColumn
                 accept="image/*"
                 count={`${imageRefCount}/9`}
                 fileList={imageFiles}
+                kind="image"
                 label="图片参考"
                 role={referenceRoles.image}
                 roleOptions={["reference_image", "first_frame", "last_frame"]}
@@ -295,6 +294,7 @@ export function VideoPanel({ apiKey }: { apiKey: string }) {
                 accept="video/*"
                 count={`${videoRefCount}/3`}
                 fileList={videoFiles}
+                kind="video"
                 label="视频参考"
                 role={referenceRoles.video}
                 roleOptions={["reference_video"]}
@@ -308,6 +308,7 @@ export function VideoPanel({ apiKey }: { apiKey: string }) {
                 accept="audio/*"
                 count={`${audioRefCount}/3`}
                 fileList={audioFiles}
+                kind="audio"
                 label="音频参考"
                 role={referenceRoles.audio}
                 roleOptions={["reference_audio"]}
@@ -376,6 +377,7 @@ function ReferenceColumn({
   accept,
   count,
   fileList,
+  kind,
   label,
   onFilesChange,
   onRoleChange,
@@ -388,6 +390,7 @@ function ReferenceColumn({
   accept: string;
   count: string;
   fileList: UploadFile[];
+  kind: "image" | "video" | "audio";
   label: string;
   onFilesChange: (files: UploadFile[]) => void;
   onRoleChange: (role: string) => void;
@@ -397,37 +400,84 @@ function ReferenceColumn({
   urlsLabel: string;
   urlsValue: string;
 }) {
+  const Icon = {
+    image: ImageIcon,
+    video: Film,
+    audio: Music2
+  }[kind];
+  const helperText = {
+    image: "角色 / 首帧 / 尾帧，最多 9 个",
+    video: "动作或运镜参考，最多 3 个",
+    audio: "音乐或声音参考，最多 3 个"
+  }[kind];
+
   return (
-    <div className="reference-column">
+    <div className={`reference-column reference-${kind}`}>
       <div className="reference-column-head">
-        <strong>{label}</strong>
-        <Tag>{count}</Tag>
+        <span className="reference-icon" aria-hidden="true">
+          <Icon size={17} />
+        </span>
+        <div className="reference-title-stack">
+          <strong>{label}</strong>
+          <span>{helperText}</span>
+        </div>
+        <Tag className="reference-count">{count}</Tag>
       </div>
-      <label className="text-field ant-field">
-        <span>{label}角色</span>
-        <Select
-          aria-label={`${label}角色`}
-          options={roleOptions.map((option) => ({ label: option, value: option }))}
-          popupMatchSelectWidth={false}
-          value={role}
-          onChange={onRoleChange}
-        />
-      </label>
-      <TextAreaField
-        className="reference-url-field"
-        label={urlsLabel}
-        value={urlsValue}
-        onChange={onUrlsChange}
-      />
-      <Upload
-        accept={accept}
-        beforeUpload={() => false}
-        fileList={fileList}
-        multiple
-        onChange={({ fileList: nextFiles }) => onFilesChange(nextFiles)}
-      >
-        <AntButton htmlType="button">选择{label}文件</AntButton>
-      </Upload>
+      <div className="reference-column-body">
+        <div className="reference-url-shell">
+          <Link2 size={14} aria-hidden="true" />
+          <Input.TextArea
+            aria-label={urlsLabel}
+            className="reference-url-input"
+            autoSize={{ minRows: 1, maxRows: 3 }}
+            placeholder={`${label} URL，每行一个`}
+            value={urlsValue}
+            onChange={(event) => onUrlsChange(event.target.value)}
+          />
+        </div>
+        <div className="reference-actions">
+          {roleOptions.length > 1 ? (
+            <Select
+              aria-label={`${label}角色`}
+              className="reference-role-select"
+              options={roleOptions.map((option) => ({ label: option, value: option }))}
+              popupMatchSelectWidth={false}
+              size="small"
+              value={role}
+              onChange={onRoleChange}
+            />
+          ) : (
+            <Tag className="reference-role-badge">{role}</Tag>
+          )}
+          <Upload
+            accept={accept}
+            beforeUpload={() => false}
+            fileList={fileList}
+            multiple
+            showUploadList={false}
+            onChange={({ fileList: nextFiles }) => onFilesChange(nextFiles)}
+          >
+            <AntButton htmlType="button" icon={<UploadCloud size={14} />} size="small">
+              添加{label}
+            </AntButton>
+          </Upload>
+          <div className="reference-file-list" aria-label={`${label}已选文件`}>
+            {fileList.length === 0 ? (
+              <span className="reference-file-empty">可只填 URL，或添加本地素材</span>
+            ) : fileList.map((file) => (
+              <Tag
+                className="reference-file-chip"
+                closable
+                key={file.uid}
+                title={file.name}
+                onClose={() => onFilesChange(fileList.filter((item) => item.uid !== file.uid))}
+              >
+                <span className="reference-file-name">{file.name}</span>
+              </Tag>
+            ))}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
