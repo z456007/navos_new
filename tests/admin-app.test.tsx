@@ -257,6 +257,70 @@ describe("admin app gate", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/video/generations/task_1", expect.objectContaining({ method: "GET" }));
   });
 
+  it("sends omni reference URLs from the video console", async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });
+      const path = String(url);
+      if (path === "/api/accounts") {
+        return Response.json([]);
+      }
+      if (path === "/api/video/generations") {
+        const payload = JSON.parse(String(init?.body));
+        expect(payload).toMatchObject({
+          mode: "omni_reference",
+          generation_mode: "omni_reference",
+          images: ["https://assets.test/ref.png"],
+          imageRoles: ["reference_image"],
+          videos: ["https://assets.test/motion.mp4"],
+          videoRoles: ["reference_video"],
+          audioRefs: ["https://assets.test/music.mp3"],
+          audioRoles: ["reference_audio"],
+          audio: true
+        });
+        expect(payload.prompt).toContain("参考文字：keep the same character");
+        return Response.json({
+          code: 200,
+          data: { task_id: "task_ref", status: "deducted" }
+        });
+      }
+      if (path === "/api/video/generations/task_ref") {
+        return Response.json({
+          id: "task_ref",
+          status: "succeeded",
+          videoUrl: "https://cdn.test/ref-video.mp4",
+          raw: { code: 200 }
+        });
+      }
+      return Response.json({ error: { message: "unexpected path" } }, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("Master API Key"), { target: { value: "sk-local" } });
+    fireEvent.click(screen.getByRole("button", { name: "进入控制台" }));
+
+    await screen.findByRole("button", { name: "视频生成" });
+    fireEvent.click(screen.getByRole("button", { name: "视频生成" }));
+
+    fireEvent.change(screen.getByLabelText("文字参考"), {
+      target: { value: "keep the same character" }
+    });
+    fireEvent.change(screen.getByLabelText("图片参考 URL（每行一个）"), {
+      target: { value: "https://assets.test/ref.png" }
+    });
+    fireEvent.change(screen.getByLabelText("视频参考 URL（每行一个）"), {
+      target: { value: "https://assets.test/motion.mp4" }
+    });
+    fireEvent.change(screen.getByLabelText("音频参考 URL（每行一个）"), {
+      target: { value: "https://assets.test/music.mp3" }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "创建视频任务" }));
+
+    await screen.findByText("task_ref");
+    expect(fetchMock).toHaveBeenCalledWith("/api/video/generations", expect.objectContaining({ method: "POST" }));
+  });
+
   it("starts and renders a single registration job from the account pool", async () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });

@@ -1,10 +1,16 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
-import { Alert, Button as AntButton, InputNumber, Progress, Space, Switch, Tag } from "antd";
+import { Alert, Button as AntButton, Card, InputNumber, Progress, Select, Space, Switch, Tag, Upload } from "antd";
+import type { UploadFile } from "antd/es/upload/interface";
 import { Clapperboard, ExternalLink, Film, RefreshCw } from "lucide-react";
 import { apiRequest, errorMessage } from "../api";
 import { JsonBlock, StatusLine } from "../components/feedback";
 import { SelectField, TextAreaField, TextField } from "../components/fields";
 import { defaultVideoPrompt, idleStatus } from "../app/defaults";
+import {
+  buildVideoGenerationPayload,
+  parseReferenceUrls,
+  type VideoReferenceValue
+} from "../lib/video-payload";
 import {
   archiveTone,
   normalizeVideoTask,
@@ -27,9 +33,22 @@ export function VideoPanel({ apiKey }: { apiKey: string }) {
   const [task, setTask] = useState<VideoTaskView | undefined>();
   const [result, setResult] = useState<unknown>("等待创建任务");
   const [events, setEvents] = useState<string[]>([]);
+  const [referenceText, setReferenceText] = useState("");
+  const [referenceUrls, setReferenceUrls] = useState({ images: "", videos: "", audios: "" });
+  const [referenceRoles, setReferenceRoles] = useState({
+    image: "reference_image",
+    video: "reference_video",
+    audio: "reference_audio"
+  });
+  const [imageFiles, setImageFiles] = useState<UploadFile[]>([]);
+  const [videoFiles, setVideoFiles] = useState<UploadFile[]>([]);
+  const [audioFiles, setAudioFiles] = useState<UploadFile[]>([]);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const previewUrl = task?.cosUrl ?? task?.videoUrl;
   const durationLimit = videoDurationLimit(form.resolution);
+  const imageRefCount = Math.min(9, countUrlLines(referenceUrls.images) + imageFiles.length);
+  const videoRefCount = Math.min(3, countUrlLines(referenceUrls.videos) + videoFiles.length);
+  const audioRefCount = Math.min(3, countUrlLines(referenceUrls.audios) + audioFiles.length);
 
   useEffect(() => () => clearPolling(), []);
 
@@ -66,15 +85,10 @@ export function VideoPanel({ apiKey }: { apiKey: string }) {
     try {
       const response = await apiRequest<unknown>(apiKey, "/api/video/generations", {
         method: "POST",
-        body: JSON.stringify({
-          model: form.model,
-          prompt,
-          resolution: form.resolution,
-          aspectRatio: form.aspectRatio,
-          durationSeconds: form.durationSeconds,
-          audio: form.audio,
-          timeoutMs: 600000
-        })
+        body: JSON.stringify(buildVideoGenerationPayload(
+          { ...form, prompt },
+          await collectVideoReferences()
+        ))
       });
       setResult(response);
       const taskId = readVideoString(response, ["task_id", "taskId", "id"]);
@@ -92,6 +106,28 @@ export function VideoPanel({ apiKey }: { apiKey: string }) {
       setResult(message);
       addEvent(message);
     }
+  }
+
+  async function collectVideoReferences() {
+    const images = [
+      ...parseReferenceUrls(referenceUrls.images, referenceRoles.image),
+      ...await filesToReferences(imageFiles, referenceRoles.image)
+    ].slice(0, 9);
+    const videos = [
+      ...parseReferenceUrls(referenceUrls.videos, referenceRoles.video),
+      ...await filesToReferences(videoFiles, referenceRoles.video)
+    ].slice(0, 3);
+    const audios = [
+      ...parseReferenceUrls(referenceUrls.audios, referenceRoles.audio),
+      ...await filesToReferences(audioFiles, referenceRoles.audio)
+    ].slice(0, 3);
+
+    return {
+      referenceText,
+      images,
+      videos,
+      audios
+    };
   }
 
   async function pollTask(taskId = task?.id) {
@@ -229,6 +265,60 @@ export function VideoPanel({ apiKey }: { apiKey: string }) {
             value={form.prompt}
             onChange={(prompt) => setForm((current) => ({ ...current, prompt }))}
           />
+          <Card
+            className="video-reference-card"
+            size="small"
+            title="全能参考素材"
+            extra={<Tag color="processing">自动上传</Tag>}
+          >
+            <TextAreaField
+              className="video-reference-text"
+              label="文字参考"
+              value={referenceText}
+              onChange={setReferenceText}
+            />
+            <div className="reference-grid">
+              <ReferenceColumn
+                accept="image/*"
+                count={`${imageRefCount}/9`}
+                fileList={imageFiles}
+                label="图片参考"
+                role={referenceRoles.image}
+                roleOptions={["reference_image", "first_frame", "last_frame"]}
+                urlsLabel="图片参考 URL（每行一个）"
+                urlsValue={referenceUrls.images}
+                onFilesChange={(files) => setImageFiles(files.slice(0, 9))}
+                onRoleChange={(image) => setReferenceRoles((current) => ({ ...current, image }))}
+                onUrlsChange={(images) => setReferenceUrls((current) => ({ ...current, images }))}
+              />
+              <ReferenceColumn
+                accept="video/*"
+                count={`${videoRefCount}/3`}
+                fileList={videoFiles}
+                label="视频参考"
+                role={referenceRoles.video}
+                roleOptions={["reference_video"]}
+                urlsLabel="视频参考 URL（每行一个）"
+                urlsValue={referenceUrls.videos}
+                onFilesChange={(files) => setVideoFiles(files.slice(0, 3))}
+                onRoleChange={(video) => setReferenceRoles((current) => ({ ...current, video }))}
+                onUrlsChange={(videos) => setReferenceUrls((current) => ({ ...current, videos }))}
+              />
+              <ReferenceColumn
+                accept="audio/*"
+                count={`${audioRefCount}/3`}
+                fileList={audioFiles}
+                label="音频参考"
+                role={referenceRoles.audio}
+                roleOptions={["reference_audio"]}
+                urlsLabel="音频参考 URL（每行一个）"
+                urlsValue={referenceUrls.audios}
+                onFilesChange={(files) => setAudioFiles(files.slice(0, 3))}
+                onRoleChange={(audio) => setReferenceRoles((current) => ({ ...current, audio }))}
+                onUrlsChange={(audios) => setReferenceUrls((current) => ({ ...current, audios }))}
+              />
+            </div>
+          </Card>
           <div className="toolbar flush">
             <AntButton className="create-video-button" disabled={status.kind === "loading"} htmlType="submit" icon={<Clapperboard size={16} />} type="primary">
               创建视频任务
@@ -280,4 +370,89 @@ export function VideoPanel({ apiKey }: { apiKey: string }) {
       </div>
     </section>
   );
+}
+
+function ReferenceColumn({
+  accept,
+  count,
+  fileList,
+  label,
+  onFilesChange,
+  onRoleChange,
+  onUrlsChange,
+  role,
+  roleOptions,
+  urlsLabel,
+  urlsValue
+}: {
+  accept: string;
+  count: string;
+  fileList: UploadFile[];
+  label: string;
+  onFilesChange: (files: UploadFile[]) => void;
+  onRoleChange: (role: string) => void;
+  onUrlsChange: (value: string) => void;
+  role: string;
+  roleOptions: string[];
+  urlsLabel: string;
+  urlsValue: string;
+}) {
+  return (
+    <div className="reference-column">
+      <div className="reference-column-head">
+        <strong>{label}</strong>
+        <Tag>{count}</Tag>
+      </div>
+      <label className="text-field ant-field">
+        <span>{label}角色</span>
+        <Select
+          aria-label={`${label}角色`}
+          options={roleOptions.map((option) => ({ label: option, value: option }))}
+          popupMatchSelectWidth={false}
+          value={role}
+          onChange={onRoleChange}
+        />
+      </label>
+      <TextAreaField
+        className="reference-url-field"
+        label={urlsLabel}
+        value={urlsValue}
+        onChange={onUrlsChange}
+      />
+      <Upload
+        accept={accept}
+        beforeUpload={() => false}
+        fileList={fileList}
+        multiple
+        onChange={({ fileList: nextFiles }) => onFilesChange(nextFiles)}
+      >
+        <AntButton htmlType="button">选择{label}文件</AntButton>
+      </Upload>
+    </div>
+  );
+}
+
+async function filesToReferences(files: UploadFile[], role: string): Promise<VideoReferenceValue[]> {
+  const references: Array<VideoReferenceValue | undefined> = await Promise.all(files.map(async (file) => {
+    const source = await fileToDataUrl(file);
+    return source ? { source, role } : undefined;
+  }));
+  return references.filter((reference): reference is VideoReferenceValue => reference !== undefined);
+}
+
+function fileToDataUrl(file: UploadFile): Promise<string | undefined> {
+  const original = file.originFileObj;
+  if (!original) {
+    return Promise.resolve(undefined);
+  }
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : undefined);
+    reader.onerror = () => reject(new Error(`读取文件失败：${file.name}`));
+    reader.readAsDataURL(original);
+  });
+}
+
+function countUrlLines(value: string): number {
+  return value.split(/\r?\n/).filter((line) => line.trim()).length;
 }

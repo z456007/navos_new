@@ -50,3 +50,52 @@ export async function uploadAsset<T = unknown>(
 
   throw new Error("Upload source must be a data URL or http(s) URL");
 }
+
+export function extractUploadUrl(body: unknown): string | undefined {
+  const records = uploadCandidateRecords(body);
+  for (const record of records) {
+    for (const key of ["url", "fileUrl", "file_url", "ossUrl", "oss_url"]) {
+      const value = record[key];
+      if (typeof value === "string" && value.length > 0) {
+        return value;
+      }
+    }
+  }
+  return undefined;
+}
+
+export async function uploadAssetToUrl(
+  client: ProviderHttpClient,
+  input: UploadAssetInput
+): Promise<string> {
+  const result = await uploadAsset(client, input);
+  if (result.status < 200 || result.status >= 300) {
+    throw new Error(`Upload failed: ${result.status}`);
+  }
+  const url = extractUploadUrl(result.body);
+  if (!url) {
+    throw new Error("Upload response did not include a URL");
+  }
+  return url;
+}
+
+function uploadCandidateRecords(raw: unknown): Record<string, unknown>[] {
+  if (!isRecord(raw)) {
+    return [];
+  }
+
+  const records = [raw];
+  const firstData = raw.data;
+  if (isRecord(firstData)) {
+    records.push(firstData);
+    const nestedData = firstData.data;
+    if (isRecord(nestedData)) {
+      records.push(nestedData);
+    }
+  }
+  return records;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}

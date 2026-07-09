@@ -536,6 +536,54 @@ a.button {
   min-height: 230px;
 }
 
+.video-reference-card {
+  border-color: #dbeafe;
+  background: linear-gradient(180deg, #f8fbff 0%, #fff 100%);
+}
+
+.video-reference-card .ant-card-body {
+  display: grid;
+  gap: 12px;
+}
+
+.video-reference-text .ant-input {
+  min-height: 74px;
+}
+
+.reference-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.reference-column {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.78);
+  padding: 10px;
+}
+
+.reference-column-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.reference-column-head strong {
+  font-size: 13px;
+}
+
+.reference-url-field .ant-input {
+  min-height: 86px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
 .chat-panel {
   display: grid;
   height: 100%;
@@ -926,6 +974,7 @@ a.button {
   .chat-compose,
   .video-rule-band,
   .video-grid,
+  .reference-grid,
   .form-row.two,
   .form-row.three,
   .probe-grid {

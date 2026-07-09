@@ -8,7 +8,14 @@ import { forwardModelRequest, LOCAL_MODEL_IDS } from "../protocols/model-proxy.j
 import { registerAccount } from "../protocols/register.js";
 import { uploadAsset } from "../protocols/upload.js";
 import type { VipBalanceClient } from "../protocols/vip-client.js";
-import { assertVideoGenerationRules, createVideoTask, getVideoTask, normalizeVideoTaskStatus, type NormalizedVideoTask } from "../protocols/video.js";
+import {
+  assertVideoGenerationRules,
+  createVideoTask,
+  getVideoTask,
+  normalizeVideoTaskStatus,
+  prepareVideoTaskPayload,
+  type NormalizedVideoTask
+} from "../protocols/video.js";
 import { YydsMailClient, YydsMailError } from "../protocols/mail/yyds-mail.js";
 import { AccountService } from "../services/account-service.js";
 import { CosConfigService, type CosConfigInput, type EnabledCosConfig } from "../services/cos-config-service.js";
@@ -729,7 +736,21 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     }
 
     const headers = buildProviderAuthHeaders(account, options.providerAuthMode);
-    const result = await createVideoTask(client, body, headers);
+    let taskPayload: Record<string, unknown>;
+    try {
+      taskPayload = await prepareVideoTaskPayload(client, body, headers);
+    } catch (error) {
+      await accountService.releaseVideoAccount(account.uid, leaseId);
+      await reply.status(502).send({
+        error: {
+          message: error instanceof Error ? error.message : "Video reference upload failed",
+          type: "video_reference_upload_failed"
+        }
+      });
+      return;
+    }
+
+    const result = await createVideoTask(client, taskPayload, headers);
     if (result.status >= 200 && result.status < 300) {
       await accountService.depleteVideoAccount(account.uid);
       const createdTask = normalizeVideoTaskStatus(result.body);

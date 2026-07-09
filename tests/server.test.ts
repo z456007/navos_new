@@ -492,6 +492,91 @@ describe("server routes", () => {
     ]);
   });
 
+  it("uploads and normalizes video references before forwarding task creation", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    await accountService.importAccount({
+      uid: "u1",
+      token: "t1",
+      balanceRemaining: 2000,
+      balanceTotal: 2000
+    });
+    const paths: string[] = [];
+    let createdBody: Record<string, unknown> | undefined;
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      fetchImpl: async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        paths.push(path);
+        if (path === "/api/uploads/file") {
+          return Response.json({
+            code: 200,
+            data: { url: `https://cdn.test/upload-${paths.filter((item) => item === "/api/uploads/file").length}.bin` }
+          });
+        }
+        if (path === "/api/tasks/navos-seedance-video-generation") {
+          createdBody = JSON.parse(String(init?.body));
+          return Response.json({ task_id: "task_ref", status: "queued" });
+        }
+        return Response.json({ error: { message: "unexpected path" } }, { status: 404 });
+      }
+    });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/video/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: {
+        model: "doubao-seedance-2-0-260128",
+        prompt: "city skyline",
+        durationSeconds: 5,
+        resolution: "720P",
+        aspectRatio: "16:9",
+        mode: "omni_reference",
+        generation_mode: "omni_reference",
+        images: ["data:image/png;base64,aGVsbG8=", "https://assets.test/style.png"],
+        imageRoles: ["first_frame", "reference_image"],
+        videos: ["data:video/mp4;base64,AAAA"],
+        videoRoles: ["reference_video"],
+        audioRefs: ["https://assets.test/music.mp3"],
+        audioRoles: ["reference_audio"]
+      }
+    });
+
+    expect(created.statusCode).toBe(200);
+    expect(paths).toEqual([
+      "/api/uploads/file",
+      "/api/uploads/file",
+      "/api/tasks/navos-seedance-video-generation"
+    ]);
+    expect(createdBody).toMatchObject({
+      model: "navos/doubao-seedance-2-0-260128",
+      prompt: "city skyline",
+      duration: 5,
+      durationSeconds: 5,
+      aspectRatio: "16:9",
+      resolution: "720P",
+      audio: true,
+      mode: "omni_reference",
+      generation_mode: "omni_reference",
+      image: "https://cdn.test/upload-1.bin",
+      imageRoles: ["first_frame"],
+      videos: ["https://cdn.test/upload-2.bin"],
+      videoRoles: ["reference_video"],
+      audioRef: "https://assets.test/music.mp3",
+      audioRoles: ["reference_audio"],
+      metadata: {
+        reference_images: ["https://assets.test/style.png"],
+        reference_videos: ["https://cdn.test/upload-2.bin"],
+        reference_audios: ["https://assets.test/music.mp3"],
+        generate_audio: true
+      }
+    });
+  });
+
   it("rejects video durations that exceed account resolution rules", async () => {
     const fetchImpl = vi.fn(async () => Response.json({ task_id: "task_1", status: "queued" }));
     const app = createApp({

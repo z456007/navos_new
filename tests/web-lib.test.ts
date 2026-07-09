@@ -3,6 +3,7 @@ import { accountMetrics, panelTitle } from "../web/src/lib/accounts";
 import { normalizeRegistrationJob, registrationJobIsTerminal } from "../web/src/lib/registration-job";
 import { nextPollingDelay } from "../web/src/lib/polling";
 import { archiveTone, normalizeVideoTask, videoDurationLimit } from "../web/src/lib/video-task";
+import { buildVideoGenerationPayload } from "../web/src/lib/video-payload";
 import type { AccountListItem } from "../web/src/types";
 
 describe("web helper modules", () => {
@@ -99,6 +100,42 @@ describe("web helper modules", () => {
     expect(videoDurationLimit("1080P")).toBe(5);
     expect(videoDurationLimit("unknown")).toBe(10);
     expect(archiveTone("failed")).toBe("bad");
+  });
+
+  it("builds video payloads with text, image, video and audio references", () => {
+    const payload = buildVideoGenerationPayload(
+      {
+        model: "navos/doubao-seedance-2-0-260128",
+        prompt: "base prompt",
+        resolution: "720P",
+        aspectRatio: "16:9",
+        durationSeconds: 5,
+        audio: false
+      },
+      {
+        referenceText: "keep the product color and slogan",
+        images: [{ source: "https://assets.test/ref.png", role: "reference_image" }],
+        videos: [{ source: "https://assets.test/motion.mp4", role: "reference_video" }],
+        audios: [{ source: "https://assets.test/music.mp3", role: "reference_audio" }]
+      }
+    );
+
+    expect(payload).toMatchObject({
+      model: "navos/doubao-seedance-2-0-260128",
+      prompt: "base prompt\n\n参考文字：keep the product color and slogan",
+      resolution: "720P",
+      aspectRatio: "16:9",
+      durationSeconds: 5,
+      audio: true,
+      mode: "omni_reference",
+      generation_mode: "omni_reference",
+      images: ["https://assets.test/ref.png"],
+      imageRoles: ["reference_image"],
+      videos: ["https://assets.test/motion.mp4"],
+      videoRoles: ["reference_video"],
+      audioRefs: ["https://assets.test/music.mp3"],
+      audioRoles: ["reference_audio"]
+    });
   });
 
   it("summarizes account pool state and panel labels", () => {
