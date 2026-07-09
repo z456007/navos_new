@@ -65,6 +65,25 @@ describe("AccountService", () => {
     expect(picked?.uid).toBe("active");
   });
 
+  it("marks depleted accounts with zero remaining balance", async () => {
+    const store = new InMemoryAccountStore();
+    const service = new AccountService(store);
+    await service.importAccount({
+      uid: "u1",
+      token: "t1",
+      balanceRemaining: 2000,
+      balanceTotal: 2000
+    });
+
+    await service.depleteAccount("u1");
+
+    const account = await store.get("u1");
+    expect(account?.status).toBe("depleted");
+    expect(account?.balanceRemaining).toBe(0);
+    expect(account?.balanceTotal).toBe(2000);
+    expect(account?.lastBalanceAt).toBeGreaterThan(0);
+  });
+
   it("rejects invalid imports", async () => {
     const service = new AccountService(new InMemoryAccountStore());
     await expect(service.importAccount({ uid: "", token: "t1" })).rejects.toThrow(/uid/);

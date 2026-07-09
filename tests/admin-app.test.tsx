@@ -15,7 +15,18 @@ describe("admin app gate", () => {
   it("requires a verified master api key before showing the console", async () => {
     const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });
-      return Response.json([]);
+      return Response.json([{
+        uid: "u1",
+        tokenPreview: "token-ab...",
+        mailboxAddr: "a@mail.test",
+        status: "active",
+        balanceRemaining: 1500,
+        balanceTotal: 2000,
+        rateLimitedUntil: 0,
+        createdAt: 0,
+        lastUsedAt: 0,
+        lastBalanceAt: 1000
+      }]);
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -32,6 +43,8 @@ describe("admin app gate", () => {
       expect(screen.getAllByRole("heading", { name: "账号池" }).length).toBeGreaterThan(0);
     });
     expect(fetchMock).toHaveBeenCalledWith("/api/accounts", expect.objectContaining({ method: "GET" }));
+    expect(screen.getByText("剩余额度")).toBeInTheDocument();
+    expect(screen.getByText("1500 / 2000")).toBeInTheDocument();
     expect(localStorage.getItem("navos.admin.apiKey")).toBe("sk-local");
   });
 
@@ -351,6 +364,8 @@ describe("admin app gate", () => {
     expect(screen.getByText("480P / 15秒")).toBeInTheDocument();
     expect(screen.getByText("720P / 10秒")).toBeInTheDocument();
     expect(screen.getByText("1080P / 5秒")).toBeInTheDocument();
+    expect(screen.getByText("生成前会自动准备一个一次性账号")).toBeInTheDocument();
+    expect(screen.getByText("账号池没有可用账号时会自动注册；每个账号只用于一个视频任务。")).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("分辨率"), { target: { value: "1080P" } });
     expect(screen.getByLabelText("时长")).toHaveAttribute("max", "5");

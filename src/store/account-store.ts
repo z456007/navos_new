@@ -33,6 +33,7 @@ export interface AccountStore {
   releaseLease(uid: string, leaseId?: string): Promise<void>;
   markUsed(uid: string, usedAtMs?: number): Promise<void>;
   setStatus(uid: string, status: AccountStatus): Promise<void>;
+  setBalance(uid: string, balanceRemaining: number, balanceTotal?: number, checkedAtMs?: number): Promise<void>;
   setCooldown(uid: string, untilMs: number): Promise<void>;
 }
 
@@ -128,6 +129,17 @@ export class InMemoryAccountStore implements AccountStore {
       account.status = status;
       account.leaseId = undefined;
       account.leaseUntil = 0;
+    }
+  }
+
+  async setBalance(uid: string, balanceRemaining: number, balanceTotal?: number, checkedAtMs: number = now()): Promise<void> {
+    const account = this.accounts.get(uid);
+    if (account) {
+      account.balanceRemaining = balanceRemaining;
+      if (balanceTotal !== undefined) {
+        account.balanceTotal = balanceTotal;
+      }
+      account.lastBalanceAt = checkedAtMs;
     }
   }
 

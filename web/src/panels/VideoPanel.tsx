@@ -146,8 +146,8 @@ export function VideoPanel({ apiKey }: { apiKey: string }) {
 
       <div className="video-rule-band" aria-label="视频账号规则">
         <div>
-          <strong>账号视频预算</strong>
-          <span>每个账号只跑一次任务；并发时会先租用不同账号，创建成功后标记耗尽。</span>
+          <strong>一次性视频账号</strong>
+          <span>每个账号只跑一次任务；账号池没有可用账号时会自动注册，创建成功后标记耗尽。</span>
         </div>
         <Space size={8} wrap>
           {Object.entries(videoDurationLimits).map(([resolution, seconds]) => (
@@ -174,8 +174,8 @@ export function VideoPanel({ apiKey }: { apiKey: string }) {
           <Alert
             showIcon
             type="info"
-            title="生成前会租用一个可用账号"
-            description="480P 最长 15 秒，720P 最长 10 秒，1080P 最长 5 秒。账号池不足时请求会直接停止。"
+            title="生成前会自动准备一个一次性账号"
+            description="账号池没有可用账号时会自动注册；每个账号只用于一个视频任务。"
           />
           <TextField label="模型" value={form.model} onChange={(model) => setForm((current) => ({ ...current, model }))} />
           <div className="form-row three compact">

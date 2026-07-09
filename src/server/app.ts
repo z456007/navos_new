@@ -180,6 +180,63 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     }
   }
 
+  async function leaseVideoAccountOrRegister(leaseId: string, reply: FastifyReply): Promise<AccountRecord | undefined> {
+    const existingAccount = await accountService.leaseVideoAccount(leaseId);
+    if (existingAccount) {
+      return existingAccount;
+    }
+
+    const registrationService = options.registrationService;
+    if (!registrationService) {
+      await reply.status(503).send({
+        error: {
+          message: "No available account for video generation",
+          type: "account_unavailable"
+        }
+      });
+      return undefined;
+    }
+
+    const registrationResult = await registrationService.registerOne();
+    if (!registrationResult.success) {
+      await reply.status(503).send({
+        error: {
+          message: registrationResult.error ?? "Video account registration failed",
+          type: "video_account_registration_failed"
+        }
+      });
+      return undefined;
+    }
+
+    if (registrationResult.uid && registrationResult.token) {
+      const savedAccount = await accountService.getProviderAccount(registrationResult.uid);
+      if (!savedAccount) {
+        await accountService.importAccount({
+          uid: registrationResult.uid,
+          token: registrationResult.token,
+          mailboxAddr: registrationResult.email,
+          mailboxToken: registrationResult.mailboxToken,
+          balanceRemaining: registrationResult.balance,
+          balanceTotal: registrationResult.balance,
+          status: "active"
+        });
+      }
+    }
+
+    const registeredAccount = await accountService.leaseVideoAccount(leaseId);
+    if (!registeredAccount) {
+      await reply.status(503).send({
+        error: {
+          message: "Video account registration completed, but no account could be leased",
+          type: "account_unavailable"
+        }
+      });
+      return undefined;
+    }
+
+    return registeredAccount;
+  }
+
   async function yydsClient(reply: FastifyReply): Promise<YydsMailClient | undefined> {
     const apiKey = await yydsMailConfigService.enabledApiKey(options.yydsMailApiKey);
     if (!apiKey) {
@@ -606,9 +663,8 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     }
 
     const leaseId = `video:${randomUUID()}`;
-    const account = await accountService.leaseVideoAccount(leaseId);
+    const account = await leaseVideoAccountOrRegister(leaseId, reply);
     if (!account) {
-      await reply.status(503).send({ error: { message: "No available account for video generation", type: "account_unavailable" } });
       return;
     }
 

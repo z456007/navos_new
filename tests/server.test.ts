@@ -481,6 +481,55 @@ describe("server routes", () => {
     expect((await store.get("u2"))?.status).toBe("depleted");
   });
 
+  it("auto-registers a one-shot video account when the pool has no available account", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    const registrationService = {
+      registerOne: vi.fn(async () => {
+        await accountService.importAccount({
+          uid: "auto-video-1",
+          token: "auto-token-1",
+          mailboxAddr: "auto-video-1@mail.test",
+          mailboxToken: "mail-token",
+          balanceRemaining: 1000,
+          balanceTotal: 1000,
+          status: "active"
+        });
+        return {
+          success: true,
+          uid: "auto-video-1",
+          token: "auto-token-1",
+          email: "auto-video-1@mail.test",
+          mailboxToken: "mail-token"
+        };
+      })
+    };
+    const usedHeaders: string[] = [];
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      registrationService: registrationService as never,
+      fetchImpl: async (_url, init) => {
+        usedHeaders.push(String((init?.headers as Record<string, string>).authorization ?? ""));
+        return Response.json({ task_id: "task_auto", status: "queued" });
+      }
+    });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/video/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "city skyline", durationSeconds: 10, resolution: "720P" }
+    });
+
+    expect(created.statusCode).toBe(200);
+    expect(registrationService.registerOne).toHaveBeenCalledOnce();
+    expect(usedHeaders).toEqual(["Bearer auto-video-1:auto-token-1"]);
+    expect((await store.get("auto-video-1"))?.status).toBe("depleted");
+  });
+
   it("depletes a chat account when upstream reports insufficient balance", async () => {
     const store = new InMemoryAccountStore();
     const accountService = new AccountService(store);

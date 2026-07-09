@@ -72,6 +72,7 @@ export class AccountService {
 
   async depleteAccount(uid: string): Promise<void> {
     await this.store.setStatus(uid, "depleted");
+    await this.store.setBalance(uid, 0);
   }
 
   async depleteVideoAccount(uid: string): Promise<void> {

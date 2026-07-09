@@ -207,6 +207,17 @@ export class MysqlAccountStore implements AccountStore {
     );
   }
 
+  async setBalance(uid: string, balanceRemaining: number, balanceTotal?: number, checkedAtMs: number = Date.now()): Promise<void> {
+    await this.pool.execute(
+      `UPDATE accounts
+       SET balance_remaining = :balanceRemaining,
+           balance_total = COALESCE(:balanceTotal, balance_total),
+           last_balance_at = :checkedAtMs
+       WHERE uid = :uid`,
+      { uid, balanceRemaining, balanceTotal: balanceTotal ?? null, checkedAtMs }
+    );
+  }
+
   async setCooldown(uid: string, untilMs: number): Promise<void> {
     await this.pool.execute(
       "UPDATE accounts SET rate_limited_until = :untilMs, lease_id = NULL, lease_until = 0 WHERE uid = :uid",

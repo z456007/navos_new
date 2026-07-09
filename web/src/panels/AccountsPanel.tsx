@@ -341,6 +341,7 @@ export function AccountsPanel({
               <th>UID</th>
               <th>Token</th>
               <th>邮箱</th>
+              <th>剩余额度</th>
               <th>状态</th>
               <th>最后使用</th>
               <th>操作</th>
@@ -348,12 +349,13 @@ export function AccountsPanel({
           </thead>
           <tbody>
             {accounts.length === 0 ? (
-              <tr><td className="empty" colSpan={6}>暂无账号</td></tr>
+              <tr><td className="empty" colSpan={7}>暂无账号</td></tr>
             ) : accounts.map((account) => (
               <tr key={account.uid}>
                 <td className="mono" title={account.uid}>{shortText(account.uid, 22)}</td>
                 <td className="mono">{account.tokenPreview}</td>
                 <td>{shortText(account.mailboxAddr, 24)}</td>
+                <td className="mono">{account.balanceRemaining} / {account.balanceTotal}</td>
                 <td><AccountBadge account={account} /></td>
                 <td>{formatTime(account.lastUsedAt)}</td>
                 <td>
