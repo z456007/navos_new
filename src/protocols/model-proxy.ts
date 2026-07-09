@@ -136,10 +136,12 @@ function buildOpenAiChatBody(body: Record<string, unknown>, model: string): Reco
 }
 
 function buildAnthropicMessagesBody(body: Record<string, unknown>, requestedModel: string): Record<string, unknown> {
+  const messages = Array.isArray(body.messages) ? body.messages : [];
   const out: Record<string, unknown> = {
     model: normalizeClaudeModel(requestedModel),
     max_tokens: readNumber(body.max_tokens) ?? readNumber(body.max_completion_tokens) ?? 2048,
-    messages: convertOpenAiMessagesToAnthropic(Array.isArray(body.messages) ? body.messages : [])
+    system: buildClaudeSystemPrompt(requestedModel, body, messages),
+    messages: convertOpenAiMessagesToAnthropic(messages)
   };
   for (const key of ["temperature", "top_p"]) {
     if (body[key] !== undefined) {
@@ -150,6 +152,32 @@ function buildAnthropicMessagesBody(body: Record<string, unknown>, requestedMode
     out.stop_sequences = Array.isArray(body.stop) ? body.stop : [body.stop];
   }
   return out;
+}
+
+function buildClaudeSystemPrompt(
+  requestedModel: string,
+  body: Record<string, unknown>,
+  messages: unknown[]
+): string {
+  const displayName = claudeDisplayName(requestedModel);
+  const identity = `你是 ${displayName}。If asked what model you are, answer exactly that you are ${displayName}; never identify yourself as ChatGPT, OpenAI, or a different Claude model.`;
+  const explicitSystem = [
+    collectContent(body.system),
+    ...messages
+      .filter((message): message is Record<string, unknown> => Boolean(message) && typeof message === "object" && readString((message as Record<string, unknown>).role) === "system")
+      .map((message) => collectContent(message.content))
+  ].filter(Boolean);
+  return [identity, ...explicitSystem].join("\n\n");
+}
+
+function claudeDisplayName(model: string): string {
+  const normalized = normalizeClaudeModel(model);
+  const match = /^claude\.(opus|sonnet|haiku)-(.+)$/.exec(normalized);
+  if (!match) {
+    return normalized;
+  }
+  const family = match[1] === "opus" ? "Opus" : match[1] === "sonnet" ? "Sonnet" : "Haiku";
+  return `Claude ${family} ${match[2]}`;
 }
 
 function normalizeClaudeModel(model: string): string {
@@ -185,7 +213,6 @@ function convertOpenAiMessagesToAnthropic(messages: unknown[]): Array<Record<str
     const record = message as Record<string, unknown>;
     const role = readString(record.role) ?? "user";
     if (role === "system") {
-      converted.push({ role: "user", content: collectContent(record.content) });
       continue;
     }
     if (role !== "assistant" && role !== "user") {

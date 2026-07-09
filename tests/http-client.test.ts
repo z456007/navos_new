@@ -21,5 +21,18 @@ describe("ProviderHttpClient", () => {
     expect(calls[0]?.init.method).toBe("POST");
     expect(calls[0]?.init.headers).toMatchObject({ authorization: "Bearer t", "content-type": "application/json" });
   });
-});
 
+  it("escapes non-ascii JSON before sending to provider", async () => {
+    let sentBody = "";
+    const fetchImpl = async (_url: string | URL | Request, init?: RequestInit) => {
+      sentBody = String(init?.body ?? "");
+      return Response.json({ ok: true });
+    };
+
+    const client = new ProviderHttpClient("https://upstream.test", fetchImpl);
+    await client.requestJson("POST", "/v1/messages", { content: "你是什么模型？" });
+
+    expect(sentBody).toContain("\\u4f60\\u662f\\u4ec0\\u4e48\\u6a21\\u578b\\uff1f");
+    expect(sentBody).not.toContain("你是什么模型？");
+  });
+});

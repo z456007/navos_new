@@ -37,6 +37,7 @@ describe("model proxy", () => {
       max_tokens: 1024,
       messages: [{ role: "user", content: "Reply OK only." }]
     });
+    expect(capturedBody.system).toContain("Claude Opus 4.8");
     expect(result.body).toMatchObject({
       object: "chat.completion",
       model: "claude.opus-4.8",

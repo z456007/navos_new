@@ -38,7 +38,7 @@ export class ProviderHttpClient {
 
     if (body !== undefined) {
       requestHeaders["content-type"] = requestHeaders["content-type"] ?? "application/json";
-      init.body = JSON.stringify(body);
+      init.body = stringifyJsonAsciiSafe(body);
     }
 
     return this.request<T>(method, path, init);
@@ -69,3 +69,8 @@ export class ProviderHttpClient {
   }
 }
 
+function stringifyJsonAsciiSafe(value: unknown): string {
+  return JSON.stringify(value).replace(/[^\x00-\x7F]/g, (char) =>
+    `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`
+  );
+}
