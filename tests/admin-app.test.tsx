@@ -48,6 +48,28 @@ describe("admin app gate", () => {
     expect(localStorage.getItem("navos.admin.apiKey")).toBe("sk-local");
   });
 
+  it("hides manual mailbox and account import controls in the automation console", async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });
+      return Response.json([]);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("Master API Key"), { target: { value: "sk-local" } });
+    fireEvent.click(screen.getByRole("button", { name: "进入控制台" }));
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("heading", { name: "账号池" }).length).toBeGreaterThan(0);
+    });
+
+    expect(screen.queryByRole("button", { name: "YYDS 邮箱" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "导入账号" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("UID")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("邮箱 Token")).not.toBeInTheDocument();
+  });
+
   it("refreshes a row balance from the account pool", async () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });

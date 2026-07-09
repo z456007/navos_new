@@ -48,7 +48,7 @@ export interface RegistrationJobView {
   finishedAt?: number;
 }
 
-export type PanelId = "accounts" | "mail" | "probe" | "video" | "cos" | "yydsConfig";
+export type PanelId = "accounts" | "probe" | "video" | "cos" | "yydsConfig";
 
 export interface CosConfig {
   id?: number;

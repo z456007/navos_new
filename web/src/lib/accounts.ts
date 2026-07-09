@@ -11,9 +11,6 @@ export function accountMetrics(accounts: AccountListItem[]) {
 }
 
 export function panelTitle(panel: PanelId): string {
-  if (panel === "mail") {
-    return "YYDS 邮箱";
-  }
   if (panel === "yydsConfig") {
     return "YYDS配置";
   }

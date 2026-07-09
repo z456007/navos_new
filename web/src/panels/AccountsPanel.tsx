@@ -1,9 +1,8 @@
-import { type FormEvent, useEffect, useRef, useState } from "react";
-import { Ban, Play, Power, RefreshCw, Square, Timer, UserPlus } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Ban, Play, Power, RefreshCw, Square, Timer } from "lucide-react";
 import { apiRequest, errorMessage } from "../api";
 import { AccountBadge } from "../components/account-badge";
 import { JsonBlock, StatusLine } from "../components/feedback";
-import { TextField } from "../components/fields";
 import { idleStatus } from "../app/defaults";
 import { formatTime, shortText } from "../lib/accounts";
 import { nextPollingDelay } from "../lib/polling";
@@ -21,7 +20,6 @@ export function AccountsPanel({
   onAccountsChange: (accounts: AccountListItem[]) => void;
   onRefresh: () => Promise<AccountListItem[]>;
 }) {
-  const [form, setForm] = useState({ uid: "", token: "", mailboxAddr: "", mailboxToken: "" });
   const [status, setStatus] = useState<StatusState>(idleStatus);
   const [job, setJob] = useState<RegistrationJobView | undefined>();
   const [jobTarget, setJobTarget] = useState(10);
@@ -82,28 +80,6 @@ export function AccountsPanel({
     const next = Number(value);
     if (!Number.isFinite(next)) return min;
     return Math.min(max, Math.max(min, Math.trunc(next)));
-  }
-
-  async function importAccount(event: FormEvent) {
-    event.preventDefault();
-    setStatus({ kind: "loading", message: "导入中" });
-    try {
-      await apiRequest<AccountListItem>(apiKey, "/api/accounts/import", {
-        method: "POST",
-        body: JSON.stringify({
-          uid: form.uid,
-          token: form.token,
-          mailboxAddr: form.mailboxAddr || undefined,
-          mailboxToken: form.mailboxToken || undefined
-        })
-      });
-      setForm((current) => ({ ...current, token: "" }));
-      const loaded = await onRefresh();
-      onAccountsChange(loaded);
-      setStatus({ kind: "ok", message: "已导入" });
-    } catch (error) {
-      setStatus({ kind: "error", message: errorMessage(error) ?? "导入失败" });
-    }
   }
 
   async function startRegistrationJob(mode: "single" | "fill") {
@@ -341,17 +317,6 @@ export function AccountsPanel({
           <p className="status">暂无注册任务</p>
         )}
       </div>
-
-      <form className="import-grid" onSubmit={importAccount}>
-        <TextField label="UID" value={form.uid} onChange={(uid) => setForm((current) => ({ ...current, uid }))} />
-        <TextField label="Token" type="password" value={form.token} onChange={(token) => setForm((current) => ({ ...current, token }))} />
-        <TextField label="邮箱" value={form.mailboxAddr} onChange={(mailboxAddr) => setForm((current) => ({ ...current, mailboxAddr }))} />
-        <TextField label="邮箱 Token" value={form.mailboxToken} onChange={(mailboxToken) => setForm((current) => ({ ...current, mailboxToken }))} />
-        <button className="button primary import-action" type="submit">
-          <UserPlus size={16} aria-hidden="true" />
-          导入账号
-        </button>
-      </form>
 
       <div className="table-wrap">
         <table>

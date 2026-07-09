@@ -6,7 +6,6 @@ import {
   Inbox,
   KeyRound,
   LogOut,
-  Mail,
   MessageSquare,
   RefreshCw
 } from "lucide-react";
@@ -15,7 +14,6 @@ import { NavButton } from "../components/nav-button";
 import { accountMetrics, panelTitle } from "../lib/accounts";
 import { AccountsPanel } from "../panels/AccountsPanel";
 import { CosConfigPanel } from "../panels/CosConfigPanel";
-import { MailPanel } from "../panels/MailPanel";
 import { ProbePanel } from "../panels/ProbePanel";
 import { VideoPanel } from "../panels/VideoPanel";
 import { YydsMailConfigPanel } from "../panels/YydsMailConfigPanel";
@@ -53,9 +51,6 @@ export function ConsoleShell({
         <nav className="nav-list" aria-label="管理面板">
           <NavButton active={activePanel === "accounts"} icon={<Inbox size={17} />} onClick={() => onPanelChange("accounts")}>
             账号池
-          </NavButton>
-          <NavButton active={activePanel === "mail"} icon={<Mail size={17} />} onClick={() => onPanelChange("mail")}>
-            YYDS 邮箱
           </NavButton>
           <NavButton active={activePanel === "yydsConfig"} icon={<KeyRound size={17} />} onClick={() => onPanelChange("yydsConfig")}>
             YYDS配置
@@ -103,7 +98,6 @@ export function ConsoleShell({
             onRefresh={onRefreshAccounts}
           />
         )}
-        {activePanel === "mail" && <MailPanel apiKey={apiKey} />}
         {activePanel === "yydsConfig" && <YydsMailConfigPanel apiKey={apiKey} />}
         {activePanel === "video" && <VideoPanel apiKey={apiKey} />}
         {activePanel === "cos" && <CosConfigPanel apiKey={apiKey} />}
