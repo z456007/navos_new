@@ -1,7 +1,7 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
-import { Alert, Button as AntButton, Card, Input, InputNumber, Progress, Select, Space, Switch, Tag, Upload } from "antd";
+import { Alert, Button as AntButton, Card, Input, InputNumber, Modal, Progress, Select, Space, Switch, Tag, Upload } from "antd";
 import type { UploadFile } from "antd/es/upload/interface";
-import { Clapperboard, ExternalLink, Film, ImageIcon, Link2, Music2, RefreshCw, UploadCloud } from "lucide-react";
+import { Clapperboard, ExternalLink, FileText, Film, ImageIcon, Link2, Music2, RefreshCw, UploadCloud } from "lucide-react";
 import { apiRequest, errorMessage } from "../api";
 import { JsonBlock, StatusLine } from "../components/feedback";
 import { SelectField, TextField } from "../components/fields";
@@ -29,6 +29,7 @@ export function VideoPanel({ apiKey }: { apiKey: string }) {
     durationSeconds: 5,
     audio: false
   });
+  const [promptEditorOpen, setPromptEditorOpen] = useState(false);
   const [status, setStatus] = useState<StatusState>(idleStatus);
   const [task, setTask] = useState<VideoTaskView | undefined>();
   const [result, setResult] = useState<unknown>("等待创建任务");
@@ -207,17 +208,62 @@ export function VideoPanel({ apiKey }: { apiKey: string }) {
             title="生成前会自动准备一个一次性账号"
             description="账号池没有可用账号时会自动注册；每个账号只用于一个视频任务。"
           />
-          <label className="video-brief-field">
-            <span>任务描述</span>
-            <Input
-              aria-label="任务描述"
-              autoComplete="off"
-              placeholder="一句话说明画面、动作和风格；参考图/视频/音频放下面素材通道。"
-              size="large"
-              value={form.prompt}
-              onChange={(event) => setForm((current) => ({ ...current, prompt: event.target.value }))}
-            />
-          </label>
+          <div className="video-brief-field">
+            <label className="video-brief-label" htmlFor="video-prompt-input">文字提示词</label>
+            <div className="video-brief-main">
+              <Input.TextArea
+                aria-label="任务描述"
+                className="video-brief-input"
+                id="video-prompt-input"
+                placeholder="短提示词可直接写；长文案点右侧长文本编辑。"
+                rows={2}
+                value={form.prompt}
+                onChange={(event) => setForm((current) => ({ ...current, prompt: event.target.value }))}
+              />
+              <AntButton
+                aria-label="长文本编辑"
+                className="video-brief-expand"
+                htmlType="button"
+                icon={<FileText size={14} />}
+                onClick={() => setPromptEditorOpen(true)}
+              >
+                长文本编辑
+              </AntButton>
+            </div>
+            <span className="video-brief-count">{form.prompt.trim().length} 字</span>
+          </div>
+          <Modal
+            centered
+            className="prompt-editor-modal"
+            footer={[
+              <AntButton htmlType="button" key="cancel" onClick={() => setPromptEditorOpen(false)}>
+                收起
+              </AntButton>,
+              <AntButton htmlType="button" key="ok" type="primary" onClick={() => setPromptEditorOpen(false)}>
+                完成编辑
+              </AntButton>
+            ]}
+            open={promptEditorOpen}
+            title="长文本任务描述"
+            width={760}
+            onCancel={() => setPromptEditorOpen(false)}
+          >
+            <label className="prompt-editor-field">
+              <span>完整文字提示词</span>
+              <Input.TextArea
+                aria-label="长文本任务描述"
+                className="prompt-editor-area"
+                placeholder="把完整脚本、镜头描述、风格要求、负面要求都粘在这里；提交时会原样作为 prompt 发送。"
+                rows={14}
+                value={form.prompt}
+                onChange={(event) => setForm((current) => ({ ...current, prompt: event.target.value }))}
+              />
+            </label>
+            <div className="prompt-editor-hint">
+              <span>{form.prompt.trim().length} 字</span>
+              <span>支持多段长文本；图片 / 视频 / 音频参考继续放下面素材通道。</span>
+            </div>
+          </Modal>
           <TextField label="模型" value={form.model} onChange={(model) => setForm((current) => ({ ...current, model }))} />
           <div className="form-row three compact">
             <SelectField

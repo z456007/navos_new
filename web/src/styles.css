@@ -534,7 +534,7 @@ a.button {
 
 .video-brief-field {
   display: grid;
-  grid-template-columns: 92px minmax(0, 1fr);
+  grid-template-columns: 92px minmax(0, 1fr) 56px;
   align-items: center;
   gap: 10px;
   border: 1px solid rgba(37, 99, 235, 0.18);
@@ -547,7 +547,7 @@ a.button {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.86);
 }
 
-.video-brief-field > span {
+.video-brief-label {
   color: #1f3f77;
   font-size: 12px;
   font-weight: 900;
@@ -555,15 +555,92 @@ a.button {
   text-transform: uppercase;
 }
 
-.video-brief-field .ant-input {
-  height: 38px;
+.video-brief-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 8px;
+  min-width: 0;
+}
+
+.video-brief-input.ant-input {
+  min-height: 42px;
+  max-height: 62px;
   border-color: rgba(37, 99, 235, 0.16);
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.86);
+  background: rgba(255, 255, 255, 0.9);
   color: #10203f;
   font-size: 14px;
   font-weight: 600;
+  line-height: 1.45;
+  resize: none;
   box-shadow: 0 8px 22px rgba(37, 99, 235, 0.06);
+}
+
+.video-brief-expand.ant-btn {
+  height: auto;
+  min-height: 42px;
+  border-radius: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.video-brief-count {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.prompt-editor-modal .ant-modal-content {
+  border-radius: 20px;
+  overflow: hidden;
+}
+
+.prompt-editor-modal .ant-modal-header {
+  margin: -20px -24px 16px;
+  padding: 16px 24px;
+  border-bottom: 1px solid rgba(191, 219, 254, 0.74);
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0.08), rgba(255, 255, 255, 0));
+}
+
+.prompt-editor-field {
+  display: grid;
+  gap: 8px;
+}
+
+.prompt-editor-field > span {
+  color: #1f3f77;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+}
+
+.prompt-editor-area.ant-input {
+  min-height: 320px;
+  border-radius: 14px;
+  border-color: rgba(37, 99, 235, 0.18);
+  background: #fbfdff;
+  color: #10203f;
+  font-size: 14px;
+  line-height: 1.65;
+  resize: vertical;
+}
+
+.prompt-editor-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.prompt-editor-hint span:first-child {
+  color: #1d4ed8;
 }
 
 .video-reference-card {
@@ -1294,6 +1371,14 @@ a.button {
 
   .video-brief-field {
     grid-template-columns: 1fr;
+  }
+
+  .video-brief-main {
+    grid-template-columns: 1fr;
+  }
+
+  .video-brief-count {
+    text-align: left;
   }
 
   .video-rule-band {

@@ -321,6 +321,48 @@ describe("admin app gate", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/video/generations", expect.objectContaining({ method: "POST" }));
   });
 
+
+
+  it("submits long video prompts from the expanded editor", async () => {
+    const longPrompt = [
+      "第一段：赛博城市雨夜，白色机器人站在玻璃天桥上。",
+      "第二段：镜头缓慢推进，霓虹反射在金属外壳上。",
+      "第三段：保持电影感、低饱和、高细节，不要字幕。"
+    ].join("\n");
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });
+      const path = String(url);
+      if (path === "/api/accounts") {
+        return Response.json([]);
+      }
+      if (path === "/api/video/generations") {
+        const payload = JSON.parse(String(init?.body));
+        expect(payload.prompt).toBe(longPrompt);
+        return Response.json({ code: 200, data: { task_id: "task_long", status: "deducted" } });
+      }
+      if (path === "/api/video/generations/task_long") {
+        return Response.json({ id: "task_long", status: "succeeded", videoUrl: "https://cdn.test/long.mp4" });
+      }
+      return Response.json({ error: { message: "unexpected path" } }, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("Master API Key"), { target: { value: "sk-local" } });
+    fireEvent.click(screen.getByRole("button", { name: "进入控制台" }));
+
+    await screen.findByRole("button", { name: "视频生成" });
+    fireEvent.click(screen.getByRole("button", { name: "视频生成" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "长文本编辑" }));
+    fireEvent.change(screen.getByLabelText("长文本任务描述"), { target: { value: longPrompt } });
+    fireEvent.click(screen.getByRole("button", { name: "完成编辑" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建视频任务" }));
+
+    await screen.findByText("task_long");
+  });
+
   it("starts and renders a single registration job from the account pool", async () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });
