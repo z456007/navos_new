@@ -8,8 +8,6 @@ describe("loadConfig", () => {
       PROVIDER_BASE_URL: "https://upstream.test",
       PROVIDER_ACCOUNT_UID: "u1",
       PROVIDER_ACCOUNT_TOKEN: "t1",
-      YYDS_MAIL_API_KEY: "ac-test",
-      YYDS_MAIL_BASE_URL: "https://mail.test/v1",
       MYSQL_HOST: "127.0.0.1",
       MYSQL_PORT: "3307",
       MYSQL_USER: "root",
@@ -28,8 +26,6 @@ describe("loadConfig", () => {
     expect(config.providerBaseUrl).toBe("https://upstream.test");
     expect(config.providerAuthMode).toBe("uid-token");
     expect(config.listenPort).toBe(18888);
-    expect(config.yydsMailApiKey).toBe("ac-test");
-    expect(config.yydsMailBaseUrl).toBe("https://mail.test/v1");
     expect(config.vipBaseUrl).toBe("https://navos-mind-server-vip.tec-do.com");
     expect(config.vipHmacSecret).toBe("test-secret-32-chars-long-key!!");
     expect(config.poolTargetSize).toBe(0);
@@ -67,6 +63,19 @@ describe("loadConfig", () => {
     expect(config.registrationJobConcurrency).toBe(2);
     expect(config.registrationJobRemoveOnComplete).toBe(50);
     expect(config.registrationJobRemoveOnFail).toBe(100);
+  });
+
+  it("ignores legacy YYDS env values because mail config is dynamic", () => {
+    const config = loadConfig({
+      MASTER_API_KEY: "sk-test",
+      PROVIDER_BASE_URL: "https://upstream.test",
+      VIP_HMAC_SECRET: "test-secret-32-chars-long-key!!",
+      YYDS_MAIL_API_KEY: "legacy-env-key",
+      YYDS_MAIL_BASE_URL: "https://legacy-mail.test/v1"
+    });
+
+    expect("yydsMailApiKey" in config).toBe(false);
+    expect("yydsMailBaseUrl" in config).toBe(false);
   });
 
   it("caps registration fill concurrency to the YYDS-safe value", () => {

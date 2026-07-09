@@ -3,7 +3,8 @@ import type { VipBalance, VipClient } from "../protocols/vip-client.js";
 import type { AccountService } from "./account-service.js";
 
 export interface RegistrationServiceOptions {
-  yydsClient: YydsMailClient;
+  yydsClient?: YydsMailClient;
+  yydsClientProvider?: () => Promise<YydsMailClient | undefined> | YydsMailClient | undefined;
   vipClient: VipClient;
   accountService: AccountService;
   /** Max poll attempts for verification code. Default 20. */
@@ -140,7 +141,8 @@ export function generateCompanyInfo(): {
 }
 
 export class RegistrationService {
-  private readonly yydsClient: YydsMailClient;
+  private readonly yydsClient?: YydsMailClient;
+  private readonly yydsClientProvider?: () => Promise<YydsMailClient | undefined> | YydsMailClient | undefined;
   private readonly vipClient: VipClient;
   private readonly accountService: AccountService;
   private readonly maxPollAttempts: number;
@@ -153,6 +155,7 @@ export class RegistrationService {
 
   constructor(options: RegistrationServiceOptions) {
     this.yydsClient = options.yydsClient;
+    this.yydsClientProvider = options.yydsClientProvider;
     this.vipClient = options.vipClient;
     this.accountService = options.accountService;
     this.maxPollAttempts = options.maxPollAttempts ?? 20;
@@ -292,6 +295,7 @@ export class RegistrationService {
     mailboxToken?: string
   ): Promise<string | undefined> {
     const auth = { address: email, token: mailboxToken };
+    const yydsClient = await this.resolveYydsClient();
 
     for (let attempt = 0; attempt < this.maxPollAttempts; attempt++) {
       if (attempt > 0) {
@@ -299,7 +303,7 @@ export class RegistrationService {
       }
 
       try {
-        const result = await this.yydsClient.findVerificationCode(auth);
+        const result = await yydsClient.findVerificationCode(auth);
         if (result.code) {
           return result.code;
         }
@@ -352,10 +356,20 @@ export class RegistrationService {
         await sleep(waitMs);
       }
       this.lastMailboxCreateStartedAt = Date.now();
-      return await this.yydsClient.createMailbox();
+      return await (await this.resolveYydsClient()).createMailbox();
     } finally {
       releaseGate();
     }
+  }
+
+  private async resolveYydsClient(): Promise<YydsMailClient> {
+    const client = this.yydsClientProvider
+      ? await this.yydsClientProvider()
+      : this.yydsClient;
+    if (!client) {
+      throw new Error("YYDS Mail API key is not configured");
+    }
+    return client;
   }
 }
 

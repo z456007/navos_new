@@ -105,6 +105,59 @@ describe("RegistrationService", () => {
     });
   });
 
+  it("gets a YYDS client dynamically for registration instead of requiring an env client", async () => {
+    const vipFetch = vipFetchForPipeline({});
+    const mailFetch = mailFetchForCode("dynamic@mail.test", "mail-dynamic-token", "445566");
+    const vipClient = new VipClient({ baseUrl: "https://vip.test", hmacSecret: "test-secret-32!!", fetchImpl: vipFetch });
+    const yydsClientProvider = vi.fn(async () => new YydsMailClient({
+      baseUrl: "https://mail.test/v1",
+      apiKey: "ac-db-key",
+      fetchImpl: mailFetch
+    }));
+
+    const service = new RegistrationService({
+      yydsClientProvider,
+      vipClient,
+      accountService,
+      maxPollAttempts: 2,
+      pollIntervalMs: 1,
+      mailboxMinIntervalMs: 0
+    });
+
+    const result = await service.registerOne();
+
+    expect(result.success).toBe(true);
+    expect(result.email).toBe("dynamic@mail.test");
+    expect(yydsClientProvider).toHaveBeenCalled();
+    const createMailboxCall = mailFetch.mock.calls.find(([url, init]) =>
+      String(url).includes("/accounts") && init?.method === "POST"
+    );
+    expect(createMailboxCall?.[1]?.headers).toMatchObject({ "x-api-key": "ac-db-key" });
+  });
+
+  it("returns a clear failure when dynamic YYDS config is missing", async () => {
+    const vipClient = new VipClient({
+      baseUrl: "https://vip.test",
+      hmacSecret: "test-secret-32!!",
+      fetchImpl: vi.fn()
+    });
+    const service = new RegistrationService({
+      yydsClientProvider: async () => undefined,
+      vipClient,
+      accountService,
+      maxPollAttempts: 1,
+      pollIntervalMs: 1,
+      mailboxMinIntervalMs: 0
+    });
+
+    const result = await service.registerOne();
+
+    expect(result).toEqual({
+      success: false,
+      error: "YYDS Mail API key is not configured"
+    });
+  });
+
   it("retries YYDS mailbox creation when bulk registration hits rate limits", async () => {
     let accountCreateAttempts = 0;
     const mailFetch = vi.fn(async (url: string, init?: RequestInit) => {

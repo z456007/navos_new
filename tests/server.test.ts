@@ -207,8 +207,6 @@ describe("server routes", () => {
       providerBaseUrl: "https://upstream.test",
       providerAuthMode: "uid-token",
       accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
-      yydsMailApiKey: "ac-test",
-      yydsMailBaseUrl: "https://mail.test/v1",
       fetchImpl: async () => Response.json({ ok: true })
     });
 
@@ -403,23 +401,13 @@ describe("server routes", () => {
     expect(unauthorized.headers["access-control-allow-origin"]).toBe(origin);
   });
 
-  it("protects and serves yyds mailbox creation", async () => {
+  it("protects yyds mailbox creation and requires dynamic config", async () => {
     const app = createApp({
       masterApiKey: "sk-test",
       providerBaseUrl: "https://upstream.test",
       providerAuthMode: "uid-token",
       accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
-      yydsMailApiKey: "ac-test",
-      yydsMailBaseUrl: "https://mail.test/v1",
-      fetchImpl: async (url) => {
-        if (String(url).includes("mail.test")) {
-          return Response.json({
-            success: true,
-            data: { address: "navos-test@mail.test", id: "m1", token: "mail-token" }
-          });
-        }
-        return Response.json({ ok: true });
-      }
+      fetchImpl: async () => Response.json({ ok: true })
     });
 
     const unauthorized = await app.inject({ method: "POST", url: "/api/mail/yyds/accounts" });
@@ -430,8 +418,8 @@ describe("server routes", () => {
       url: "/api/mail/yyds/accounts",
       headers: { authorization: "Bearer sk-test" }
     });
-    expect(authorized.statusCode).toBe(200);
-    expect(authorized.json()).toMatchObject({ address: "navos-test@mail.test", token: "mail-token" });
+    expect(authorized.statusCode).toBe(503);
+    expect(authorized.json()).toMatchObject({ error: { type: "mail_unavailable" } });
   });
 
   it("stores YYDS Mail config encrypted and uses it for mailbox creation", async () => {

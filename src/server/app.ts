@@ -43,7 +43,6 @@ export interface CreateAppOptions {
   providerAuthMode: ProviderAuthMode;
   defaultAccount?: AccountIdentity;
   accountService?: AccountService;
-  yydsMailApiKey?: string;
   yydsMailBaseUrl?: string;
   yydsMailConfigSecret?: string;
   yydsMailConfigStore?: YydsMailConfigStore;
@@ -412,7 +411,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
   }
 
   async function yydsClient(reply: FastifyReply): Promise<YydsMailClient | undefined> {
-    const apiKey = await yydsMailConfigService.enabledApiKey(options.yydsMailApiKey);
+    const apiKey = await yydsMailConfigService.enabledApiKey();
     if (!apiKey) {
       await reply.status(503).send({ error: { message: "YYDS Mail API key is not configured", type: "mail_unavailable" } });
       return undefined;

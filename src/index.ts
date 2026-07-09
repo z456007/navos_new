@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { loadConfig } from "./config/env.js";
 import { YydsMailClient } from "./protocols/mail/yyds-mail.js";
 import { VipClient } from "./protocols/vip-client.js";
@@ -7,10 +8,18 @@ import { BullmqRegistrationQueue } from "./services/bullmq-registration-queue.js
 import { RegistrationJobService } from "./services/registration-job-service.js";
 import { RegistrationService } from "./services/registration-service.js";
 import { createRegistrationWorker } from "./services/registration-worker.js";
+import { YydsMailConfigService } from "./services/yyds-mail-config-service.js";
+import { SecretBox } from "./security/secretbox.js";
 import { MysqlAccountStore } from "./store/mysql-account-store.js";
 import { MysqlCosConfigStore } from "./store/cos-config-store.js";
 import { MysqlYydsMailConfigStore } from "./store/yyds-mail-config-store.js";
 import { MysqlVideoTaskStore } from "./store/video-task-store.js";
+
+const DEFAULT_YYDS_MAIL_BASE_URL = "https://maliapi.215.im/v1";
+
+function normalizeSecretRoot(value: string): string {
+  return value.length >= 32 ? value : createHash("sha256").update(value).digest("hex");
+}
 
 const config = loadConfig();
 await MysqlAccountStore.createDatabaseIfMissing(config.mysql);
@@ -28,20 +37,29 @@ if (config.defaultAccount) {
 }
 
 const accountService = new AccountService(accountStore);
+const yydsMailConfigService = new YydsMailConfigService(
+  yydsMailConfigStore,
+  new SecretBox(
+    normalizeSecretRoot(config.cosConfigSecret ?? config.masterApiKey),
+    "navos:yyds_mail_config:v1"
+  )
+);
 const vipClient = new VipClient({
   baseUrl: config.vipBaseUrl,
   hmacSecret: config.vipHmacSecret,
   fetchImpl: undefined
 });
 
-const yydsMailApiKey = config.yydsMailApiKey;
-const yydsClient = new YydsMailClient({
-  baseUrl: config.yydsMailBaseUrl,
-  apiKey: yydsMailApiKey ?? ""
-});
-
 const registrationService = new RegistrationService({
-  yydsClient,
+  yydsClientProvider: async () => {
+    const apiKey = await yydsMailConfigService.enabledApiKey();
+    return apiKey
+      ? new YydsMailClient({
+        baseUrl: DEFAULT_YYDS_MAIL_BASE_URL,
+        apiKey
+      })
+      : undefined;
+  },
   vipClient,
   accountService
 });

@@ -40,12 +40,12 @@ export class YydsMailConfigService {
     return toDto(saved);
   }
 
-  async enabledApiKey(fallbackApiKey?: string): Promise<string | undefined> {
+  async enabledApiKey(): Promise<string | undefined> {
     const raw = await this.store.getRaw();
     if (raw) {
       return raw.enabled ? this.box.decrypt(raw.apiKeyEnc) : undefined;
     }
-    return fallbackApiKey;
+    return undefined;
   }
 }
 
