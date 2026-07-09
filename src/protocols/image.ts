@@ -286,7 +286,22 @@ function readTaskStatus(value: unknown): string | undefined {
 }
 
 function readMessage(value: unknown): string | undefined {
-  return readDeepString(value, ["message", "msg", "error_message"]);
+  const explicitError = readDeepString(value, ["error", "error_message"]);
+  if (explicitError) {
+    return explicitError;
+  }
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    const errorObjectMessage = readDeepString(record.error, ["message", "msg", "error_message"]);
+    if (errorObjectMessage) {
+      return errorObjectMessage;
+    }
+    const dataMessage = readDeepString(record.data, ["message", "msg"]);
+    if (dataMessage) {
+      return dataMessage;
+    }
+  }
+  return readDeepString(value, ["message", "msg"]);
 }
 
 function readCode(value: Record<string, unknown>): number | undefined {
