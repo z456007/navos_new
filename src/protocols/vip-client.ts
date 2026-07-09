@@ -14,6 +14,15 @@ export interface VipResult<T = unknown> {
   error?: string;
 }
 
+export interface VipBalance {
+  availableBalance: number;
+  totalBalance: number;
+}
+
+export interface VipBalanceClient {
+  queryBalance(uid: string, token: string): Promise<VipBalance>;
+}
+
 export class VipClientError extends Error {
   constructor(
     message: string,
@@ -50,7 +59,7 @@ const DEFAULT_COMMON: Omit<VipCommon, "token" | "uid" | "open_id"> = {
   oemid: ""
 };
 
-export class VipClient {
+export class VipClient implements VipBalanceClient {
   private readonly baseUrl: string;
   private readonly hmacSecret: string;
   private readonly fetchImpl: FetchLike;
@@ -120,11 +129,16 @@ export class VipClient {
     return { uid, token };
   }
 
-  /** Query available balance for an account. */
-  async queryBalance(uid: string, token: string): Promise<number> {
+  /** Query available and total balance for an account. */
+  async queryBalance(uid: string, token: string): Promise<VipBalance> {
     const result = await this.request<{
-      data?: { available_balance?: number };
-      resp_common?: { ret?: number };
+      data?: {
+        available_balance?: number;
+        total_balance?: number;
+        remaining_amount?: number;
+        total_amount?: number;
+      };
+      resp_common?: { ret?: number; msg?: string };
     }>(
       "/api/v1/balancebatch/query/balance",
       { currency_id: 1, uid },
@@ -133,9 +147,25 @@ export class VipClient {
     );
 
     if (!result.ok) {
-      return 0;
+      throw new VipClientError(
+        result.error ?? "queryBalance failed",
+        result.status,
+        result.body
+      );
     }
-    return result.body.data?.available_balance ?? 0;
+    const ret = result.body.resp_common?.ret;
+    if (ret !== undefined && ret !== 0 && ret !== 200) {
+      throw new VipClientError(
+        result.body.resp_common?.msg ?? `queryBalance returned ret=${ret}`,
+        result.status,
+        result.body
+      );
+    }
+
+    const data = result.body.data ?? {};
+    const availableBalance = numericBalance(data.available_balance ?? data.remaining_amount);
+    const totalBalance = numericBalance(data.total_balance ?? data.total_amount ?? availableBalance);
+    return { availableBalance, totalBalance };
   }
 
   /**
@@ -294,4 +324,8 @@ export class VipClient {
 
     return { ok: true, status: response.status, body: parsed as T };
   }
+}
+
+function numericBalance(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }

@@ -26,6 +26,7 @@ export function AccountsPanel({
   const [job, setJob] = useState<RegistrationJobView | undefined>();
   const [jobTarget, setJobTarget] = useState(10);
   const [jobConcurrency, setJobConcurrency] = useState(2);
+  const [refreshingBalanceUid, setRefreshingBalanceUid] = useState<string | undefined>();
   const pollTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const pollFailures = useRef(0);
   const mounted = useRef(false);
@@ -227,6 +228,24 @@ export function AccountsPanel({
     }
   }
 
+  async function refreshAccountBalance(uid: string) {
+    setRefreshingBalanceUid(uid);
+    setStatus({ kind: "loading", message: "刷新余额中" });
+    try {
+      const refreshed = await apiRequest<AccountListItem>(
+        apiKey,
+        `/api/accounts/${encodeURIComponent(uid)}/balance/refresh`,
+        { method: "POST" }
+      );
+      onAccountsChange(accounts.map((account) => account.uid === uid ? refreshed : account));
+      setStatus({ kind: "ok", message: "余额已刷新" });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) ?? "刷新余额失败" });
+    } finally {
+      setRefreshingBalanceUid((current) => current === uid ? undefined : current);
+    }
+  }
+
   return (
     <section className="panel" aria-labelledby="accounts-title">
       <div className="panel-head">
@@ -360,6 +379,16 @@ export function AccountsPanel({
                 <td>{formatTime(account.lastUsedAt)}</td>
                 <td>
                   <div className="row-actions">
+                    <button
+                      aria-label={`刷新 ${account.uid} 余额`}
+                      className="icon-button"
+                      disabled={refreshingBalanceUid === account.uid}
+                      onClick={() => void refreshAccountBalance(account.uid)}
+                      title="刷新余额"
+                      type="button"
+                    >
+                      <RefreshCw size={15} aria-hidden="true" />
+                    </button>
                     <button className="icon-button" onClick={() => void updateAccount(account.uid, "enable")} title="启用" type="button">
                       <Power size={15} aria-hidden="true" />
                     </button>

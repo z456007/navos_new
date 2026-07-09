@@ -48,6 +48,57 @@ describe("admin app gate", () => {
     expect(localStorage.getItem("navos.admin.apiKey")).toBe("sk-local");
   });
 
+  it("refreshes a row balance from the account pool", async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });
+      const path = String(url);
+      if (path === "/api/accounts") {
+        return Response.json([{
+          uid: "u1",
+          tokenPreview: "token-ab...",
+          mailboxAddr: "a@mail.test",
+          status: "active",
+          balanceRemaining: 1000,
+          balanceTotal: 1000,
+          rateLimitedUntil: 0,
+          createdAt: 0,
+          lastUsedAt: 0,
+          lastBalanceAt: 1000
+        }]);
+      }
+      if (path === "/api/registration/jobs" && init?.method === "GET") {
+        return Response.json([]);
+      }
+      if (path === "/api/accounts/u1/balance/refresh" && init?.method === "POST") {
+        return Response.json({
+          uid: "u1",
+          tokenPreview: "token-ab...",
+          mailboxAddr: "a@mail.test",
+          status: "active",
+          balanceRemaining: 1500,
+          balanceTotal: 2000,
+          rateLimitedUntil: 0,
+          createdAt: 0,
+          lastUsedAt: 0,
+          lastBalanceAt: 2000
+        });
+      }
+      return Response.json({ error: { message: "unexpected path" } }, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("Master API Key"), { target: { value: "sk-local" } });
+    fireEvent.click(screen.getByRole("button", { name: "进入控制台" }));
+
+    await screen.findByText("1000 / 1000");
+    fireEvent.click(screen.getByRole("button", { name: "刷新 u1 余额" }));
+
+    await screen.findByText("1500 / 2000");
+    expect(fetchMock).toHaveBeenCalledWith("/api/accounts/u1/balance/refresh", expect.objectContaining({ method: "POST" }));
+  });
+
   it("creates and polls a video task from the console", async () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });

@@ -79,6 +79,7 @@ const app = createApp({
   yydsMailConfigSecret: config.cosConfigSecret,
   yydsMailConfigStore,
   videoTaskStore,
+  vipClient,
   registrationService,
   registrationJobService
 });

@@ -375,6 +375,49 @@ describe("server routes", () => {
     expect(listed.json()[0]).not.toHaveProperty("token");
   });
 
+  it("refreshes an account balance through the VIP balance protocol", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    await accountService.importAccount({
+      uid: "u1",
+      token: "token-1",
+      balanceRemaining: 1000,
+      balanceTotal: 1000
+    });
+    const vipClient = {
+      queryBalance: vi.fn(async () => ({
+        availableBalance: 1500,
+        totalBalance: 2000
+      }))
+    };
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      vipClient,
+      fetchImpl: async () => Response.json({ ok: true })
+    });
+
+    const refreshed = await app.inject({
+      method: "POST",
+      url: "/api/accounts/u1/balance/refresh",
+      headers: { authorization: "Bearer sk-test" }
+    });
+
+    expect(refreshed.statusCode).toBe(200);
+    expect(vipClient.queryBalance).toHaveBeenCalledWith("u1", "token-1");
+    expect(refreshed.json()).toMatchObject({
+      uid: "u1",
+      balanceRemaining: 1500,
+      balanceTotal: 2000
+    });
+    expect(await store.get("u1")).toMatchObject({
+      balanceRemaining: 1500,
+      balanceTotal: 2000
+    });
+  });
+
   it("exposes v1 video generation compatibility routes", async () => {
     const paths: string[] = [];
     const app = createApp({

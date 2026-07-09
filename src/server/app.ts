@@ -7,6 +7,7 @@ import { ProviderHttpClient } from "../protocols/http.js";
 import { forwardModelRequest } from "../protocols/model-proxy.js";
 import { registerAccount } from "../protocols/register.js";
 import { uploadAsset } from "../protocols/upload.js";
+import type { VipBalanceClient } from "../protocols/vip-client.js";
 import { assertVideoGenerationRules, createVideoTask, getVideoTask, normalizeVideoTaskStatus, type NormalizedVideoTask } from "../protocols/video.js";
 import { YydsMailClient, YydsMailError } from "../protocols/mail/yyds-mail.js";
 import { AccountService } from "../services/account-service.js";
@@ -41,6 +42,7 @@ export interface CreateAppOptions {
   videoTaskStore?: VideoTaskStore;
   archiveVideo?: (input: { taskId: string; sourceUrl: string; config: EnabledCosConfig }) => Promise<ArchiveVideoResult>;
   fetchImpl?: FetchLike;
+  vipClient?: VipBalanceClient;
   registrationService?: RegistrationService;
   registrationJobService?: RegistrationJobServicePort;
 }
@@ -468,6 +470,49 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       return;
     }
     await reply.send(account);
+  });
+
+  app.post("/api/accounts/:uid/balance/refresh", async (request, reply) => {
+    if (!requireLocalAuth(request, reply)) {
+      return;
+    }
+    const vipClient = options.vipClient;
+    if (!vipClient) {
+      await reply.status(503).send({
+        error: {
+          message: "VIP balance client is not configured",
+          type: "balance_refresh_unavailable"
+        }
+      });
+      return;
+    }
+    const params = request.params as { uid?: string };
+    const account = params.uid ? await accountService.getProviderAccount(params.uid) : undefined;
+    if (!account) {
+      await reply.status(404).send({ error: { message: "Account not found" } });
+      return;
+    }
+
+    try {
+      const balance = await vipClient.queryBalance(account.uid, account.token);
+      const updated = await accountService.updateBalance(
+        account.uid,
+        balance.availableBalance,
+        balance.totalBalance
+      );
+      if (!updated) {
+        await reply.status(404).send({ error: { message: "Account not found" } });
+        return;
+      }
+      await reply.send(updated);
+    } catch (error) {
+      await reply.status(502).send({
+        error: {
+          message: error instanceof Error ? error.message : "VIP balance refresh failed",
+          type: "balance_refresh_failed"
+        }
+      });
+    }
   });
 
   app.get("/api/cos/config", async (request, reply) => {

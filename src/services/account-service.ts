@@ -79,6 +79,16 @@ export class AccountService {
     await this.depleteAccount(uid);
   }
 
+  async updateBalance(
+    uid: string,
+    balanceRemaining: number,
+    balanceTotal?: number
+  ): Promise<AccountListItem | undefined> {
+    await this.store.setBalance(uid, balanceRemaining, balanceTotal);
+    const account = await this.store.get(uid);
+    return account ? toListItem(account) : undefined;
+  }
+
   async enableAccount(uid: string): Promise<AccountListItem | undefined> {
     await this.store.setStatus(uid, "active");
     const account = await this.store.get(uid);

@@ -1,5 +1,5 @@
 import type { YydsMailClient } from "../protocols/mail/yyds-mail.js";
-import type { VipClient } from "../protocols/vip-client.js";
+import type { VipBalance, VipClient } from "../protocols/vip-client.js";
 import type { AccountService } from "./account-service.js";
 
 export interface RegistrationServiceOptions {
@@ -169,7 +169,7 @@ export class RegistrationService {
       const { uid, token } = await this.vipClient.login(email, code);
 
       // 5. Query initial balance (should be 1000 from registration)
-      const balReg = await this.vipClient.queryBalance(uid, token);
+      const balReg = await this.queryBalanceOrZero(uid, token);
 
       // 6. Enterprise certification (+1000 credits)
       let certCredits = 0;
@@ -186,7 +186,8 @@ export class RegistrationService {
         certCredits = 0;
       }
 
-      const totalBalance = balReg + certCredits;
+      const balanceRemaining = balReg.availableBalance + certCredits;
+      const balanceTotal = balReg.totalBalance + certCredits;
 
       // 7. Import into account pool
       await this.accountService.importAccount({
@@ -194,8 +195,8 @@ export class RegistrationService {
         token,
         mailboxAddr: email,
         mailboxToken,
-        balanceRemaining: totalBalance,
-        balanceTotal: totalBalance,
+        balanceRemaining,
+        balanceTotal,
         status: "active"
       });
 
@@ -205,7 +206,7 @@ export class RegistrationService {
         token,
         email,
         mailboxToken,
-        balance: totalBalance,
+        balance: balanceRemaining,
         certCredits
       };
     } catch (error) {
@@ -294,6 +295,14 @@ export class RegistrationService {
     }
 
     return undefined;
+  }
+
+  private async queryBalanceOrZero(uid: string, token: string): Promise<VipBalance> {
+    try {
+      return await this.vipClient.queryBalance(uid, token);
+    } catch {
+      return { availableBalance: 0, totalBalance: 0 };
+    }
   }
 }
 
