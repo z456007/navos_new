@@ -130,6 +130,16 @@ function providerResultIndicatesQuotaExhausted(result: ProviderResult): boolean 
   return /insufficient_balance|积分不足|余额不足/.test(bodyText);
 }
 
+function imageResultIsRetryable(result: ProviderResult): boolean {
+  if (result.status < 500) {
+    return false;
+  }
+  const bodyText = typeof result.body === "string"
+    ? result.body
+    : JSON.stringify(result.body);
+  return /Image task failed|创建图片任务失败|upstream|server_error|temporar/i.test(bodyText);
+}
+
 function localModelCatalog() {
   return {
     object: "list",
@@ -262,7 +272,11 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     return registeredAccount;
   }
 
-  async function leaseImageAccountOrRegister(leaseId: string, reply: FastifyReply): Promise<AccountRecord | undefined> {
+  async function leaseImageAccountOrRegister(
+    leaseId: string,
+    reply: FastifyReply,
+    sendUnavailable: boolean = true
+  ): Promise<AccountRecord | undefined> {
     const existingAccount = await accountService.leaseImageAccount(leaseId);
     if (existingAccount) {
       return existingAccount;
@@ -270,23 +284,27 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
 
     const registrationService = options.registrationService;
     if (!registrationService) {
-      await reply.status(503).send({
-        error: {
-          message: "No available account for image generation",
-          type: "account_unavailable"
-        }
-      });
+      if (sendUnavailable) {
+        await reply.status(503).send({
+          error: {
+            message: "No available account for image generation",
+            type: "account_unavailable"
+          }
+        });
+      }
       return undefined;
     }
 
     const registrationResult = await registrationService.registerOne();
     if (!registrationResult.success) {
-      await reply.status(503).send({
-        error: {
-          message: registrationResult.error ?? "Image account registration failed",
-          type: "image_account_registration_failed"
-        }
-      });
+      if (sendUnavailable) {
+        await reply.status(503).send({
+          error: {
+            message: registrationResult.error ?? "Image account registration failed",
+            type: "image_account_registration_failed"
+          }
+        });
+      }
       return undefined;
     }
 
@@ -307,12 +325,14 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
 
     const registeredAccount = await accountService.leaseImageAccount(leaseId);
     if (!registeredAccount) {
-      await reply.status(503).send({
-        error: {
-          message: "Image account registration completed, but no account could be leased",
-          type: "account_unavailable"
-        }
-      });
+      if (sendUnavailable) {
+        await reply.status(503).send({
+          error: {
+            message: "Image account registration completed, but no account could be leased",
+            type: "account_unavailable"
+          }
+        });
+      }
       return undefined;
     }
 
@@ -924,26 +944,43 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       return;
     }
 
-    const leaseId = `image:${randomUUID()}`;
-    const account = await leaseImageAccountOrRegister(leaseId, reply);
-    if (!account) {
-      return;
+    let lastResult: ProviderResult | undefined;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const leaseId = `image:${randomUUID()}`;
+      const account = await leaseImageAccountOrRegister(leaseId, reply, !lastResult);
+      if (!account) {
+        if (lastResult) {
+          await sendProviderResult(reply, lastResult);
+        }
+        return;
+      }
+
+      const headers = buildProviderAuthHeaders(account, options.providerAuthMode);
+      const result = await createImageGeneration(client, payload, headers);
+      lastResult = result;
+      if (result.status === 200) {
+        const body = await archiveImageGenerationBody(result.body);
+        await accountService.consumeImageAccount(account.uid, leaseId, IMAGE_ACCOUNT_COST);
+        await sendProviderResult(reply, { ...result, body });
+        return;
+      }
+      if (providerResultIndicatesQuotaExhausted(result)) {
+        await accountService.depleteAccount(account.uid);
+        continue;
+      }
+      await accountService.releaseImageAccount(account.uid, leaseId);
+      if (!imageResultIsRetryable(result)) {
+        await sendProviderResult(reply, result);
+        return;
+      }
+      await accountService.cooldownAccount(account.uid, 30);
     }
 
-    const headers = buildProviderAuthHeaders(account, options.providerAuthMode);
-    const result = await createImageGeneration(client, payload, headers);
-    if (result.status === 200) {
-      const body = await archiveImageGenerationBody(result.body);
-      await accountService.consumeImageAccount(account.uid, leaseId, IMAGE_ACCOUNT_COST);
-      await sendProviderResult(reply, { ...result, body });
-      return;
-    }
-    if (providerResultIndicatesQuotaExhausted(result)) {
-      await accountService.depleteAccount(account.uid);
-    } else {
-      await accountService.releaseImageAccount(account.uid, leaseId);
-    }
-    await sendProviderResult(reply, result);
+    await sendProviderResult(reply, lastResult ?? {
+      status: 503,
+      body: { error: { message: "All image accounts attempted — none succeeded", type: "server_error" } },
+      headers: new Headers()
+    });
   });
 
   app.post("/api/video/generations", handleCreateVideo);

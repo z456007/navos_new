@@ -673,6 +673,58 @@ describe("server routes", () => {
     expect(await store.get("u1")).toMatchObject({ balanceRemaining: 200, leaseUntil: 0 });
   });
 
+  it("retries image generation on the next leased account when the first account task fails", async () => {
+    const store = new InMemoryAccountStore();
+    await store.upsert({ uid: "u1", token: "t1", balanceRemaining: 200, balanceTotal: 200 });
+    await store.upsert({ uid: "u2", token: "t2", balanceRemaining: 200, balanceTotal: 200 });
+    const authHeaders: string[] = [];
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(store),
+      fetchImpl: async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        const authorization = String((init?.headers as Record<string, string>).authorization ?? "");
+        authHeaders.push(authorization);
+        if (path === "/api/tasks/navos-gpt-image-t2i" && authorization === "Bearer u1:t1") {
+          return Response.json({ code: 200, msg: "success", data: { task_id: "img_bad", status: "queued" } });
+        }
+        if (path === "/api/tasks/image/generations/img_bad") {
+          return Response.json({ code: 200, msg: "success", data: { status: "failed", error: "创建图片任务失败" } });
+        }
+        if (path === "/api/tasks/navos-gpt-image-t2i" && authorization === "Bearer u2:t2") {
+          return Response.json({ code: 200, msg: "success", data: { task_id: "img_good", status: "queued" } });
+        }
+        if (path === "/api/tasks/image/generations/img_good") {
+          return Response.json({ code: 200, msg: "success", data: { status: "succeeded", url: "https://cdn.test/good.png" } });
+        }
+        return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/images/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "white robot", n: 1, quality: "low", size: "1024x1024" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      task_id: "img_good",
+      data: [{ url: "https://cdn.test/good.png" }]
+    });
+    expect(authHeaders).toEqual([
+      "Bearer u1:t1",
+      "Bearer u1:t1",
+      "Bearer u2:t2",
+      "Bearer u2:t2"
+    ]);
+    expect(await store.get("u1")).toMatchObject({ balanceRemaining: 200, leaseUntil: 0 });
+    expect(await store.get("u2")).toMatchObject({ balanceRemaining: 100, leaseUntil: 0 });
+  });
+
   it("exposes v1 video generation compatibility routes", async () => {
     const paths: string[] = [];
     const accountService = new AccountService(new InMemoryAccountStore());
