@@ -43,7 +43,7 @@ describe("admin app gate", () => {
       expect(screen.getAllByRole("heading", { name: "账号池" }).length).toBeGreaterThan(0);
     });
     expect(fetchMock).toHaveBeenCalledWith("/api/accounts", expect.objectContaining({ method: "GET" }));
-    expect(screen.getByText("剩余额度")).toBeInTheDocument();
+    expect(screen.getAllByText("剩余额度").length).toBeGreaterThan(0);
     expect(screen.getByText("1500 / 2000")).toBeInTheDocument();
     expect(localStorage.getItem("navos.admin.apiKey")).toBe("sk-local");
   });
@@ -441,8 +441,9 @@ describe("admin app gate", () => {
     expect(screen.getByText("生成前会自动准备一个一次性账号")).toBeInTheDocument();
     expect(screen.getByText("账号池没有可用账号时会自动注册；每个账号只用于一个视频任务。")).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText("分辨率"), { target: { value: "1080P" } });
-    expect(screen.getByLabelText("时长")).toHaveAttribute("max", "5");
+    fireEvent.mouseDown(screen.getByLabelText("分辨率"));
+    fireEvent.click(await screen.findByRole("option", { name: "1080P" }));
+    expect(screen.getByLabelText("时长")).toHaveAttribute("aria-valuemax", "5");
   });
 
   it("saves COS config from the console without exposing secrets", async () => {

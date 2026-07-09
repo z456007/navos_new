@@ -34,7 +34,6 @@ body {
 
 button,
 input,
-select,
 textarea {
   font: inherit;
 }
@@ -45,7 +44,6 @@ button {
 
 button:focus-visible,
 input:focus,
-select:focus,
 textarea:focus {
   outline: none;
   border-color: var(--blue);
@@ -162,19 +160,47 @@ a.button {
 }
 
 .text-field input,
-.text-field select,
+.text-field .ant-input,
+.text-field .ant-input-affix-wrapper,
+.text-field .ant-input-number,
+.text-field .ant-select,
 .gate-form input,
+.gate-form .ant-input-affix-wrapper,
 .textarea-field textarea {
   width: 100%;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: #fff;
-  color: var(--ink);
-  padding: 9px 10px;
 }
 
-.text-field select {
-  min-height: 39px;
+.text-field .ant-input,
+.text-field .ant-input-affix-wrapper,
+.text-field .ant-input-number,
+.text-field .ant-select-selector,
+.gate-form .ant-input-affix-wrapper {
+  min-height: 38px;
+}
+
+.ant-field .ant-input,
+.ant-field .ant-input-affix-wrapper,
+.ant-field .ant-input-number,
+.ant-field .ant-select-selector,
+.ant-field .ant-input-number-input {
+  font-size: 13px;
+}
+
+.navos-select .ant-select-selector {
+  border-color: var(--line) !important;
+  box-shadow: none !important;
+}
+
+.navos-select.ant-select-focused .ant-select-selector {
+  border-color: var(--blue) !important;
+  box-shadow: 0 0 0 3px rgba(47, 111, 235, 0.14) !important;
+}
+
+.textarea-field .ant-input {
+  min-height: 190px;
+  resize: vertical;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
 }
 
 .app-shell {
@@ -474,7 +500,7 @@ a.button {
   background: linear-gradient(180deg, #fbfcfe 0%, #fff 100%);
 }
 
-.video-prompt textarea {
+.video-prompt .ant-input {
   min-height: 230px;
 }
 
@@ -491,6 +517,10 @@ a.button {
   width: 17px;
   height: 17px;
   accent-color: var(--blue);
+}
+
+.ant-switch-row {
+  gap: 10px;
 }
 
 .task-strip {
@@ -638,37 +668,23 @@ a.button {
   font-size: 12px;
 }
 
-.table-wrap {
-  overflow-x: auto;
+.accounts-table .ant-table {
+  border-radius: 0;
 }
 
-table {
-  width: 100%;
-  min-width: 780px;
-  border-collapse: collapse;
-}
-
-th,
-td {
-  border-top: 1px solid var(--line);
-  padding: 10px 12px;
-  text-align: left;
-  white-space: nowrap;
-}
-
-th {
+.accounts-table .ant-table-thead > tr > th {
   color: var(--muted);
   font-size: 12px;
   font-weight: 700;
 }
 
-td {
+.accounts-table .ant-table-tbody > tr > td {
   font-size: 13px;
 }
 
 .mono,
 .json-block,
-.textarea-field textarea {
+.textarea-field .ant-input {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 
@@ -677,9 +693,9 @@ td {
   gap: 7px;
 }
 
-.icon-button {
+.row-actions .ant-btn {
   width: 32px;
-  min-height: 32px;
+  height: 32px;
   padding: 0;
 }
 
@@ -715,12 +731,6 @@ td {
   color: var(--muted);
   text-align: center;
   padding: 26px;
-}
-
-.textarea-field textarea {
-  min-height: 190px;
-  resize: vertical;
-  font-size: 12px;
 }
 
 .json-block {
