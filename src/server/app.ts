@@ -18,8 +18,9 @@ import {
   type NormalizedVideoTask
 } from "../protocols/video.js";
 import { YydsMailClient, YydsMailError } from "../protocols/mail/yyds-mail.js";
-import { AccountService } from "../services/account-service.js";
+import { AccountService, IMAGE_ACCOUNT_COST } from "../services/account-service.js";
 import { CosConfigService, type CosConfigInput, type EnabledCosConfig } from "../services/cos-config-service.js";
+import { archiveImageToCos, type ArchiveImageResult } from "../services/image-archive.js";
 import { archiveVideoToCos, type ArchiveVideoResult } from "../services/video-archive.js";
 import { YydsMailConfigService, type YydsMailConfigInput } from "../services/yyds-mail-config-service.js";
 import { SecretBox } from "../security/secretbox.js";
@@ -48,6 +49,7 @@ export interface CreateAppOptions {
   cosConfigSecret?: string;
   cosConfigStore?: CosConfigStore;
   videoTaskStore?: VideoTaskStore;
+  archiveImage?: (input: { taskId: string; index: number; sourceUrl: string; config: EnabledCosConfig }) => Promise<ArchiveImageResult>;
   archiveVideo?: (input: { taskId: string; sourceUrl: string; config: EnabledCosConfig }) => Promise<ArchiveVideoResult>;
   fetchImpl?: FetchLike;
   vipClient?: VipBalanceClient;
@@ -160,6 +162,8 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     )
   );
   const videoTaskStore = options.videoTaskStore ?? new InMemoryVideoTaskStore();
+  const archiveImage = options.archiveImage ?? ((input: { taskId: string; index: number; sourceUrl: string; config: EnabledCosConfig }) =>
+    archiveImageToCos({ ...input, fetchImpl: options.fetchImpl }));
   const archiveVideo = options.archiveVideo ?? ((input: { taskId: string; sourceUrl: string; config: EnabledCosConfig }) =>
     archiveVideoToCos({ ...input, fetchImpl: options.fetchImpl }));
   const client = new ProviderHttpClient(options.providerBaseUrl, options.fetchImpl);
@@ -249,6 +253,63 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       await reply.status(503).send({
         error: {
           message: "Video account registration completed, but no account could be leased",
+          type: "account_unavailable"
+        }
+      });
+      return undefined;
+    }
+
+    return registeredAccount;
+  }
+
+  async function leaseImageAccountOrRegister(leaseId: string, reply: FastifyReply): Promise<AccountRecord | undefined> {
+    const existingAccount = await accountService.leaseImageAccount(leaseId);
+    if (existingAccount) {
+      return existingAccount;
+    }
+
+    const registrationService = options.registrationService;
+    if (!registrationService) {
+      await reply.status(503).send({
+        error: {
+          message: "No available account for image generation",
+          type: "account_unavailable"
+        }
+      });
+      return undefined;
+    }
+
+    const registrationResult = await registrationService.registerOne();
+    if (!registrationResult.success) {
+      await reply.status(503).send({
+        error: {
+          message: registrationResult.error ?? "Image account registration failed",
+          type: "image_account_registration_failed"
+        }
+      });
+      return undefined;
+    }
+
+    if (registrationResult.uid && registrationResult.token) {
+      const savedAccount = await accountService.getProviderAccount(registrationResult.uid);
+      if (!savedAccount) {
+        await accountService.importAccount({
+          uid: registrationResult.uid,
+          token: registrationResult.token,
+          mailboxAddr: registrationResult.email,
+          mailboxToken: registrationResult.mailboxToken,
+          balanceRemaining: registrationResult.balance,
+          balanceTotal: registrationResult.balance,
+          status: "active"
+        });
+      }
+    }
+
+    const registeredAccount = await accountService.leaseImageAccount(leaseId);
+    if (!registeredAccount) {
+      await reply.status(503).send({
+        error: {
+          message: "Image account registration completed, but no account could be leased",
           type: "account_unavailable"
         }
       });
@@ -395,6 +456,69 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       sizeBytes: record.sizeBytes,
       sha256: record.sha256
     };
+  }
+
+  async function archiveImageGenerationBody(body: unknown): Promise<unknown> {
+    if (!isPlainRecord(body) || !Array.isArray(body.data)) {
+      return body;
+    }
+    const taskId = typeof body.task_id === "string"
+      ? body.task_id
+      : typeof body.id === "string"
+        ? body.id
+        : "image";
+    const config = await cosConfigService.enabledConfig();
+    if (!config) {
+      return {
+        ...body,
+        data: body.data.map((item) => isPlainRecord(item)
+          ? { ...item, archiveStatus: "skipped", archiveError: "COS config is not enabled" }
+          : item)
+      };
+    }
+
+    const data = await Promise.all(body.data.map(async (item, index) => {
+      if (!isPlainRecord(item)) {
+        return item;
+      }
+      const sourceUrl = imageOutputSource(item);
+      if (!sourceUrl) {
+        return item;
+      }
+      try {
+        const archived = await archiveImage({ taskId, index: index + 1, sourceUrl, config });
+        return {
+          ...item,
+          cosUrl: archived.cosUrl,
+          cosKey: archived.cosKey,
+          archiveStatus: "archived",
+          archiveError: undefined,
+          sizeBytes: archived.sizeBytes,
+          sha256: archived.sha256
+        };
+      } catch (error) {
+        return {
+          ...item,
+          archiveStatus: "failed",
+          archiveError: error instanceof Error ? error.message : "COS archive failed"
+        };
+      }
+    }));
+    return { ...body, data };
+  }
+
+  function imageOutputSource(item: Record<string, unknown>): string | undefined {
+    if (typeof item.url === "string" && item.url) {
+      return item.url;
+    }
+    if (typeof item.b64_json === "string" && item.b64_json) {
+      return `data:image/png;base64,${item.b64_json}`;
+    }
+    return undefined;
+  }
+
+  function isPlainRecord(value: unknown): value is Record<string, unknown> {
+    return Boolean(value) && typeof value === "object" && !Array.isArray(value);
   }
 
   app.get("/health", async () => ({ ok: true }));
@@ -792,10 +916,6 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     if (!requireLocalAuth(request, reply)) {
       return;
     }
-    const auth = await providerAuth(reply);
-    if (!auth) {
-      return;
-    }
     let payload: Record<string, unknown>;
     try {
       payload = buildImageGenerationPayload(bodyRecord(request));
@@ -803,8 +923,26 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       await sendBadRequest(reply, error);
       return;
     }
-    const result = await createImageGeneration(client, payload, auth.headers);
-    await depleteProviderAccountIfNeeded(auth.account.uid, result);
+
+    const leaseId = `image:${randomUUID()}`;
+    const account = await leaseImageAccountOrRegister(leaseId, reply);
+    if (!account) {
+      return;
+    }
+
+    const headers = buildProviderAuthHeaders(account, options.providerAuthMode);
+    const result = await createImageGeneration(client, payload, headers);
+    if (result.status === 200) {
+      const body = await archiveImageGenerationBody(result.body);
+      await accountService.consumeImageAccount(account.uid, leaseId, IMAGE_ACCOUNT_COST);
+      await sendProviderResult(reply, { ...result, body });
+      return;
+    }
+    if (providerResultIndicatesQuotaExhausted(result)) {
+      await accountService.depleteAccount(account.uid);
+    } else {
+      await accountService.releaseImageAccount(account.uid, leaseId);
+    }
     await sendProviderResult(reply, result);
   });
 

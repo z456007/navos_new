@@ -991,6 +991,29 @@ a.button {
   font-weight: 900;
 }
 
+.image-reference-card {
+  border-color: rgba(37, 99, 235, 0.14);
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(124, 58, 237, 0.08), transparent 30%),
+    #ffffff;
+}
+
+.image-reference-card .ant-card-head {
+  min-height: 0;
+  padding: 10px 12px;
+}
+
+.image-reference-card .ant-card-body {
+  padding: 12px;
+}
+
+.image-reference-shell {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
 .image-result-card {
   overflow: hidden;
   border-color: rgba(37, 99, 235, 0.16);
@@ -1040,6 +1063,13 @@ a.button {
   color: #64748b;
   font-size: 12px;
   font-weight: 800;
+}
+
+.image-result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
 }
 
 .image-empty,

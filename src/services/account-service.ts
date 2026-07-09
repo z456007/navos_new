@@ -6,6 +6,8 @@ import type {
 } from "../store/account-store.js";
 
 export const VIDEO_ACCOUNT_REQUIRED_BALANCE = 2000;
+export const IMAGE_ACCOUNT_REQUIRED_BALANCE = 100;
+export const IMAGE_ACCOUNT_COST = 100;
 
 export interface AccountListItem {
   uid: string;
@@ -72,8 +74,37 @@ export class AccountService {
     return this.store.leaseActive(leaseId, Date.now() + ttlMs, undefined, minimumBalanceRemaining);
   }
 
+  async leaseImageAccount(
+    leaseId: string,
+    ttlMs: number = 10 * 60 * 1000,
+    minimumBalanceRemaining: number = IMAGE_ACCOUNT_REQUIRED_BALANCE
+  ): Promise<AccountRecord | undefined> {
+    return this.store.leaseActive(leaseId, Date.now() + ttlMs, undefined, minimumBalanceRemaining);
+  }
+
   async releaseVideoAccount(uid: string, leaseId?: string): Promise<void> {
     await this.store.releaseLease(uid, leaseId);
+  }
+
+  async releaseImageAccount(uid: string, leaseId?: string): Promise<void> {
+    await this.store.releaseLease(uid, leaseId);
+  }
+
+  async consumeImageAccount(uid: string, leaseId?: string, cost: number = IMAGE_ACCOUNT_COST): Promise<void> {
+    const account = await this.store.get(uid);
+    if (!account) {
+      return;
+    }
+    if (leaseId && account.leaseId && account.leaseId !== leaseId) {
+      return;
+    }
+    const nextBalance = Math.max(0, account.balanceRemaining - Math.max(0, cost));
+    await this.store.setBalance(uid, nextBalance, account.balanceTotal);
+    if (nextBalance <= 0) {
+      await this.store.setStatus(uid, "depleted");
+      return;
+    }
+    await this.store.markUsed(uid);
   }
 
   async depleteAccount(uid: string): Promise<void> {

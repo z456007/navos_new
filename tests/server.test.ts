@@ -451,11 +451,13 @@ describe("server routes", () => {
     const paths: string[] = [];
     let forwardedBody: Record<string, unknown> | undefined;
     let forwardedAuth = "";
+    const store = new InMemoryAccountStore();
+    await store.upsert({ uid: "u1", token: "t1", balanceRemaining: 200, balanceTotal: 200 });
     const app = createApp({
       masterApiKey: "sk-test",
       providerBaseUrl: "https://upstream.test",
       providerAuthMode: "uid-token",
-      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+      accountService: new AccountService(store),
       fetchImpl: async (url, init) => {
         const path = new URL(String(url)).pathname;
         paths.push(`${init?.method ?? "GET"} ${path}`);
@@ -497,6 +499,178 @@ describe("server routes", () => {
       response_format: "b64_json",
       output_format: "png"
     });
+    expect(await store.get("u1")).toMatchObject({
+      balanceRemaining: 100,
+      balanceTotal: 200,
+      status: "active",
+      leaseUntil: 0
+    });
+  });
+
+  it("creates image edits with reference images through the protected local route", async () => {
+    const paths: string[] = [];
+    let forwardedForm: FormData | undefined;
+    const store = new InMemoryAccountStore();
+    await store.upsert({ uid: "u1", token: "t1", balanceRemaining: 300, balanceTotal: 300 });
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(store),
+      fetchImpl: async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        paths.push(`${init?.method ?? "GET"} ${path}`);
+        if (path === "/api/tasks/navos-gpt-image-i2i") {
+          forwardedForm = init?.body as FormData;
+          expect(init?.body).toBeInstanceOf(FormData);
+          expect((init?.headers as Record<string, string>)["content-type"]).toBeUndefined();
+          return Response.json({ code: 200, data: { task_id: "img_edit_1", status: "queued" } });
+        }
+        if (path === "/api/tasks/image/edits/img_edit_1") {
+          return Response.json({ code: 200, data: { status: "succeeded", url: "https://cdn.test/edit.png" } });
+        }
+        return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/images/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: {
+        prompt: "turn it into a toy",
+        images: ["data:image/png;base64,aGVsbG8="],
+        n: 1,
+        quality: "auto",
+        size: "1024x1024"
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      status: "succeeded",
+      task_id: "img_edit_1",
+      data: [{ url: "https://cdn.test/edit.png" }]
+    });
+    expect(paths).toEqual([
+      "POST /api/tasks/navos-gpt-image-i2i",
+      "GET /api/tasks/image/edits/img_edit_1"
+    ]);
+    expect(forwardedForm?.get("prompt")).toBe("turn it into a toy");
+    expect(forwardedForm?.get("model")).toBe("gpt-image-2");
+    expect(forwardedForm?.getAll("image")).toHaveLength(1);
+    expect(await store.get("u1")).toMatchObject({ balanceRemaining: 200, leaseUntil: 0 });
+  });
+
+  it("archives successful image outputs to COS when COS is enabled", async () => {
+    const cosConfigStore = new InMemoryCosConfigStore();
+    const archiveImage = vi.fn(async () => ({
+      cosUrl: "https://cdn.example.com/navos/images/2026/07/09/img_task_1_1.png",
+      cosKey: "navos/images/2026/07/09/img_task_1_1.png",
+      sizeBytes: 4321,
+      sha256: "image-hash-1"
+    }));
+    const store = new InMemoryAccountStore();
+    await store.upsert({ uid: "u1", token: "t1", balanceRemaining: 200, balanceTotal: 200 });
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(store),
+      cosConfigStore,
+      cosConfigSecret: "12345678901234567890123456789012",
+      archiveImage,
+      fetchImpl: async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        if (path === "/api/tasks/navos-gpt-image-t2i") {
+          return Response.json({ code: 200, data: { task_id: "img_task_1", status: "queued" } });
+        }
+        if (path === "/api/tasks/image/generations/img_task_1") {
+          return Response.json({ code: 200, data: { status: "succeeded", url: "https://oss.test/img_task_1.png" } });
+        }
+        return Response.json({ error: { message: `unexpected path ${path} ${init?.method ?? "GET"}` } }, { status: 404 });
+      }
+    });
+
+    await app.inject({
+      method: "PUT",
+      url: "/api/cos/config",
+      headers: { authorization: "Bearer sk-test" },
+      payload: {
+        name: "main",
+        secretId: "secret-id",
+        secretKey: "secret-key",
+        bucket: "bucket-123456",
+        region: "ap-shanghai",
+        publicDomain: "https://cdn.example.com",
+        uploadPrefix: "navos/videos",
+        enabled: true
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/images/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "white robot", n: 1, quality: "low", size: "1024x1024" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      status: "succeeded",
+      data: [{
+        url: "https://oss.test/img_task_1.png",
+        cosUrl: "https://cdn.example.com/navos/images/2026/07/09/img_task_1_1.png",
+        archiveStatus: "archived",
+        sizeBytes: 4321,
+        sha256: "image-hash-1"
+      }]
+    });
+    expect(archiveImage).toHaveBeenCalledWith({
+      taskId: "img_task_1",
+      index: 1,
+      sourceUrl: "https://oss.test/img_task_1.png",
+      config: expect.objectContaining({ bucket: "bucket-123456", uploadPrefix: "navos/videos" })
+    });
+  });
+
+  it("returns the nested image task error instead of the upstream success envelope", async () => {
+    const store = new InMemoryAccountStore();
+    await store.upsert({ uid: "u1", token: "t1", balanceRemaining: 200, balanceTotal: 200 });
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(store),
+      fetchImpl: async (url) => {
+        const path = new URL(String(url)).pathname;
+        if (path === "/api/tasks/navos-gpt-image-t2i") {
+          return Response.json({ code: 200, msg: "success", data: { task_id: "img_task_failed", status: "queued" } });
+        }
+        if (path === "/api/tasks/image/generations/img_task_failed") {
+          return Response.json({
+            code: 200,
+            msg: "success",
+            data: { status: "failed", error: "创建图片任务失败" }
+          });
+        }
+        return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/images/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "white robot", n: 1, quality: "low", size: "1024x1024" }
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toMatchObject({
+      error: { message: "创建图片任务失败" },
+      task_id: "img_task_failed"
+    });
+    expect(await store.get("u1")).toMatchObject({ balanceRemaining: 200, leaseUntil: 0 });
   });
 
   it("exposes v1 video generation compatibility routes", async () => {

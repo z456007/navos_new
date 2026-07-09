@@ -140,6 +140,42 @@ describe("admin app gate", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/images/generations", expect.objectContaining({ method: "POST" }));
   });
 
+  it("sends reference image URLs from the image workbench", async () => {
+    let imagePayload: Record<string, unknown> | undefined;
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url);
+      if (path === "/api/accounts") {
+        return Response.json([]);
+      }
+      if (path === "/api/images/generations" && init?.method === "POST") {
+        imagePayload = JSON.parse(String(init.body));
+        return Response.json({ data: [{ url: "https://cdn.test/reference-result.png" }] });
+      }
+      return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("Master API Key"), { target: { value: "sk-local" } });
+    fireEvent.click(screen.getByRole("button", { name: "进入控制台" }));
+
+    await screen.findByRole("button", { name: "图片生成" });
+    fireEvent.click(screen.getByRole("button", { name: "图片生成" }));
+
+    fireEvent.change(screen.getByLabelText("图片提示词"), { target: { value: "保持人物姿态，改成赛博朋克风格" } });
+    fireEvent.change(screen.getByLabelText("参考图片 URL（每行一个）"), {
+      target: { value: "https://assets.test/ref-a.png\nhttps://assets.test/ref-b.png" }
+    });
+    fireEvent.click(screen.getByRole("button", { name: "生成图片" }));
+
+    await screen.findByAltText("生成图片 1");
+    expect(imagePayload).toMatchObject({
+      prompt: "保持人物姿态，改成赛博朋克风格",
+      images: ["https://assets.test/ref-a.png", "https://assets.test/ref-b.png"]
+    });
+  });
+
   it("sends chat messages with the selected model from the console", async () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });

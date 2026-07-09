@@ -4,20 +4,30 @@ export interface ImageGenerationForm {
   size: string;
   quality: string;
   count: number;
+  referenceImages?: string[];
 }
 
 export interface ImageResult {
   url: string;
+  cosUrl?: string;
+  archiveStatus?: string;
+  archiveError?: string;
+  sizeBytes?: number;
 }
 
 export function buildImageGenerationRequest(form: ImageGenerationForm): Record<string, unknown> {
-  return {
+  const references = (form.referenceImages ?? []).map((item) => item.trim()).filter(Boolean).slice(0, 8);
+  const payload: Record<string, unknown> = {
     model: form.model.trim() || "gpt-image-2",
     prompt: form.prompt.trim(),
     n: Math.max(1, Math.min(4, Math.floor(form.count || 1))),
     quality: form.quality,
     size: form.size
   };
+  if (references.length > 0) {
+    payload.images = references;
+  }
+  return payload;
 }
 
 export function parseImageGenerationResults(response: unknown): ImageResult[] {
@@ -30,13 +40,35 @@ export function parseImageGenerationResults(response: unknown): ImageResult[] {
         return undefined;
       }
       const record = item as Record<string, unknown>;
+      const result: ImageResult = { url: "" };
       if (typeof record.b64_json === "string" && record.b64_json) {
-        return { url: `data:image/png;base64,${record.b64_json}` };
+        result.url = `data:image/png;base64,${record.b64_json}`;
+      } else if (typeof record.url === "string" && record.url) {
+        result.url = record.url;
+      } else {
+        return undefined;
       }
-      if (typeof record.url === "string" && record.url) {
-        return { url: record.url };
+      if (typeof record.cosUrl === "string" && record.cosUrl) {
+        result.cosUrl = record.cosUrl;
       }
-      return undefined;
+      if (typeof record.archiveStatus === "string" && record.archiveStatus) {
+        result.archiveStatus = record.archiveStatus;
+      }
+      if (typeof record.archiveError === "string" && record.archiveError) {
+        result.archiveError = record.archiveError;
+      }
+      if (typeof record.sizeBytes === "number" && Number.isFinite(record.sizeBytes)) {
+        result.sizeBytes = record.sizeBytes;
+      }
+      return result;
     })
     .filter((item): item is ImageResult => item !== undefined);
+}
+
+export function parseImageReferenceUrls(value: string): string[] {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 8);
 }

@@ -1,12 +1,14 @@
 import { type FormEvent, useState } from "react";
-import { Alert, Button as AntButton, Card, Input, InputNumber, Tag } from "antd";
-import { Download, ImageIcon, Sparkles } from "lucide-react";
+import { Alert, Button as AntButton, Card, Input, InputNumber, Tag, Upload } from "antd";
+import type { UploadFile } from "antd/es/upload/interface";
+import { Download, ExternalLink, ImageIcon, Link2, Sparkles, UploadCloud } from "lucide-react";
 import { apiRequest, errorMessage } from "../api";
 import { JsonBlock, StatusLine } from "../components/feedback";
 import { SelectField, TextField } from "../components/fields";
 import { idleStatus } from "../app/defaults";
 import {
   buildImageGenerationRequest,
+  parseImageReferenceUrls,
   parseImageGenerationResults,
   type ImageResult
 } from "../lib/image-generation";
@@ -35,6 +37,9 @@ export function ImagePanel({ apiKey }: { apiKey: string }) {
   const [status, setStatus] = useState<StatusState>(idleStatus);
   const [result, setResult] = useState<unknown>("等待生成图片");
   const [images, setImages] = useState<ImageResult[]>([]);
+  const [referenceUrls, setReferenceUrls] = useState("");
+  const [referenceFiles, setReferenceFiles] = useState<UploadFile[]>([]);
+  const referenceCount = Math.min(8, parseImageReferenceUrls(referenceUrls).length + referenceFiles.length);
 
   async function generateImage(event: FormEvent) {
     event.preventDefault();
@@ -48,9 +53,13 @@ export function ImagePanel({ apiKey }: { apiKey: string }) {
     setResult("图片生成中");
 
     try {
+      const referenceImages = [
+        ...parseImageReferenceUrls(referenceUrls),
+        ...await filesToDataUrls(referenceFiles)
+      ].slice(0, 8);
       const response = await apiRequest<unknown>(apiKey, "/api/images/generations", {
         method: "POST",
-        body: JSON.stringify(buildImageGenerationRequest({ ...form, prompt }))
+        body: JSON.stringify(buildImageGenerationRequest({ ...form, prompt, referenceImages }))
       });
       const nextImages = parseImageGenerationResults(response);
       setResult(response);
@@ -83,7 +92,7 @@ export function ImagePanel({ apiKey }: { apiKey: string }) {
             showIcon
             type="info"
             title="纯生图工作台"
-            description="只做文字生图，不做画布；生成成功后会在右侧直接展示图片结果。"
+            description="文字生图和参考图生图都自动走协议；参考图支持 URL 或本地上传，成功后后端会优先归档到 COS。"
           />
           <label className="image-prompt-field">
             <span>图片提示词</span>
@@ -127,6 +136,60 @@ export function ImagePanel({ apiKey }: { apiKey: string }) {
               />
             </label>
           </div>
+          <Card
+            className="image-reference-card"
+            size="small"
+            title={(
+              <div className="reference-card-title">
+                <span>参考图片</span>
+                <small>有参考图自动切换 image-to-image；最多 8 张</small>
+              </div>
+            )}
+            extra={<Tag color={referenceCount > 0 ? "processing" : "default"}>{referenceCount}/8</Tag>}
+          >
+            <div className="image-reference-shell">
+              <div className="reference-url-shell">
+                <Link2 size={14} aria-hidden="true" />
+                <Input.TextArea
+                  aria-label="参考图片 URL（每行一个）"
+                  className="reference-url-input"
+                  autoSize={{ minRows: 2, maxRows: 4 }}
+                  placeholder="参考图片 URL，每行一个；也可以直接上传本地图片。"
+                  value={referenceUrls}
+                  onChange={(event) => setReferenceUrls(event.target.value)}
+                />
+              </div>
+              <div className="reference-actions">
+                <Upload
+                  accept="image/*"
+                  beforeUpload={() => false}
+                  fileList={referenceFiles}
+                  multiple
+                  showUploadList={false}
+                  onChange={({ fileList }) => setReferenceFiles(fileList.slice(0, 8))}
+                >
+                  <AntButton htmlType="button" icon={<UploadCloud size={14} />} size="small">
+                    添加参考图
+                  </AntButton>
+                </Upload>
+                <div className="reference-file-list" aria-label="参考图片已选文件">
+                  {referenceFiles.length === 0 ? (
+                    <span className="reference-file-empty">无需手动导入配置，选择图片后提交时自动转成协议素材</span>
+                  ) : referenceFiles.map((file) => (
+                    <Tag
+                      className="reference-file-chip"
+                      closable
+                      key={file.uid}
+                      title={file.name}
+                      onClose={() => setReferenceFiles(referenceFiles.filter((item) => item.uid !== file.uid))}
+                    >
+                      <span className="reference-file-name">{file.name}</span>
+                    </Tag>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </Card>
           <div className="toolbar flush">
             <AntButton
               className="image-generate-button"
@@ -155,13 +218,18 @@ export function ImagePanel({ apiKey }: { apiKey: string }) {
             ) : images.length > 0 ? (
               <div className="image-result-grid">
                 {images.map((image, index) => (
-                  <figure className="image-result-tile" key={`${image.url}-${index}`}>
-                    <img alt={`生成图片 ${index + 1}`} src={image.url} />
+                  <figure className="image-result-tile" key={`${image.cosUrl ?? image.url}-${index}`}>
+                    <img alt={`生成图片 ${index + 1}`} src={image.cosUrl ?? image.url} />
                     <figcaption>
-                      <span>#{index + 1}</span>
-                      <AntButton href={image.url} icon={<Download size={14} />} size="small" download>
-                        下载
-                      </AntButton>
+                      <span>#{index + 1} {image.archiveStatus ? `· ${image.archiveStatus}` : ""}</span>
+                      <span className="image-result-actions">
+                        <AntButton href={image.cosUrl ?? image.url} icon={<ExternalLink size={14} />} rel="noreferrer" size="small" target="_blank">
+                          打开
+                        </AntButton>
+                        <AntButton href={image.cosUrl ?? image.url} icon={<Download size={14} />} size="small" download>
+                          下载
+                        </AntButton>
+                      </span>
                     </figcaption>
                   </figure>
                 ))}
@@ -179,4 +247,22 @@ export function ImagePanel({ apiKey }: { apiKey: string }) {
       </div>
     </section>
   );
+}
+
+async function filesToDataUrls(files: UploadFile[]): Promise<string[]> {
+  const values = await Promise.all(files.map(fileToDataUrl));
+  return values.filter((value): value is string => Boolean(value));
+}
+
+function fileToDataUrl(file: UploadFile): Promise<string | undefined> {
+  const original = file.originFileObj;
+  if (!original) {
+    return Promise.resolve(undefined);
+  }
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : undefined);
+    reader.onerror = () => reject(new Error(`读取文件失败：${file.name}`));
+    reader.readAsDataURL(original);
+  });
 }
