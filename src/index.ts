@@ -32,6 +32,9 @@ const videoTaskStore = new MysqlVideoTaskStore(config.mysql);
 await accountStore.ensureSchema();
 await yydsMailConfigStore.ensureSchema();
 await yydsDomainPoolStore.ensureSchema();
+if (!(await yydsDomainPoolStore.hasConfig())) {
+  await yydsDomainPoolStore.saveConfig(config.yydsDomainPool);
+}
 await imageTaskStore.ensureSchema();
 await videoTaskStore.ensureSchema();
 

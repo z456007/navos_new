@@ -487,14 +487,28 @@ async function fetchPublicYydsDomains(fetchImpl: FetchLike = fetch): Promise<Yyd
     ? body
     : isPlainRecordValue(body) && Array.isArray(body.data)
       ? body.data
-      : [];
-  return domains.filter(isPlainRecordValue).map((item) => item as unknown as YydsFetchedDomain);
+      : undefined;
+  if (!domains) {
+    throw new Error("YYDS public domains response must be an array or { data: array }");
+  }
+  return normalizeFetchedYydsDomains(domains);
+}
+
+function normalizeFetchedYydsDomains(domains: unknown[]): YydsFetchedDomain[] {
+  const normalized = domains
+    .filter((item): item is Record<string, unknown> => isPlainRecordValue(item) && typeof item.domain === "string")
+    .map((item) => item as unknown as YydsFetchedDomain);
+  if (domains.length > 0 && normalized.length === 0) {
+    throw new Error("YYDS public domains response did not contain valid domain records");
+  }
+  return normalized;
 }
 
 function normalizeDomainPoolConfigInput(
   body: Record<string, unknown>,
   current: YydsDomainPoolConfig
 ): YydsDomainPoolConfig {
+  assertDomainPoolConfigInput(body);
   return {
     enabled: typeof body.enabled === "boolean" ? body.enabled : current.enabled,
     mode: parseYydsDomainPoolMode(body.mode) ?? current.mode,
@@ -502,6 +516,27 @@ function normalizeDomainPoolConfigInput(
     blacklist: Array.isArray(body.blacklist) ? normalizeDomainStringList(body.blacklist) : current.blacklist,
     refreshIntervalMinutes: parsePositiveInteger(body.refreshIntervalMinutes) ?? current.refreshIntervalMinutes
   };
+}
+
+function assertDomainPoolConfigInput(body: Record<string, unknown>): void {
+  if ("enabled" in body && typeof body.enabled !== "boolean") {
+    throw new Error("enabled must be a boolean");
+  }
+  if ("mode" in body && parseYydsDomainPoolMode(body.mode) === undefined) {
+    throw new Error("mode must be auto, whitelist, or auto-plus-whitelist");
+  }
+  if ("refreshIntervalMinutes" in body && parsePositiveInteger(body.refreshIntervalMinutes) === undefined) {
+    throw new Error("refreshIntervalMinutes must be a positive integer");
+  }
+  for (const key of ["whitelist", "blacklist"] as const) {
+    if (!(key in body)) {
+      continue;
+    }
+    const value = body[key];
+    if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
+      throw new Error(`${key} must be a string array`);
+    }
+  }
 }
 
 function parseYydsDomainPoolMode(value: unknown): YydsDomainPoolMode | undefined {
@@ -529,7 +564,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
   const yydsDomainPool = new YydsDomainPool({
     store: yydsDomainPoolStore,
     fetchDomains: async () => (options.yydsDomainFetchImpl
-      ? (await options.yydsDomainFetchImpl()).filter(isPlainRecordValue).map((item) => item as unknown as YydsFetchedDomain)
+      ? normalizeFetchedYydsDomains(await options.yydsDomainFetchImpl())
       : fetchPublicYydsDomains(options.fetchImpl))
   });
   const yydsMailConfigService = new YydsMailConfigService(
@@ -1228,17 +1263,30 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     if (!requireLocalAuth(request, reply)) {
       return;
     }
-    await reply.send(await yydsDomainPool.refresh());
+    try {
+      await reply.send(await yydsDomainPool.refresh());
+    } catch {
+      await reply.status(502).send({
+        error: {
+          type: "yyds_domain_fetch_error",
+          message: "YYDS domain refresh failed"
+        }
+      });
+    }
   });
 
   app.put("/api/mail/yyds/domain-pool/config", async (request, reply) => {
     if (!requireLocalAuth(request, reply)) {
       return;
     }
-    const current = await yydsDomainPoolStore.getConfig();
-    const next = normalizeDomainPoolConfigInput(bodyRecord(request), current);
-    await yydsDomainPoolStore.saveConfig(next);
-    await reply.send(await yydsDomainPoolStore.getConfig());
+    try {
+      const current = await yydsDomainPoolStore.getConfig();
+      const next = normalizeDomainPoolConfigInput(bodyRecord(request), current);
+      await yydsDomainPoolStore.saveConfig(next);
+      await reply.send(await yydsDomainPoolStore.getConfig());
+    } catch (error) {
+      await sendBadRequest(reply, error);
+    }
   });
 
   app.post("/api/accounts/:uid/enable", async (request, reply) => {

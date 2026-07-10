@@ -32,6 +32,7 @@ export interface YydsDomainHealthRecord {
 
 export interface YydsDomainPoolStore {
   ensureSchema?(): Promise<void>;
+  hasConfig?(): Promise<boolean>;
   getConfig(): Promise<YydsDomainPoolConfig>;
   saveConfig(config: YydsDomainPoolConfig): Promise<void>;
   listHealth(): Promise<YydsDomainHealthRecord[]>;
@@ -78,6 +79,10 @@ export class InMemoryYydsDomainPoolStore implements YydsDomainPoolStore {
 
   async getConfig(): Promise<YydsDomainPoolConfig> {
     return cloneConfig(this.config);
+  }
+
+  async hasConfig(): Promise<boolean> {
+    return true;
   }
 
   async saveConfig(config: YydsDomainPoolConfig): Promise<void> {
@@ -152,6 +157,13 @@ export class MysqlYydsDomainPoolStore implements YydsDomainPoolStore {
       "SELECT enabled, mode, whitelist_json, blacklist_json, refresh_interval_minutes FROM yyds_domain_pool_config WHERE id = 1 LIMIT 1"
     );
     return rows[0] ? configFromRow(rows[0]) : cloneConfig(DEFAULT_CONFIG);
+  }
+
+  async hasConfig(): Promise<boolean> {
+    const [rows] = await this.pool.execute<Array<RowDataPacket & { config_exists: number }>>(
+      "SELECT COUNT(*) AS config_exists FROM yyds_domain_pool_config WHERE id = 1"
+    );
+    return Number(rows[0]?.config_exists ?? 0) > 0;
   }
 
   async saveConfig(config: YydsDomainPoolConfig): Promise<void> {

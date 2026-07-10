@@ -134,6 +134,92 @@ describe("server routes", () => {
     expect(listed.json().config).toEqual(saved.json());
   });
 
+  it("returns stable YYDS domain pool refresh errors for upstream failures and malformed payloads", async () => {
+    const baseOptions = {
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token" as const,
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" }))
+    };
+
+    for (const fetchImpl of [
+      async () => Response.json({ error: "unavailable" }, { status: 503 }),
+      async () => Response.json({ data: [{}] }),
+      async () => Response.json({ data: "not-array" })
+    ]) {
+      const app = createApp({
+        ...baseOptions,
+        fetchImpl
+      });
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/mail/yyds/domains/refresh",
+        headers: { authorization: "Bearer sk-test" }
+      });
+
+      expect(response.statusCode).toBe(502);
+      expect(response.json()).toEqual({
+        error: {
+          type: "yyds_domain_fetch_error",
+          message: "YYDS domain refresh failed"
+        }
+      });
+    }
+  });
+
+  it("skips malformed YYDS domain pool fetch items and refreshes healthy entries", async () => {
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+      fetchImpl: async () => Response.json({
+        data: [
+          {},
+          { domain: 123 },
+          { domain: "healthy.test", isPublic: true, isVerified: true, isMxValid: true, dnsRecords: { status: "healthy", receivingReady: true } }
+        ]
+      })
+    });
+
+    const refresh = await app.inject({
+      method: "POST",
+      url: "/api/mail/yyds/domains/refresh",
+      headers: { authorization: "Bearer sk-test" }
+    });
+    expect(refresh.statusCode).toBe(200);
+    expect(refresh.json().eligible).toEqual([{ domain: "healthy.test" }]);
+  });
+
+  it("rejects malformed YYDS domain pool config bodies", async () => {
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+      fetchImpl: async () => Response.json({ ok: true })
+    });
+
+    for (const payload of [
+      { mode: "bad-mode" },
+      { refreshIntervalMinutes: "30" },
+      { refreshIntervalMinutes: 0 },
+      { whitelist: "example.com" },
+      { whitelist: ["example.com", 123] },
+      { blacklist: ["blocked.test", false] },
+      { enabled: "false" }
+    ]) {
+      const response = await app.inject({
+        method: "PUT",
+        url: "/api/mail/yyds/domain-pool/config",
+        headers: { authorization: "Bearer sk-test" },
+        payload
+      });
+      expect(response.statusCode).toBe(400);
+    }
+  });
+
   it("does not serve the built-in admin page from the backend", async () => {
     const app = createApp({
       masterApiKey: "sk-test",

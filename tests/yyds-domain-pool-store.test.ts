@@ -67,6 +67,17 @@ describe("MysqlYydsDomainPoolStore", () => {
     });
   });
 
+  it("checks whether a domain pool config row exists for bootstrap", async () => {
+    const store = createStore();
+    mysqlMocks.pool.execute
+      .mockResolvedValueOnce([[{ config_exists: 0 }]])
+      .mockResolvedValueOnce([[{ config_exists: 1 }]]);
+
+    await expect(store.hasConfig()).resolves.toBe(false);
+    await expect(store.hasConfig()).resolves.toBe(true);
+    expect(mysqlMocks.pool.execute.mock.calls[0]?.[0]).toContain("COUNT(*)");
+  });
+
   it("maps config rows with string, Buffer, and array JSON values and falls back invalid modes", async () => {
     const store = createStore();
     mysqlMocks.pool.execute
