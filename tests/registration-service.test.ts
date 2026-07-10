@@ -368,6 +368,43 @@ describe("RegistrationService", () => {
     expect(recorder.recordSuccess).not.toHaveBeenCalled();
   });
 
+  it("normalizes rate-limited polling responses to message_poll_failed", async () => {
+    const vipFetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = init?.body ? JSON.parse(init.body as string) : {};
+      if (body.template_scene) return Response.json({ resp_common: { ret: 0 } });
+      return Response.json({}, { status: 500 });
+    });
+    const mailFetch = vi.fn(async (url: string, init?: RequestInit) => {
+      const u = String(url);
+      if (u.includes("/accounts") && init?.method === "POST") {
+        return Response.json({ success: true, data: { address: "poll-rate@mail.good.test", token: "mt" } });
+      }
+      if (u.includes("/messages")) {
+        return Response.json(
+          { success: false, error: "Too many message polling requests" },
+          { status: 429 }
+        );
+      }
+      return Response.json({ success: true, data: {} });
+    });
+    const recorder = {
+      recordSuccess: vi.fn(async () => undefined),
+      recordFailure: vi.fn(async () => undefined)
+    };
+    const service = buildService(vipFetch, mailFetch, {
+      domainPicker: async () => ({ domain: "mail.good.test" }),
+      domainRecorder: recorder
+    });
+
+    const result = await service.registerOne();
+
+    expect(result.success).toBe(false);
+    expect(result.domain).toBe("mail.good.test");
+    expect(result.failureKind).toBe("message_poll_failed");
+    expect(recorder.recordFailure).not.toHaveBeenCalled();
+    expect(recorder.recordSuccess).not.toHaveBeenCalled();
+  });
+
   it("does not record domain failure for empty YYDS API key configuration errors", async () => {
     const vipFetch = vipFetchForPipeline({});
     const yydsClient = new YydsMailClient({

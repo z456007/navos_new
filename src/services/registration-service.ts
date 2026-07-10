@@ -389,7 +389,7 @@ export class RegistrationService {
         if (error instanceof YydsMailError) {
           lastPollFailure = {
             message: error.message,
-            failureKind: error.failureKind === "unknown" ? "message_poll_failed" : error.failureKind
+            failureKind: "message_poll_failed"
           };
         } else {
           lastPollFailure = {
