@@ -40,8 +40,8 @@ export interface YydsDomainPoolStore {
   listHealth(): Promise<YydsDomainHealthRecord[]>;
   getHealth(domain: string): Promise<YydsDomainHealthRecord | undefined>;
   saveHealth(record: YydsDomainHealthRecord): Promise<void>;
-  recordSuccess(domain: string, now: number): Promise<void>;
-  recordFailure(domain: string, kind: YydsFailureKind, error: string, now: number): Promise<void>;
+  recordSuccess?(domain: string, now: number): Promise<void>;
+  recordFailure?(domain: string, kind: YydsFailureKind, error: string, now: number): Promise<void>;
   replaceAutoSnapshot(records: YydsDomainHealthRecord[]): Promise<void>;
 }
 

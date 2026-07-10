@@ -297,7 +297,7 @@ export class RegistrationService {
       const message = error instanceof Error ? error.message : "registration failed";
       const failureKind: YydsFailureKind = error instanceof YydsMailError ? error.failureKind : "unknown";
       const domain = resultDomain ?? pickedDomain ?? domainFromEmail(email);
-      if (phase === "mailbox_create" && error instanceof YydsMailError) {
+      if (phase === "mailbox_create" && isDomainAttributableMailboxCreateError(error)) {
         await this.recordDomainFailureBestEffort(this.recordableDomain(pickedDomain, domain), failureKind, message);
       }
       return {
@@ -370,11 +370,10 @@ export class RegistrationService {
   private async pollVerificationCode(
     email: string,
     mailboxToken?: string
-  ): Promise<{ code?: string; failure?: YydsMailError }> {
+  ): Promise<{ code?: string; failure?: { message: string; failureKind: YydsFailureKind } }> {
     const auth = { address: email, token: mailboxToken };
     const yydsClient = await this.resolveYydsClient();
-    let sawSuccessfulPoll = false;
-    let lastYydsError: YydsMailError | undefined;
+    let lastPollFailure: { message: string; failureKind: YydsFailureKind } | undefined;
 
     for (let attempt = 0; attempt < this.maxPollAttempts; attempt++) {
       if (attempt > 0) {
@@ -383,20 +382,27 @@ export class RegistrationService {
 
       try {
         const result = await yydsClient.findVerificationCode(auth);
-        sawSuccessfulPoll = true;
         if (result.code) {
           return { code: result.code };
         }
       } catch (error) {
         if (error instanceof YydsMailError) {
-          lastYydsError = error;
+          lastPollFailure = {
+            message: error.message,
+            failureKind: error.failureKind === "unknown" ? "message_poll_failed" : error.failureKind
+          };
+        } else {
+          lastPollFailure = {
+            message: error instanceof Error && error.message ? error.message : "YYDS message polling failed",
+            failureKind: "message_poll_failed"
+          };
         }
         // Continue polling on transient errors
       }
     }
 
-    if (!sawSuccessfulPoll && lastYydsError) {
-      return { failure: lastYydsError };
+    if (lastPollFailure) {
+      return { failure: lastPollFailure };
     }
     return {};
   }
@@ -517,6 +523,10 @@ function isMailboxRateLimitError(error: unknown): boolean {
   }
   return error instanceof Error
     && /too many account creation requests|rate.?limit|429/i.test(error.message);
+}
+
+function isDomainAttributableMailboxCreateError(error: unknown): error is YydsMailError {
+  return error instanceof YydsMailError && error.failureKind === "domain_rejected";
 }
 
 function withMailboxCreateAttempts(error: unknown, attempts: number): unknown {
