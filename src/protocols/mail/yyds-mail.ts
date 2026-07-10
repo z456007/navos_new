@@ -73,7 +73,7 @@ export class YydsMailClient {
 
   async createMailbox(input: CreateMailboxInput = {}): Promise<YydsMailbox> {
     if (!this.apiKey) {
-      throw new YydsMailError("YYDS Mail API key is not configured", 500, undefined);
+      throw new YydsMailError("YYDS Mail API key is not configured", 500, undefined, "mailbox_create_failed");
     }
 
     const body: Record<string, string> = { localPart: input.localPart ?? this.localPartFactory() };

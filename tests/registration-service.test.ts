@@ -266,7 +266,7 @@ describe("RegistrationService", () => {
 
     expect(result.success).toBe(false);
     expect(result.domain).toBe("mail.good.test");
-    expect(result.failureKind).toBe("unknown");
+    expect(result.failureKind).toBe("mailbox_create_failed");
     expect(recorder.recordFailure).not.toHaveBeenCalled();
     expect(recorder.recordSuccess).not.toHaveBeenCalled();
   });
@@ -437,7 +437,41 @@ describe("RegistrationService", () => {
     expect(result.success).toBe(false);
     expect(result.domain).toBe("mail.good.test");
     expect(result.error).toBe("YYDS Mail API key is not configured");
-    expect(result.failureKind).toBe("unknown");
+    expect(result.failureKind).toBe("mailbox_create_failed");
+    expect(recorder.recordFailure).not.toHaveBeenCalled();
+    expect(recorder.recordSuccess).not.toHaveBeenCalled();
+  });
+
+  it("does not retry quota exhausted mailbox creation failures or record domain health", async () => {
+    let createAttempts = 0;
+    const mailFetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).includes("/accounts") && init?.method === "POST") {
+        createAttempts += 1;
+        return Response.json(
+          { success: false, error: "quota exhausted", errorCode: "quota_exhausted" },
+          { status: 429 }
+        );
+      }
+      return Response.json({ success: true, data: {} });
+    });
+    const recorder = {
+      recordSuccess: vi.fn(async () => undefined),
+      recordFailure: vi.fn(async () => undefined)
+    };
+    const service = buildService(vipFetchForPipeline({}), mailFetch, {
+      domainPicker: async () => ({ domain: "mail.good.test" }),
+      domainRecorder: recorder,
+      maxMailboxCreateAttempts: 3,
+      mailboxRetryDelayMs: 1
+    });
+
+    const result = await service.registerOne();
+
+    expect(result.success).toBe(false);
+    expect(result.domain).toBe("mail.good.test");
+    expect(result.failureKind).toBe("quota_exhausted");
+    expect(result.retryCount).toBe(0);
+    expect(createAttempts).toBe(1);
     expect(recorder.recordFailure).not.toHaveBeenCalled();
     expect(recorder.recordSuccess).not.toHaveBeenCalled();
   });
@@ -495,7 +529,7 @@ describe("RegistrationService", () => {
     expect(result).toMatchObject({
       success: false,
       error: "YYDS Mail API key is not configured",
-      failureKind: "unknown"
+      failureKind: "mailbox_create_failed"
     });
     expect(result.elapsedMs).toEqual(expect.any(Number));
   });

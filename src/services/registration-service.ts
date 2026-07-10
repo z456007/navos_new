@@ -295,7 +295,11 @@ export class RegistrationService {
     } catch (error) {
       retryCount ??= mailboxCreateAttempts(error);
       const message = error instanceof Error ? error.message : "registration failed";
-      const failureKind: YydsFailureKind = error instanceof YydsMailError ? error.failureKind : "unknown";
+      const failureKind: YydsFailureKind = error instanceof YydsMailError
+        ? error.failureKind
+        : phase === "mailbox_create"
+          ? "mailbox_create_failed"
+          : "unknown";
       const domain = resultDomain ?? pickedDomain ?? domainFromEmail(email);
       if (phase === "mailbox_create" && isDomainAttributableMailboxCreateError(error)) {
         await this.recordDomainFailureBestEffort(this.recordableDomain(pickedDomain, domain), failureKind, message);
@@ -518,8 +522,8 @@ function normalizeComparableDomain(domain: string): string {
 }
 
 function isMailboxRateLimitError(error: unknown): boolean {
-  if (error instanceof YydsMailError && error.status === 429) {
-    return true;
+  if (error instanceof YydsMailError) {
+    return error.failureKind === "rate_limited";
   }
   return error instanceof Error
     && /too many account creation requests|rate.?limit|429/i.test(error.message);
