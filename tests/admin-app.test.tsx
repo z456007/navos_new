@@ -132,10 +132,10 @@ describe("admin app gate", () => {
     await screen.findByRole("button", { name: "图片生成" });
     fireEvent.click(screen.getByRole("button", { name: "图片生成" }));
 
-    fireEvent.change(screen.getByLabelText("图片提示词"), { target: { value: prompt } });
-    fireEvent.click(screen.getByRole("button", { name: "生成图片" }));
+    fireEvent.change(screen.getByLabelText("Image prompt"), { target: { value: prompt } });
+    fireEvent.click(screen.getByRole("button", { name: "Generate image" }));
 
-    const generated = await screen.findByAltText("生成图片 1");
+    const generated = await screen.findByAltText("Generated image 1");
     expect(generated).toHaveAttribute("src", "data:image/png;base64,aGVsbG8=");
     expect(fetchMock).toHaveBeenCalledWith("/api/images/generations", expect.objectContaining({ method: "POST" }));
   });
@@ -163,13 +163,13 @@ describe("admin app gate", () => {
     await screen.findByRole("button", { name: "图片生成" });
     fireEvent.click(screen.getByRole("button", { name: "图片生成" }));
 
-    fireEvent.change(screen.getByLabelText("图片提示词"), { target: { value: "保持人物姿态，改成赛博朋克风格" } });
-    fireEvent.change(screen.getByLabelText("参考图片 URL（每行一个）"), {
+    fireEvent.change(screen.getByLabelText("Image prompt"), { target: { value: "保持人物姿态，改成赛博朋克风格" } });
+    fireEvent.change(screen.getByLabelText("Reference image URLs (one per line)"), {
       target: { value: "https://assets.test/ref-a.png\nhttps://assets.test/ref-b.png" }
     });
-    fireEvent.click(screen.getByRole("button", { name: "生成图片" }));
+    fireEvent.click(screen.getByRole("button", { name: "Generate image" }));
 
-    await screen.findByAltText("生成图片 1");
+    await screen.findByAltText("Generated image 1");
     expect(imagePayload).toMatchObject({
       prompt: "保持人物姿态，改成赛博朋克风格",
       images: ["https://assets.test/ref-a.png", "https://assets.test/ref-b.png"]
@@ -325,7 +325,7 @@ describe("admin app gate", () => {
       expect(screen.getByText("succeeded")).toBeInTheDocument();
     });
 
-    expect(screen.getByTitle("生成视频")).toHaveAttribute("src", "https://cdn.example.com/navos/videos/task_1.mp4");
+    expect(screen.getByTitle("生成视频")).toHaveAttribute("src", "https://cdn.test/video.mp4");
     expect(screen.queryByText("archived")).not.toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith("/api/video/generations", expect.objectContaining({ method: "POST" }));
     expect(fetchMock).toHaveBeenCalledWith("/api/video/generations/task_1", expect.objectContaining({ method: "GET" }));
@@ -821,7 +821,7 @@ describe("admin app gate", () => {
     fireEvent.change(screen.getByLabelText("Master API Key"), { target: { value: "sk-local" } });
     fireEvent.submit(screen.getByLabelText("Master API Key").closest("form") as HTMLFormElement);
 
-    await screen.findByRole("button", { name: "YYDS??" });
+    await screen.findByRole("button", { name: "YYDS配置" });
     expect(screen.queryByRole("button", { name: /COS/ })).not.toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalledWith("/api/cos/config", expect.anything());
   });
@@ -860,9 +860,9 @@ describe("admin app gate", () => {
     fireEvent.click(screen.getByRole("button", { name: "YYDS配置" }));
 
     fireEvent.change(await screen.findByLabelText("YYDS Mail Key"), { target: { value: "ac-ui-key" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存YYDS配置" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save YYDS config" }));
 
-    await screen.findByText("已保存");
+    await screen.findByText("Saved");
     expect(screen.queryByText("ac-ui-key")).not.toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith("/api/mail/yyds/config", expect.objectContaining({ method: "PUT" }));
   });
