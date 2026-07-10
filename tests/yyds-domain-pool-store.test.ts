@@ -1,12 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mysqlMocks = vi.hoisted(() => {
+  const connection = {
+    execute: vi.fn(),
+    query: vi.fn(),
+    beginTransaction: vi.fn(),
+    commit: vi.fn(),
+    rollback: vi.fn(),
+    release: vi.fn()
+  };
   const pool = {
     query: vi.fn(),
-    execute: vi.fn()
+    execute: vi.fn(),
+    getConnection: vi.fn(async () => connection)
   };
   const createPool = vi.fn(() => pool);
-  return { createPool, pool };
+  return { connection, createPool, pool };
 });
 
 vi.mock("mysql2/promise", () => ({
@@ -31,6 +40,13 @@ describe("MysqlYydsDomainPoolStore", () => {
     mysqlMocks.createPool.mockClear();
     mysqlMocks.pool.query.mockReset();
     mysqlMocks.pool.execute.mockReset();
+    mysqlMocks.pool.getConnection.mockClear();
+    mysqlMocks.connection.query.mockReset();
+    mysqlMocks.connection.execute.mockReset();
+    mysqlMocks.connection.beginTransaction.mockReset();
+    mysqlMocks.connection.commit.mockReset();
+    mysqlMocks.connection.rollback.mockReset();
+    mysqlMocks.connection.release.mockReset();
   });
 
   function createStore() {
@@ -71,6 +87,24 @@ describe("MysqlYydsDomainPoolStore", () => {
     expect(mysqlMocks.pool.execute.mock.calls[0]?.[1]).toEqual({ column: "last_auto_checked_at" });
     expect(mysqlMocks.pool.query).toHaveBeenCalledTimes(2);
     expect(mysqlMocks.pool.query.mock.calls.some((call) => String(call[0]).includes("ALTER TABLE"))).toBe(false);
+  });
+
+  it("ignores duplicate-column races while adding last_auto_checked_at", async () => {
+    const store = createStore();
+    const duplicateColumnError = Object.assign(new Error("Duplicate column name 'last_auto_checked_at'"), {
+      code: "ER_DUP_FIELDNAME",
+      errno: 1060
+    });
+    mysqlMocks.pool.query
+      .mockResolvedValueOnce([[], undefined])
+      .mockResolvedValueOnce([[], undefined])
+      .mockRejectedValueOnce(duplicateColumnError);
+    mysqlMocks.pool.execute.mockResolvedValue([[]]);
+
+    await expect(store.ensureSchema()).resolves.toBeUndefined();
+
+    expect(mysqlMocks.pool.query).toHaveBeenCalledTimes(3);
+    expect(mysqlMocks.pool.query.mock.calls[2]?.[0]).toContain("ADD COLUMN last_auto_checked_at");
   });
 
   it("returns default config when no config row exists", async () => {
@@ -231,6 +265,46 @@ describe("MysqlYydsDomainPoolStore", () => {
       lastCheckedAt: 0,
       lastAutoCheckedAt: 0
     });
+  });
+
+  it("replaces the persisted auto snapshot in a mysql transaction", async () => {
+    const store = createStore();
+    mysqlMocks.connection.beginTransaction.mockResolvedValue(undefined);
+    mysqlMocks.connection.execute.mockResolvedValue([{}, undefined]);
+    mysqlMocks.connection.commit.mockResolvedValue(undefined);
+    mysqlMocks.connection.rollback.mockResolvedValue(undefined);
+
+    await store.replaceAutoSnapshot([{
+      domain: " New.Test ",
+      status: "active",
+      successCount: 1,
+      failureCount: 2,
+      verificationTimeoutCount: 3,
+      mailboxRateLimitCount: 4,
+      quotaExhaustedCount: 5,
+      lastSuccessAt: 6,
+      lastFailureAt: 7,
+      cooldownUntil: 8,
+      weight: 9,
+      lastCheckedAt: 10,
+      lastAutoCheckedAt: 10
+    }]);
+
+    expect(mysqlMocks.pool.getConnection).toHaveBeenCalledOnce();
+    expect(mysqlMocks.connection.beginTransaction).toHaveBeenCalledOnce();
+    expect(mysqlMocks.connection.execute.mock.calls[0]?.[0]).toContain("UPDATE yyds_domain_health");
+    expect(mysqlMocks.connection.execute.mock.calls[0]?.[0]).toContain("last_auto_checked_at = 0");
+    expect(mysqlMocks.connection.execute.mock.calls[0]?.[0]).toContain("domain NOT IN");
+    expect(mysqlMocks.connection.execute.mock.calls[0]?.[1]).toEqual(["new.test"]);
+    expect(mysqlMocks.connection.execute.mock.calls[1]?.[0]).toContain("ON DUPLICATE KEY UPDATE");
+    expect(mysqlMocks.connection.execute.mock.calls[1]?.[1]).toMatchObject({
+      domain: "new.test",
+      lastCheckedAt: 10,
+      lastAutoCheckedAt: 10
+    });
+    expect(mysqlMocks.connection.commit).toHaveBeenCalledOnce();
+    expect(mysqlMocks.connection.rollback).not.toHaveBeenCalled();
+    expect(mysqlMocks.connection.release).toHaveBeenCalledOnce();
   });
 
   it("maps getHealth and listHealth rows with counters, status, and lastError", async () => {

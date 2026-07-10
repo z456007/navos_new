@@ -1,5 +1,5 @@
 import type { RowDataPacket } from "mysql2";
-import type { Pool } from "mysql2/promise";
+import type { Pool, PoolConnection } from "mysql2/promise";
 import mysql from "mysql2/promise";
 import type { MysqlConfig } from "./mysql-account-store.js";
 
@@ -39,6 +39,7 @@ export interface YydsDomainPoolStore {
   listHealth(): Promise<YydsDomainHealthRecord[]>;
   getHealth(domain: string): Promise<YydsDomainHealthRecord | undefined>;
   saveHealth(record: YydsDomainHealthRecord): Promise<void>;
+  replaceAutoSnapshot(records: YydsDomainHealthRecord[]): Promise<void>;
 }
 
 const DEFAULT_CONFIG: YydsDomainPoolConfig = {
@@ -104,6 +105,31 @@ export class InMemoryYydsDomainPoolStore implements YydsDomainPoolStore {
     const normalized = cloneHealth(record);
     this.health.set(normalized.domain, normalized);
   }
+
+  async replaceAutoSnapshot(records: YydsDomainHealthRecord[]): Promise<void> {
+    const normalizedRecords = records.map(cloneHealth);
+    const nextHealth = new Map<string, YydsDomainHealthRecord>(
+      Array.from(this.health.entries()).map(([domain, record]) => [domain, cloneHealth(record)])
+    );
+    const nextAutoDomains = new Set(normalizedRecords.map((record) => record.domain));
+
+    for (const [domain, record] of nextHealth.entries()) {
+      if (record.lastAutoCheckedAt > 0 && !nextAutoDomains.has(domain)) {
+        nextHealth.set(domain, {
+          ...record,
+          lastAutoCheckedAt: 0
+        });
+      }
+    }
+    for (const record of normalizedRecords) {
+      nextHealth.set(record.domain, cloneHealth(record));
+    }
+
+    this.health.clear();
+    for (const [domain, record] of nextHealth.entries()) {
+      this.health.set(domain, record);
+    }
+  }
 }
 
 export class MysqlYydsDomainPoolStore implements YydsDomainPoolStore {
@@ -167,7 +193,14 @@ export class MysqlYydsDomainPoolStore implements YydsDomainPoolStore {
       { column }
     );
     if (rows.length === 0) {
-      await this.pool.query(ddl);
+      try {
+        await this.pool.query(ddl);
+      } catch (error) {
+        if (isDuplicateColumnError(error)) {
+          return;
+        }
+        throw error;
+      }
     }
   }
 
@@ -228,8 +261,46 @@ export class MysqlYydsDomainPoolStore implements YydsDomainPoolStore {
   }
 
   async saveHealth(record: YydsDomainHealthRecord): Promise<void> {
+    await this.saveHealthWithExecutor(this.pool, record);
+  }
+
+  async replaceAutoSnapshot(records: YydsDomainHealthRecord[]): Promise<void> {
+    const normalizedRecords = records.map(cloneHealth);
+    const domains = normalizedRecords.map((record) => record.domain);
+    const connection = await this.pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      if (domains.length > 0) {
+        await connection.execute(
+          `UPDATE yyds_domain_health
+           SET last_auto_checked_at = 0
+           WHERE last_auto_checked_at > 0 AND domain NOT IN (${domains.map(() => "?").join(", ")})`,
+          domains
+        );
+      } else {
+        await connection.execute(
+          "UPDATE yyds_domain_health SET last_auto_checked_at = 0 WHERE last_auto_checked_at > 0"
+        );
+      }
+      for (const record of normalizedRecords) {
+        await this.saveHealthWithExecutor(connection, record);
+      }
+      await connection.commit();
+    } catch (error) {
+      try {
+        await connection.rollback();
+      } catch {
+        // Preserve the original transaction failure for callers.
+      }
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
+  private async saveHealthWithExecutor(executor: Pick<Pool | PoolConnection, "execute">, record: YydsDomainHealthRecord): Promise<void> {
     const normalized = cloneHealth(record);
-    await this.pool.execute(
+    await executor.execute(
       `INSERT INTO yyds_domain_health
         (domain, status, success_count, failure_count, verification_timeout_count, mailbox_rate_limit_count,
          quota_exhausted_count, last_success_at, last_failure_at, cooldown_until, weight, last_checked_at,
@@ -382,4 +453,12 @@ function parseJsonList(value: unknown): string[] {
     }
   }
   return [];
+}
+
+function isDuplicateColumnError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const record = error as { code?: unknown; errno?: unknown };
+  return record.code === "ER_DUP_FIELDNAME" || record.errno === 1060;
 }

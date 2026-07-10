@@ -13,6 +13,30 @@ function domain(domain: string, overrides: Record<string, unknown> = {}) {
   };
 }
 
+function replaceAutoSnapshotInMap(
+  health: Map<string, Awaited<ReturnType<InMemoryYydsDomainPoolStore["listHealth"]>>[number]>,
+  records: Awaited<ReturnType<InMemoryYydsDomainPoolStore["listHealth"]>>
+) {
+  const nextAutoDomains = new Set(records.map((record) => record.domain.trim().toLowerCase()));
+  for (const [key, record] of Array.from(health.entries())) {
+    const normalizedDomain = record.domain.trim().toLowerCase();
+    if ((record.lastAutoCheckedAt ?? 0) > 0 && !nextAutoDomains.has(normalizedDomain)) {
+      health.delete(key);
+      health.set(normalizedDomain, {
+        ...record,
+        domain: normalizedDomain,
+        lastAutoCheckedAt: 0
+      });
+    }
+  }
+  for (const record of records) {
+    health.set(record.domain.trim().toLowerCase(), {
+      ...record,
+      domain: record.domain.trim().toLowerCase()
+    });
+  }
+}
+
 describe("YydsDomainPool", () => {
   it("filters public YYDS domains to healthy receiving domains", async () => {
     const pool = new YydsDomainPool({
@@ -166,7 +190,7 @@ describe("YydsDomainPool", () => {
 
   it("does not expose phantom auto candidates when refresh persistence fails", async () => {
     const store = new InMemoryYydsDomainPoolStore();
-    vi.spyOn(store, "saveHealth").mockRejectedValue(new Error("database write failed"));
+    vi.spyOn(store, "replaceAutoSnapshot").mockRejectedValue(new Error("database write failed"));
     const pool = new YydsDomainPool({
       store,
       fetchDomains: vi.fn(async () => [domain("phantom.test")]),
@@ -176,6 +200,47 @@ describe("YydsDomainPool", () => {
     await expect(pool.refresh()).rejects.toThrow(/database write failed/);
     expect(await pool.listCandidates()).toEqual([]);
     expect(await pool.pickDomain()).toBeUndefined();
+  });
+
+  it("keeps the previous auto snapshot when replacing it fails after clearing removed domains", async () => {
+    class FailingAutoSnapshotStore extends InMemoryYydsDomainPoolStore {
+      failNextSnapshot = false;
+
+      async saveHealth(record: Parameters<InMemoryYydsDomainPoolStore["saveHealth"]>[0]): Promise<void> {
+        if (this.failNextSnapshot && record.domain === "new.test") {
+          throw new Error("snapshot write failed");
+        }
+        await super.saveHealth(record);
+      }
+
+      async replaceAutoSnapshot(records: Parameters<InMemoryYydsDomainPoolStore["replaceAutoSnapshot"]>[0]): Promise<void> {
+        if (this.failNextSnapshot) {
+          throw new Error("snapshot write failed");
+        }
+        await super.replaceAutoSnapshot(records);
+      }
+    }
+
+    const store = new FailingAutoSnapshotStore();
+    const fetchDomains = vi
+      .fn()
+      .mockResolvedValueOnce([domain("old.test")])
+      .mockResolvedValueOnce([domain("new.test")]);
+    const pool = new YydsDomainPool({
+      store,
+      fetchDomains,
+      now: () => 1000
+    });
+
+    await pool.refresh();
+    expect((await pool.listCandidates()).map((item) => item.domain)).toEqual(["old.test"]);
+
+    store.failNextSnapshot = true;
+    await expect(pool.refresh()).rejects.toThrow(/snapshot write failed/);
+
+    expect((await pool.listCandidates()).map((item) => item.domain)).toEqual(["old.test"]);
+    expect((await store.getHealth("old.test"))?.lastAutoCheckedAt).toBe(1000);
+    expect(await store.getHealth("new.test")).toBeUndefined();
   });
 
   it("does not treat manually updated whitelist health as a persisted auto source", async () => {
@@ -310,6 +375,9 @@ describe("YydsDomainPool", () => {
       },
       async saveHealth(record: Awaited<ReturnType<InMemoryYydsDomainPoolStore["listHealth"]>>[number]) {
         health.set(record.domain, record);
+      },
+      async replaceAutoSnapshot(records: Awaited<ReturnType<InMemoryYydsDomainPoolStore["listHealth"]>>) {
+        replaceAutoSnapshotInMap(health, records);
       }
     };
     const pool = new YydsDomainPool({
@@ -362,6 +430,9 @@ describe("YydsDomainPool", () => {
       },
       async saveHealth(record: Awaited<ReturnType<InMemoryYydsDomainPoolStore["listHealth"]>>[number]) {
         health.set(record.domain, record);
+      },
+      async replaceAutoSnapshot(records: Awaited<ReturnType<InMemoryYydsDomainPoolStore["listHealth"]>>) {
+        replaceAutoSnapshotInMap(health, records);
       }
     };
     const pool = new YydsDomainPool({
@@ -414,6 +485,9 @@ describe("YydsDomainPool", () => {
           },
           async saveHealth(record: Awaited<ReturnType<InMemoryYydsDomainPoolStore["listHealth"]>>[number]) {
             health.set(record.domain, record);
+          },
+          async replaceAutoSnapshot(records: Awaited<ReturnType<InMemoryYydsDomainPoolStore["listHealth"]>>) {
+            replaceAutoSnapshotInMap(health, records);
           }
         },
         health

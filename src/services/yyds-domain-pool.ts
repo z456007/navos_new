@@ -219,11 +219,23 @@ export class YydsDomainPool {
         `YYDS domain refresh produced more than ${YYDS_DOMAIN_POOL_MAX_DOMAINS} eligible domains`
       );
     }
+    const now = this.now();
     const uniqueDomainSet = new Set(uniqueDomains);
-    await this.clearRemovedAutoSources(uniqueDomainSet);
-    for (const domain of uniqueDomains) {
-      await this.ensureHealth(domain, this.now(), config.whitelist.includes(domain) ? WHITELIST_WEIGHT : DEFAULT_WEIGHT);
-    }
+    const healthByDomain = new Map(
+      (await this.store.listHealth()).map((record) => {
+        const domain = normalizeDomain(record.domain);
+        return [domain, { ...record, domain }] as const;
+      })
+    );
+    const nextRecords = uniqueDomains.map((domain) => {
+      const weight = config.whitelist.includes(domain) ? WHITELIST_WEIGHT : DEFAULT_WEIGHT;
+      const existing = healthByDomain.get(domain);
+      return existing
+        ? { ...existing, weight: Math.max(existing.weight, weight), lastCheckedAt: now, lastAutoCheckedAt: now }
+        : { ...defaultHealth(domain, now, weight), lastAutoCheckedAt: now };
+    });
+
+    await this.store.replaceAutoSnapshot(nextRecords);
     this.autoEligibleDomains = uniqueDomainSet;
     this.hasAutoRefreshSnapshot = true;
 

@@ -176,7 +176,7 @@ describe("server routes", () => {
 
   it("does not report YYDS domain pool store failures as fetch errors", async () => {
     const domainStore = new InMemoryYydsDomainPoolStore();
-    vi.spyOn(domainStore, "saveHealth").mockRejectedValue(new Error("database password leaked in stack trace"));
+    vi.spyOn(domainStore, "replaceAutoSnapshot").mockRejectedValue(new Error("database password leaked in stack trace"));
     const app = createApp({
       masterApiKey: "sk-test",
       providerBaseUrl: "https://upstream.test",
