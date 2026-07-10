@@ -646,6 +646,38 @@ describe("processRegistrationJob", () => {
     expect(registrationService.registerOne).toHaveBeenCalledTimes(4);
   });
 
+  it("stops create scheduling when quota is exhausted", async () => {
+    const quotaFailure: RegistrationResult = {
+      success: false,
+      error: "quota exhausted",
+      failureKind: "quota_exhausted"
+    };
+    const registrationService = makeRegistrationService({
+      getStats: vi.fn(async () => stats({ activeCount: 0 })),
+      registerOne: vi.fn(async () => quotaFailure)
+    });
+    const job = makeJob({ mode: "create", count: 5, concurrency: 2 });
+
+    await expect(processRegistrationJob(job, registrationService)).resolves.toMatchObject({
+      mode: "create",
+      count: 5,
+      planned: 5,
+      started: 1,
+      completed: 0,
+      failed: 1,
+      stoppedEarly: true,
+      stopReason: "quota_exhausted",
+      results: [quotaFailure]
+    });
+    expect(registrationService.registerOne).toHaveBeenCalledTimes(1);
+    expect(lastProgress(job)).toMatchObject({
+      started: 1,
+      completed: 0,
+      failed: 1,
+      total: 5
+    });
+  });
+
   it("fill mode skips work when active count already satisfies target", async () => {
     const registrationService = makeRegistrationService({
       getStats: vi.fn(async () => stats({ activeCount: 101 })),

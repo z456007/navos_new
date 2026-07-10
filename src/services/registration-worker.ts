@@ -1,5 +1,6 @@
 import { Worker, type ConnectionOptions, type Job } from "bullmq";
 import type { RegistrationResult, RegistrationService } from "./registration-service.js";
+import { RegistrationScheduler } from "./registration-scheduler.js";
 import type {
   RegistrationJobLog,
   RegistrationJobPayload,
@@ -42,6 +43,8 @@ interface BulkRegistrationJobResult {
   failed: number;
   skipped: number;
   results: RegistrationResult[];
+  stoppedEarly?: true;
+  stopReason?: "quota_exhausted";
 }
 
 export async function processRegistrationJob(
@@ -125,16 +128,12 @@ async function processBulkRegistration(
 
   const stats = await registrationService.getStats();
   const planned = data.mode === "fill" ? Math.max(0, data.target - stats.activeCount) : data.count;
-  let started = 0;
-  let completed = 0;
-  let failed = 0;
   const skipped = planned === 0 ? 1 : 0;
-  const results: RegistrationResult[] = [];
 
   await progress.update(
-    started,
-    completed,
-    failed,
+    0,
+    0,
+    0,
     planned,
     "info",
     `${data.mode} registration started`,
@@ -143,9 +142,9 @@ async function processBulkRegistration(
 
   if (preStartCanceled) {
     await progress.update(
-      started,
-      completed,
-      failed,
+      0,
+      0,
+      0,
       planned,
       "warn",
       `${data.mode} registration canceled`,
@@ -155,61 +154,89 @@ async function processBulkRegistration(
       data,
       stats.activeCount,
       planned,
-      started,
-      completed,
-      failed,
+      0,
+      0,
+      0,
       skipped,
-      results
+      []
     );
   }
 
   if (planned === 0) {
-    return createBulkRegistrationJobResult(data, stats.activeCount, planned, started, completed, failed, skipped, results);
+    return createBulkRegistrationJobResult(data, stats.activeCount, planned, 0, 0, 0, skipped, []);
   }
 
   if (await isCancellationRequestedForId(jobId, options)) {
-    await progress.update(started, completed, failed, planned, "warn", `${data.mode} registration canceled`);
+    await progress.update(0, 0, 0, planned, "warn", `${data.mode} registration canceled`);
     return createCanceledBulkRegistrationJobResult(
       data,
       stats.activeCount,
       planned,
-      started,
-      completed,
-      failed,
+      0,
+      0,
+      0,
       skipped,
-      results
+      []
     );
   }
 
-  while (started < planned) {
-    if (await isCancellationRequestedForId(jobId, options)) {
-      await progress.update(started, completed, failed, planned, "warn", `${data.mode} registration canceled`);
-      return createCanceledBulkRegistrationJobResult(
-        data,
-        stats.activeCount,
-        planned,
-        started,
-        completed,
-        failed,
-        skipped,
-        results
+  const scheduler = new RegistrationScheduler({ maxInFlightAttempts: data.concurrency });
+  const schedulerResult = await scheduler.run({
+    planned,
+    runAttempt: async () => registerOneSafely(registrationService),
+    shouldStopScheduling: async () => isCancellationRequestedForId(jobId, options),
+    probeFirstAttempt: data.mode === "create",
+    onProgress: async (nextProgress) => {
+      const message = nextProgress.results.length < nextProgress.started
+        ? `${data.mode} registration batch started`
+        : `${data.mode} registration batch completed`;
+      await progress.update(
+        nextProgress.started,
+        nextProgress.completed,
+        nextProgress.failed,
+        nextProgress.total,
+        "info",
+        message,
+        skipped === 1 ? skipped : undefined
       );
     }
+  });
 
-    const batchSize = Math.min(data.concurrency, planned - started);
-    started += batchSize;
-    await progress.update(started, completed, failed, planned, "info", `${data.mode} registration batch started`);
-
-    const batch = Array.from({ length: batchSize }, () => registerOneSafely(registrationService));
-    const batchResults = await Promise.all(batch);
-    results.push(...batchResults);
-    completed = results.filter((result) => result.success).length;
-    failed = results.length - completed;
-
-    await progress.update(started, completed, failed, planned, "info", `${data.mode} registration batch completed`);
+  if (schedulerResult.stopReason === "canceled") {
+    await progress.update(
+      schedulerResult.started,
+      schedulerResult.completed,
+      schedulerResult.failed,
+      planned,
+      "warn",
+      `${data.mode} registration canceled`,
+      skipped === 1 ? skipped : undefined
+    );
+    return createCanceledBulkRegistrationJobResult(
+      data,
+      stats.activeCount,
+      planned,
+      schedulerResult.started,
+      schedulerResult.completed,
+      schedulerResult.failed,
+      skipped,
+      schedulerResult.results
+    );
   }
 
-  return createBulkRegistrationJobResult(data, stats.activeCount, planned, started, completed, failed, skipped, results);
+  return createBulkRegistrationJobResult(
+    data,
+    stats.activeCount,
+    planned,
+    schedulerResult.started,
+    schedulerResult.completed,
+    schedulerResult.failed,
+    skipped,
+    schedulerResult.results,
+    schedulerResult.stoppedEarly && schedulerResult.stopReason === "quota_exhausted"
+      ? { stoppedEarly: true, stopReason: schedulerResult.stopReason }
+      : undefined
+  );
 }
 
 function createCanceledBulkRegistrationJobResult(
@@ -236,7 +263,8 @@ function createBulkRegistrationJobResult(
   completed: number,
   failed: number,
   skipped: number,
-  results: RegistrationResult[]
+  results: RegistrationResult[],
+  stop?: { stoppedEarly: true; stopReason: "quota_exhausted" }
 ): BulkRegistrationJobResult {
   return {
     mode: data.mode,
@@ -248,7 +276,8 @@ function createBulkRegistrationJobResult(
     completed,
     failed,
     skipped,
-    results
+    results,
+    ...(stop?.stoppedEarly ? { stoppedEarly: true as const, stopReason: stop.stopReason } : {})
   };
 }
 
