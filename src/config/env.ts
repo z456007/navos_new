@@ -1,4 +1,5 @@
 import type { AccountIdentity, ProviderAuthMode } from "../protocols/auth.js";
+import type { YydsDomainPoolConfig, YydsDomainPoolMode } from "../store/yyds-domain-pool-store.js";
 
 export interface AppConfig {
   masterApiKey: string;
@@ -12,6 +13,14 @@ export interface AppConfig {
   vipHmacSecret: string;
   poolTargetSize: number;
   registrationConcurrency: number;
+  registrationMaxInFlight: number;
+  registrationMailboxCreateConcurrency: number;
+  registrationMailboxCreatePerSecond: number;
+  registrationVipSendConcurrency: number;
+  registrationPollConcurrency: number;
+  registrationLoginConcurrency: number;
+  registrationCertConcurrency: number;
+  registrationVerificationTimeoutMs: number;
   redisUrl: string;
   queuePrefix: string;
   registrationJobConcurrency: number;
@@ -20,6 +29,7 @@ export interface AppConfig {
   imageAccountWaitMs: number;
   imageMaxPollAttempts: number;
   imagePollIntervalMs: number;
+  yydsDomainPool: YydsDomainPoolConfig;
 }
 
 export interface MysqlEnvConfig {
@@ -96,11 +106,30 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
   return n;
 }
 
+function parseCappedPositiveInt(value: string | undefined, fallback: number, max: number): number {
+  return Math.min(parsePositiveInt(value, fallback), max);
+}
+
+function parseBool(value: string | undefined, fallback: boolean): boolean {
+  if (!value) {
+    return fallback;
+  }
+  return value.trim().toLowerCase() !== "false";
+}
+
 function parseCsv(value: string | undefined): string[] {
   return (value ?? "")
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function parseDomainPoolMode(value: string | undefined): YydsDomainPoolMode {
+  const normalized = value?.trim();
+  if (normalized === "auto" || normalized === "whitelist" || normalized === "auto-plus-whitelist") {
+    return normalized;
+  }
+  return "auto-plus-whitelist";
 }
 
 export function loadConfig(env: EnvInput = process.env): AppConfig {
@@ -129,6 +158,14 @@ export function loadConfig(env: EnvInput = process.env): AppConfig {
       parsePositiveInt(env.REGISTRATION_CONCURRENCY, YYDS_SAFE_REGISTRATION_CONCURRENCY),
       YYDS_SAFE_REGISTRATION_CONCURRENCY
     ),
+    registrationMaxInFlight: parseCappedPositiveInt(env.REGISTRATION_MAX_IN_FLIGHT, 6, 20),
+    registrationMailboxCreateConcurrency: parseCappedPositiveInt(env.REGISTRATION_MAILBOX_CREATE_CONCURRENCY, 2, 5),
+    registrationMailboxCreatePerSecond: parseCappedPositiveInt(env.REGISTRATION_MAILBOX_CREATE_PER_SECOND, 2, 10),
+    registrationVipSendConcurrency: parseCappedPositiveInt(env.REGISTRATION_VIP_SEND_CONCURRENCY, 6, 20),
+    registrationPollConcurrency: parseCappedPositiveInt(env.REGISTRATION_POLL_CONCURRENCY, 30, 100),
+    registrationLoginConcurrency: parseCappedPositiveInt(env.REGISTRATION_LOGIN_CONCURRENCY, 6, 20),
+    registrationCertConcurrency: parseCappedPositiveInt(env.REGISTRATION_CERT_CONCURRENCY, 4, 20),
+    registrationVerificationTimeoutMs: parsePositiveInt(env.REGISTRATION_VERIFICATION_TIMEOUT_MS, 90_000),
     redisUrl: env.REDIS_URL?.trim() || "redis://127.0.0.1:6379",
     queuePrefix: env.QUEUE_PREFIX?.trim() || "navos",
     registrationJobConcurrency: Math.min(
@@ -139,6 +176,13 @@ export function loadConfig(env: EnvInput = process.env): AppConfig {
     registrationJobRemoveOnFail: parsePositiveInt(env.REGISTRATION_JOB_REMOVE_ON_FAIL, 100),
     imageAccountWaitMs: parsePositiveInt(env.IMAGE_ACCOUNT_WAIT_MS, 120_000),
     imageMaxPollAttempts: parsePositiveInt(env.IMAGE_MAX_POLL_ATTEMPTS, 30),
-    imagePollIntervalMs: parsePositiveInt(env.IMAGE_POLL_INTERVAL_MS, 4_000)
+    imagePollIntervalMs: parsePositiveInt(env.IMAGE_POLL_INTERVAL_MS, 4_000),
+    yydsDomainPool: {
+      enabled: parseBool(env.YYDS_DOMAIN_POOL_ENABLED, true),
+      mode: parseDomainPoolMode(env.YYDS_DOMAIN_POOL_MODE),
+      whitelist: parseCsv(env.YYDS_DOMAIN_WHITELIST).map((item) => item.toLowerCase()),
+      blacklist: parseCsv(env.YYDS_DOMAIN_BLACKLIST).map((item) => item.toLowerCase()),
+      refreshIntervalMinutes: parsePositiveInt(env.YYDS_DOMAIN_REFRESH_MINUTES, 30)
+    }
   };
 }

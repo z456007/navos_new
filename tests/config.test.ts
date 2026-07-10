@@ -74,6 +74,53 @@ describe("loadConfig", () => {
     expect(config.imagePollIntervalMs).toBe(4000);
   });
 
+  it("loads registration scheduler and YYDS domain pool defaults", () => {
+    const config = loadConfig({
+      MASTER_API_KEY: "sk-test",
+      PROVIDER_BASE_URL: "https://upstream.test",
+      VIP_HMAC_SECRET: "test-secret-32-chars-long-key!!"
+    });
+
+    expect(config.registrationMaxInFlight).toBe(6);
+    expect(config.registrationMailboxCreateConcurrency).toBe(2);
+    expect(config.registrationMailboxCreatePerSecond).toBe(2);
+    expect(config.registrationPollConcurrency).toBe(30);
+    expect(config.yydsDomainPool).toMatchObject({
+      enabled: true,
+      mode: "auto-plus-whitelist",
+      whitelist: [],
+      blacklist: [],
+      refreshIntervalMinutes: 30
+    });
+  });
+
+  it("caps registration scheduler values and normalizes YYDS domain CSV lists", () => {
+    const config = loadConfig({
+      MASTER_API_KEY: "sk-test",
+      PROVIDER_BASE_URL: "https://upstream.test",
+      VIP_HMAC_SECRET: "test-secret-32-chars-long-key!!",
+      REGISTRATION_MAX_IN_FLIGHT: "200",
+      REGISTRATION_MAILBOX_CREATE_CONCURRENCY: "50",
+      REGISTRATION_MAILBOX_CREATE_PER_SECOND: "30",
+      REGISTRATION_POLL_CONCURRENCY: "200",
+      YYDS_DOMAIN_POOL_ENABLED: "false",
+      YYDS_DOMAIN_POOL_MODE: "whitelist",
+      YYDS_DOMAIN_WHITELIST: " Example.COM, Boost.Test ,, ",
+      YYDS_DOMAIN_BLACKLIST: " BLOCKED.Test "
+    });
+
+    expect(config.registrationMaxInFlight).toBe(20);
+    expect(config.registrationMailboxCreateConcurrency).toBe(5);
+    expect(config.registrationMailboxCreatePerSecond).toBe(10);
+    expect(config.registrationPollConcurrency).toBe(100);
+    expect(config.yydsDomainPool).toMatchObject({
+      enabled: false,
+      mode: "whitelist",
+      whitelist: ["example.com", "boost.test"],
+      blacklist: ["blocked.test"]
+    });
+  });
+
   it("ignores legacy YYDS env values because mail config is dynamic", () => {
     const config = loadConfig({
       MASTER_API_KEY: "sk-test",
