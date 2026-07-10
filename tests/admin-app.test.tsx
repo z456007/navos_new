@@ -98,7 +98,7 @@ describe("admin app gate", () => {
     expect(within(primaryNav).getByRole("button", { name: "视频生成" })).toBeInTheDocument();
     expect(within(primaryNav).queryByRole("button", { name: "YYDS配置" })).not.toBeInTheDocument();
     expect(within(configNav).getByRole("button", { name: "YYDS配置" })).toBeInTheDocument();
-    expect(within(configNav).getByRole("button", { name: "COS配置" })).toBeInTheDocument();
+    expect(within(configNav).queryByRole("button", { name: /COS/ })).not.toBeInTheDocument();
   });
 
   it("generates images from the image workbench", async () => {
@@ -326,7 +326,7 @@ describe("admin app gate", () => {
     });
 
     expect(screen.getByTitle("生成视频")).toHaveAttribute("src", "https://cdn.example.com/navos/videos/task_1.mp4");
-    expect(screen.getByText("archived")).toBeInTheDocument();
+    expect(screen.queryByText("archived")).not.toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith("/api/video/generations", expect.objectContaining({ method: "POST" }));
     expect(fetchMock).toHaveBeenCalledWith("/api/video/generations/task_1", expect.objectContaining({ method: "GET" }));
   });
@@ -819,10 +819,10 @@ describe("admin app gate", () => {
     render(<App />);
 
     fireEvent.change(screen.getByLabelText("Master API Key"), { target: { value: "sk-local" } });
-    fireEvent.click(screen.getByRole("button", { name: "?????" }));
+    fireEvent.submit(screen.getByLabelText("Master API Key").closest("form") as HTMLFormElement);
 
     await screen.findByRole("button", { name: "YYDS??" });
-    expect(screen.queryByRole("button", { name: "COS??" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /COS/ })).not.toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalledWith("/api/cos/config", expect.anything());
   });
 

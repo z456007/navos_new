@@ -8,8 +8,8 @@ import { SelectField, TextField } from "../components/fields";
 import { idleStatus } from "../app/defaults";
 import {
   buildImageGenerationRequest,
-  parseImageReferenceUrls,
   parseImageGenerationResults,
+  parseImageReferenceUrls,
   type ImageResult
 } from "../lib/image-generation";
 import type { StatusState } from "../types";
@@ -35,7 +35,7 @@ export function ImagePanel({ apiKey }: { apiKey: string }) {
     count: 1
   });
   const [status, setStatus] = useState<StatusState>(idleStatus);
-  const [result, setResult] = useState<unknown>("等待生成图片");
+  const [result, setResult] = useState<unknown>("Waiting for image generation");
   const [images, setImages] = useState<ImageResult[]>([]);
   const [referenceUrls, setReferenceUrls] = useState("");
   const [referenceFiles, setReferenceFiles] = useState<UploadFile[]>([]);
@@ -45,12 +45,12 @@ export function ImagePanel({ apiKey }: { apiKey: string }) {
     event.preventDefault();
     const prompt = form.prompt.trim();
     if (!prompt) {
-      setStatus({ kind: "error", message: "图片提示词不能为空" });
+      setStatus({ kind: "error", message: "Image prompt is required" });
       return;
     }
-    setStatus({ kind: "loading", message: "图片生成中" });
+    setStatus({ kind: "loading", message: "Generating image" });
     setImages([]);
-    setResult("图片生成中");
+    setResult("Generating image");
 
     try {
       const referenceImages = [
@@ -65,12 +65,12 @@ export function ImagePanel({ apiKey }: { apiKey: string }) {
       setResult(response);
       setImages(nextImages);
       if (nextImages.length === 0) {
-        setStatus({ kind: "error", message: "接口没有返回图片" });
+        setStatus({ kind: "error", message: "The API did not return an image" });
         return;
       }
-      setStatus({ kind: "ok", message: `已生成 ${nextImages.length} 张图片` });
+      setStatus({ kind: "ok", message: `Generated ${nextImages.length} image(s)` });
     } catch (error) {
-      const message = errorMessage(error) ?? "图片生成失败";
+      const message = errorMessage(error) ?? "Image generation failed";
       setStatus({ kind: "error", message });
       setResult(message);
     }
@@ -80,7 +80,7 @@ export function ImagePanel({ apiKey }: { apiKey: string }) {
     <section className="panel image-panel" aria-labelledby="image-title">
       <div className="panel-head image-head">
         <div>
-          <h2 id="image-title">图片生成</h2>
+          <h2 id="image-title">Image generation</h2>
           <StatusLine status={status} />
         </div>
         <Tag color="processing">gpt-image-2</Tag>
@@ -91,41 +91,41 @@ export function ImagePanel({ apiKey }: { apiKey: string }) {
           <Alert
             showIcon
             type="info"
-            title="纯生图工作台"
-            description="文字生图和参考图生图都自动走协议；参考图支持 URL 或本地上传，成功后后端会优先归档到 COS。"
+            title="Image workbench"
+            description="Image requests return upstream URL or b64_json directly; no secondary storage step is performed."
           />
           <label className="image-prompt-field">
-            <span>图片提示词</span>
+            <span>Image prompt</span>
             <Input.TextArea
-              aria-label="图片提示词"
+              aria-label="Image prompt"
               autoSize={false}
-              placeholder="描述画面主体、风格、镜头、光线、材质；例如：白色机器人站在霓虹雨夜的天桥上。"
+              placeholder="Describe subject, style, lens, lighting, and materials."
               value={form.prompt}
               onChange={(event) => setForm((current) => ({ ...current, prompt: event.target.value }))}
             />
           </label>
           <TextField
-            label="模型"
+            label="Model"
             value={form.model}
             onChange={(model) => setForm((current) => ({ ...current, model }))}
           />
           <div className="form-row three compact">
             <SelectField
-              label="尺寸"
+              label="Size"
               options={sizeOptions}
               value={form.size}
               onChange={(size) => setForm((current) => ({ ...current, size }))}
             />
             <SelectField
-              label="质量"
+              label="Quality"
               options={qualityOptions}
               value={form.quality}
               onChange={(quality) => setForm((current) => ({ ...current, quality }))}
             />
             <label className="text-field ant-field">
-              <span>张数</span>
+              <span>Count</span>
               <InputNumber
-                aria-label="张数"
+                aria-label="Count"
                 max={4}
                 min={1}
                 value={form.count}
@@ -141,8 +141,8 @@ export function ImagePanel({ apiKey }: { apiKey: string }) {
             size="small"
             title={(
               <div className="reference-card-title">
-                <span>参考图片</span>
-                <small>有参考图自动切换 image-to-image；最多 8 张</small>
+                <span>Reference images</span>
+                <small>URL or upload; max 8</small>
               </div>
             )}
             extra={<Tag color={referenceCount > 0 ? "processing" : "default"}>{referenceCount}/8</Tag>}
@@ -151,10 +151,10 @@ export function ImagePanel({ apiKey }: { apiKey: string }) {
               <div className="reference-url-shell">
                 <Link2 size={14} aria-hidden="true" />
                 <Input.TextArea
-                  aria-label="参考图片 URL（每行一个）"
+                  aria-label="Reference image URLs (one per line)"
                   className="reference-url-input"
                   autoSize={{ minRows: 2, maxRows: 4 }}
-                  placeholder="参考图片 URL，每行一个；也可以直接上传本地图片。"
+                  placeholder="Reference image URLs, one per line. Local uploads are converted to protocol assets."
                   value={referenceUrls}
                   onChange={(event) => setReferenceUrls(event.target.value)}
                 />
@@ -169,12 +169,12 @@ export function ImagePanel({ apiKey }: { apiKey: string }) {
                   onChange={({ fileList }) => setReferenceFiles(fileList.slice(0, 8))}
                 >
                   <AntButton htmlType="button" icon={<UploadCloud size={14} />} size="small">
-                    添加参考图
+                    Add reference image
                   </AntButton>
                 </Upload>
-                <div className="reference-file-list" aria-label="参考图片已选文件">
+                <div className="reference-file-list" aria-label="Selected reference images">
                   {referenceFiles.length === 0 ? (
-                    <span className="reference-file-empty">无需手动导入配置，选择图片后提交时自动转成协议素材</span>
+                    <span className="reference-file-empty">No local reference images selected</span>
                   ) : referenceFiles.map((file) => (
                     <Tag
                       className="reference-file-chip"
@@ -198,7 +198,7 @@ export function ImagePanel({ apiKey }: { apiKey: string }) {
               icon={<Sparkles size={16} />}
               type="primary"
             >
-              生成图片
+              Generate image
             </AntButton>
           </div>
         </form>
@@ -206,28 +206,28 @@ export function ImagePanel({ apiKey }: { apiKey: string }) {
         <div className="image-output">
           <Card
             className="image-result-card"
-            title="生成结果"
-            extra={<Tag>{images.length} 张</Tag>}
+            title="Generated result"
+            extra={<Tag>{images.length} image(s)</Tag>}
           >
             {status.kind === "loading" ? (
               <div className="image-pending">
                 <Sparkles size={28} aria-hidden="true" />
-                <strong>正在生成图片</strong>
-                <span>等待上游返回 b64_json 或 URL</span>
+                <strong>Generating image</strong>
+                <span>Waiting for upstream b64_json or URL</span>
               </div>
             ) : images.length > 0 ? (
               <div className="image-result-grid">
                 {images.map((image, index) => (
                   <figure className="image-result-tile" key={`${image.url}-${index}`}>
-                    <img alt={`生成图片 ${index + 1}`} src={image.url} />
+                    <img alt={`Generated image ${index + 1}`} src={image.url} />
                     <figcaption>
-                      <span>#{index + 1} {image.archiveStatus ? `· ${image.archiveStatus}` : ""}</span>
+                      <span>#{index + 1}</span>
                       <span className="image-result-actions">
                         <AntButton href={image.url} icon={<ExternalLink size={14} />} rel="noreferrer" size="small" target="_blank">
-                          打开
+                          Open
                         </AntButton>
                         <AntButton href={image.url} icon={<Download size={14} />} size="small" download>
-                          下载
+                          Download
                         </AntButton>
                       </span>
                     </figcaption>
@@ -237,8 +237,8 @@ export function ImagePanel({ apiKey }: { apiKey: string }) {
             ) : (
               <div className="image-empty">
                 <ImageIcon size={34} aria-hidden="true" />
-                <strong>等待第一张图片</strong>
-                <span>左侧填写提示词后点击生成。</span>
+                <strong>Waiting for the first image</strong>
+                <span>Enter a prompt and click generate.</span>
               </div>
             )}
           </Card>
@@ -249,20 +249,18 @@ export function ImagePanel({ apiKey }: { apiKey: string }) {
   );
 }
 
-async function filesToDataUrls(files: UploadFile[]): Promise<string[]> {
-  const values = await Promise.all(files.map(fileToDataUrl));
-  return values.filter((value): value is string => Boolean(value));
+function filesToDataUrls(files: UploadFile[]): Promise<string[]> {
+  return Promise.all(files.map((file) => fileToDataUrl(file.originFileObj))).then((items) => items.filter((item): item is string => Boolean(item)));
 }
 
-function fileToDataUrl(file: UploadFile): Promise<string | undefined> {
-  const original = file.originFileObj;
-  if (!original) {
+function fileToDataUrl(file: File | undefined): Promise<string | undefined> {
+  if (!file) {
     return Promise.resolve(undefined);
   }
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : undefined);
-    reader.onerror = () => reject(new Error(`读取文件失败：${file.name}`));
-    reader.readAsDataURL(original);
+    reader.onerror = () => reject(reader.error ?? new Error("Failed to read reference image"));
+    reader.readAsDataURL(file);
   });
 }

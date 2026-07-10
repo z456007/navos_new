@@ -1340,21 +1340,7 @@ a.button {
   color: var(--red);
 }
 
-.archive-status {
-  color: var(--muted);
-}
 
-.archive-status.ok {
-  color: var(--green);
-}
-
-.archive-status.wait {
-  color: var(--amber);
-}
-
-.archive-status.bad {
-  color: var(--red);
-}
 
 .secret-note {
   display: flex;
