@@ -477,6 +477,16 @@ function normalizeSecretRoot(value: string): string {
   return value.length >= 32 ? value : createHash("sha256").update(value).digest("hex");
 }
 
+class YydsDomainFetchError extends Error {
+  readonly cause: unknown;
+
+  constructor(cause: unknown) {
+    super("YYDS domain fetch failed");
+    this.name = "YydsDomainFetchError";
+    this.cause = cause;
+  }
+}
+
 async function fetchPublicYydsDomains(fetchImpl: FetchLike = fetch): Promise<YydsFetchedDomain[]> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), YYDS_DOMAIN_FETCH_TIMEOUT_MS);
@@ -496,8 +506,18 @@ async function fetchPublicYydsDomains(fetchImpl: FetchLike = fetch): Promise<Yyd
       throw new Error("YYDS public domains response must be an array or { data: array }");
     }
     return normalizeFetchedYydsDomains(domains);
+  } catch (error) {
+    throw new YydsDomainFetchError(error);
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+async function fetchInjectedYydsDomains(fetchDomains: () => Promise<unknown[]>): Promise<YydsFetchedDomain[]> {
+  try {
+    return normalizeFetchedYydsDomains(await fetchDomains());
+  } catch (error) {
+    throw new YydsDomainFetchError(error);
   }
 }
 
@@ -580,7 +600,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
   const yydsDomainPool = new YydsDomainPool({
     store: yydsDomainPoolStore,
     fetchDomains: async () => (options.yydsDomainFetchImpl
-      ? normalizeFetchedYydsDomains(await options.yydsDomainFetchImpl())
+      ? fetchInjectedYydsDomains(options.yydsDomainFetchImpl)
       : fetchPublicYydsDomains(options.fetchImpl))
   });
   const yydsMailConfigService = new YydsMailConfigService(
@@ -1281,11 +1301,20 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     }
     try {
       await reply.send(await yydsDomainPool.refresh());
-    } catch {
-      await reply.status(502).send({
+    } catch (error) {
+      if (error instanceof YydsDomainFetchError) {
+        await reply.status(502).send({
+          error: {
+            type: "yyds_domain_fetch_error",
+            message: "YYDS domain refresh failed"
+          }
+        });
+        return;
+      }
+      await reply.status(500).send({
         error: {
-          type: "yyds_domain_fetch_error",
-          message: "YYDS domain refresh failed"
+          type: "yyds_domain_pool_error",
+          message: "YYDS domain pool refresh failed"
         }
       });
     }

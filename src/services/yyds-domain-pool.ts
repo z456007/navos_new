@@ -50,6 +50,7 @@ export class YydsDomainPool {
   private readonly fetchDomains: () => Promise<YydsFetchedDomain[]>;
   private readonly now: () => number;
   private autoEligibleDomains = new Set<string>();
+  private hasAutoRefreshSnapshot = false;
 
   constructor(options: YydsDomainPoolOptions) {
     this.store = options.store;
@@ -72,6 +73,7 @@ export class YydsDomainPool {
 
     const uniqueDomains = Array.from(new Set(eligibleDomains));
     this.autoEligibleDomains = new Set(uniqueDomains);
+    this.hasAutoRefreshSnapshot = true;
     for (const domain of uniqueDomains) {
       await this.ensureHealth(domain, this.now(), config.whitelist.includes(domain) ? WHITELIST_WEIGHT : DEFAULT_WEIGHT);
     }
@@ -95,8 +97,16 @@ export class YydsDomainPool {
     const domains = new Set<string>();
 
     if (config.mode === "auto" || config.mode === "auto-plus-whitelist") {
-      for (const domain of this.autoEligibleDomains) {
-        domains.add(domain);
+      if (this.hasAutoRefreshSnapshot) {
+        for (const domain of this.autoEligibleDomains) {
+          domains.add(domain);
+        }
+      } else {
+        for (const record of healthByDomain.values()) {
+          if (isFreshPersistedAutoHealth(record, config, this.now())) {
+            domains.add(record.domain);
+          }
+        }
       }
     }
     if (config.mode === "whitelist" || config.mode === "auto-plus-whitelist") {
@@ -236,6 +246,17 @@ function normalizeConfig(config: YydsDomainPoolConfig): YydsDomainPoolConfig {
     whitelist: config.whitelist.map(normalizeDomain).filter(Boolean),
     blacklist: config.blacklist.map(normalizeDomain).filter(Boolean)
   };
+}
+
+function isFreshPersistedAutoHealth(
+  record: YydsDomainHealthRecord,
+  config: YydsDomainPoolConfig,
+  now: number
+): boolean {
+  if (record.status === "disabled" || record.lastCheckedAt <= 0) {
+    return false;
+  }
+  return now - record.lastCheckedAt <= config.refreshIntervalMinutes * 60 * 1000;
 }
 
 function toCandidate(record: YydsDomainHealthRecord): YydsDomainCandidate {

@@ -174,6 +174,38 @@ describe("server routes", () => {
     }
   });
 
+  it("does not report YYDS domain pool store failures as fetch errors", async () => {
+    const domainStore = new InMemoryYydsDomainPoolStore();
+    vi.spyOn(domainStore, "saveHealth").mockRejectedValue(new Error("database password leaked in stack trace"));
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+      yydsDomainPoolStore: domainStore,
+      yydsDomainFetchImpl: async () => [
+        { domain: "healthy.test", isPublic: true, isVerified: true, isMxValid: true, dnsRecords: { status: "healthy", receivingReady: true } }
+      ],
+      fetchImpl: async () => Response.json({ ok: true })
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/mail/yyds/domains/refresh",
+      headers: { authorization: "Bearer sk-test" }
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({
+      error: {
+        type: "yyds_domain_pool_error",
+        message: "YYDS domain pool refresh failed"
+      }
+    });
+    expect(response.body).not.toContain("yyds_domain_fetch_error");
+    expect(response.body).not.toContain("database password");
+  });
+
   it("passes an abort signal to the YYDS domain pool public fetcher", async () => {
     let signal: AbortSignal | undefined;
     const app = createApp({

@@ -80,6 +80,45 @@ describe("YydsDomainPool", () => {
     expect((await pool.pickDomain())?.domain).toBe("normal.test");
   });
 
+  it("lists recently refreshed persisted auto domains in a new pool instance", async () => {
+    const store = new InMemoryYydsDomainPoolStore();
+    const firstPool = new YydsDomainPool({
+      store,
+      fetchDomains: vi.fn(async () => [domain("persisted.test")]),
+      now: () => 1000
+    });
+    await firstPool.refresh();
+
+    const secondPool = new YydsDomainPool({
+      store,
+      fetchDomains: vi.fn(async () => []),
+      now: () => 1000 + 1
+    });
+
+    const candidates = await secondPool.listCandidates();
+    expect(candidates.map((item) => item.domain)).toEqual(["persisted.test"]);
+    expect((await secondPool.pickDomain())?.domain).toBe("persisted.test");
+  });
+
+  it("excludes stale persisted auto health after the refresh interval", async () => {
+    const store = new InMemoryYydsDomainPoolStore();
+    const firstPool = new YydsDomainPool({
+      store,
+      fetchDomains: vi.fn(async () => [domain("stale-persisted.test")]),
+      now: () => 1000
+    });
+    await firstPool.refresh();
+
+    const secondPool = new YydsDomainPool({
+      store,
+      fetchDomains: vi.fn(async () => []),
+      now: () => 1000 + 30 * 60 * 1000 + 1
+    });
+
+    expect(await secondPool.listCandidates()).toEqual([]);
+    expect(await secondPool.pickDomain()).toBeUndefined();
+  });
+
   it("keeps disabled domains disabled after recordSuccess and does not pick them", async () => {
     const store = new InMemoryYydsDomainPoolStore();
     await store.saveConfig({
