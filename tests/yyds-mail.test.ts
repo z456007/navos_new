@@ -71,6 +71,87 @@ describe("YydsMailClient", () => {
     });
   });
 
+  it("classifies generic mailbox failures with mailbox_create_failed failureKind", async () => {
+    const client = new YydsMailClient({
+      baseUrl: "https://mail.test/v1",
+      apiKey: "ac-test",
+      fetchImpl: async () => Response.json(
+        { success: false, error: "provider temporarily unavailable", errorCode: "provider_unavailable" },
+        { status: 503 }
+      )
+    });
+
+    await expect(client.createMailbox()).rejects.toMatchObject({
+      status: 503,
+      failureKind: "mailbox_create_failed"
+    });
+  });
+
+  it("classifies message failures with message_poll_failed failureKind", async () => {
+    const client = new YydsMailClient({
+      baseUrl: "https://mail.test/v1",
+      apiKey: "ac-test",
+      fetchImpl: async () => Response.json(
+        { success: false, error: "mailbox not ready", errorCode: "mailbox_not_ready" },
+        { status: 502 }
+      )
+    });
+
+    await expect(client.listMessages({ address: "a@mail.test", token: "mail-token" })).rejects.toMatchObject({
+      status: 502,
+      failureKind: "message_poll_failed"
+    });
+  });
+
+  it("classifies normal rate limits with rate_limited failureKind and retry delay", async () => {
+    const client = new YydsMailClient({
+      baseUrl: "https://mail.test/v1",
+      apiKey: "ac-test",
+      fetchImpl: async () => Response.json(
+        { success: false, error: "too many account creation requests" },
+        { status: 429, headers: { "Retry-After": "60" } }
+      )
+    });
+
+    await expect(client.createMailbox()).rejects.toMatchObject({
+      status: 429,
+      failureKind: "rate_limited",
+      retryAfterSeconds: 60
+    });
+  });
+
+  it("does not classify unrelated domain fields as domain_rejected failureKind", async () => {
+    const client = new YydsMailClient({
+      baseUrl: "https://mail.test/v1",
+      apiKey: "ac-test",
+      fetchImpl: async () => Response.json(
+        { success: false, error: "provider failed", errorCode: "provider_failed", domain: "healthy.test" },
+        { status: 500 }
+      )
+    });
+
+    await expect(client.createMailbox({ domain: "healthy.test" })).rejects.toMatchObject({
+      status: 500,
+      failureKind: "mailbox_create_failed"
+    });
+  });
+
+  it("classifies explicit invalid domain failures with domain_rejected failureKind", async () => {
+    const client = new YydsMailClient({
+      baseUrl: "https://mail.test/v1",
+      apiKey: "ac-test",
+      fetchImpl: async () => Response.json(
+        { success: false, error: "domain not allowed", errorCode: "invalid_domain" },
+        { status: 400 }
+      )
+    });
+
+    await expect(client.createMailbox({ domain: "blocked.test" })).rejects.toMatchObject({
+      status: 400,
+      failureKind: "domain_rejected"
+    });
+  });
+
   it("lists and reads messages with mailbox bearer token and address query", async () => {
     const urls: string[] = [];
     const client = new YydsMailClient({

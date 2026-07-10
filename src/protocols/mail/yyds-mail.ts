@@ -93,7 +93,8 @@ export class YydsMailClient {
     }>("/accounts", {
       method: "POST",
       headers: this.headers({ json: true, apiKey: true }),
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      fallbackKind: "mailbox_create_failed"
     });
 
     if (typeof data.address !== "string" || !data.address) {
@@ -113,7 +114,8 @@ export class YydsMailClient {
     const data = await this.request<unknown>("/messages", {
       method: "GET",
       headers: this.headers({ token: auth.token }),
-      address: auth.address
+      address: auth.address,
+      fallbackKind: "message_poll_failed"
     });
     return normalizeMessageList(data);
   }
@@ -125,7 +127,8 @@ export class YydsMailClient {
     return this.request<unknown>(`/messages/${encodeURIComponent(messageId)}`, {
       method: "GET",
       headers: this.headers({ token: auth.token }),
-      address: auth.address
+      address: auth.address,
+      fallbackKind: "message_poll_failed"
     });
   }
 
@@ -156,6 +159,7 @@ export class YydsMailClient {
       headers: Record<string, string>;
       body?: BodyInit;
       address?: string;
+      fallbackKind?: YydsFailureKind;
     }
   ): Promise<T> {
     const url = new URL(`${this.baseUrl}${path}`);
@@ -171,7 +175,7 @@ export class YydsMailClient {
     const parsed = parseJson(raw);
     if (!response.ok || parsedSuccessFalse(parsed)) {
       const retryAfterSeconds = parseRetryAfter(response.headers.get("retry-after"));
-      const kind = classifyYydsFailure(response.status, parsed, raw);
+      const kind = classifyYydsFailure(response.status, parsed, raw, options.fallbackKind);
       throw new YydsMailError(errorMessage(parsed, raw), response.status, parsed ?? raw, kind, retryAfterSeconds);
     }
     return unwrapData(parsed) as T;
@@ -263,22 +267,37 @@ function parseRetryAfter(value: string | null): number | undefined {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
-function classifyYydsFailure(status: number, parsed: unknown, raw: string): YydsFailureKind {
+function classifyYydsFailure(
+  status: number,
+  parsed: unknown,
+  raw: string,
+  fallbackKind: YydsFailureKind = "unknown"
+): YydsFailureKind {
   const record = parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
   const errorCode = typeof record.errorCode === "string" ? record.errorCode : "";
-  const message = [record.error, record.message, raw]
+  const code = typeof record.code === "string" ? record.code : "";
+  const type = typeof record.type === "string" ? record.type : "";
+  const message = [record.error, record.message]
     .filter((item): item is string => typeof item === "string")
+    .join(" ");
+  const classifierText = [errorCode, code, type, message]
+    .filter((item) => item.length > 0)
     .join(" ");
   if (status === 429 && errorCode === "quota_exhausted") {
     return "quota_exhausted";
   }
-  if (status === 429 || /too many account creation requests|rate.?limit/i.test(message)) {
+  if (status === 429 || /too many account creation requests|rate.?limit/i.test(`${classifierText} ${raw}`)) {
     return "rate_limited";
   }
-  if (/domain/i.test(message)) {
+  if (isDomainRejected(classifierText)) {
     return "domain_rejected";
   }
-  return "unknown";
+  return fallbackKind;
+}
+
+function isDomainRejected(value: string): boolean {
+  const normalized = value.toLowerCase().replace(/[_-]+/g, " ");
+  return /\b(domain rejected|domain not allowed|invalid domain)\b/.test(normalized);
 }
 
 function readString(value: unknown, keys: string[]): string | undefined {
