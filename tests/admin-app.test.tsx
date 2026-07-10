@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../web/src/App";
+import { ConsoleShell } from "../web/src/app/ConsoleShell";
 
 describe("admin app gate", () => {
   afterEach(() => {
@@ -486,6 +487,47 @@ describe("admin app gate", () => {
     });
     expect(screen.getByText(/uid-full-1/)).toBeInTheDocument();
     expect(screen.getByText(/token-full-1/)).toBeInTheDocument();
+  });
+
+  it("distinguishes fill target from create count in account registration controls", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === "/api/accounts") return Response.json([]);
+      if (path === "/api/registration/jobs" && init?.method === "GET") return Response.json([]);
+      if (path === "/api/registration/jobs" && init?.method === "POST") return Response.json({ jobId: "job-create" });
+      if (path === "/api/registration/jobs/job-create") {
+        return Response.json({
+          id: "job-create",
+          mode: "create",
+          state: "succeeded",
+          count: 5,
+          concurrency: 4,
+          progress: { started: 5, completed: 5, failed: 0, total: 5 },
+          logs: []
+        });
+      }
+      return Response.json({ ok: true });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ConsoleShell
+        accounts={[]}
+        activePanel="accounts"
+        apiKey="sk-local"
+        onAccountsChange={vi.fn()}
+        onPanelChange={vi.fn()}
+        onRefreshAccounts={vi.fn(async () => [])}
+        onSignOut={vi.fn()}
+      />
+    );
+
+    fireEvent.change(await screen.findByLabelText("新增数量"), { target: { value: "5" } });
+    fireEvent.change(screen.getByLabelText("任务并发"), { target: { value: "4" } });
+    fireEvent.click(screen.getByRole("button", { name: "新增注册" }));
+
+    const postCall = fetchMock.mock.calls.find(([path, init]) => path === "/api/registration/jobs" && init?.method === "POST");
+    expect(JSON.parse(postCall?.[1]?.body as string)).toEqual({ mode: "create", count: 5, concurrency: 4 });
   });
 
   it("does not restore completed registration jobs when the account pool reloads", async () => {

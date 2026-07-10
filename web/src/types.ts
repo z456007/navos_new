@@ -20,7 +20,7 @@ export interface Mailbox {
 }
 
 export type RegistrationJobState = "queued" | "running" | "succeeded" | "failed" | "canceled";
-export type RegistrationJobMode = "single" | "fill";
+export type RegistrationJobMode = "single" | "fill" | "create";
 
 export interface RegistrationJobLog {
   at: number;
@@ -33,6 +33,7 @@ export interface RegistrationJobView {
   mode: RegistrationJobMode;
   state: RegistrationJobState;
   target?: number;
+  count?: number;
   concurrency?: number;
   progress: {
     started: number;

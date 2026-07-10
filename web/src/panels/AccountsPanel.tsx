@@ -8,7 +8,7 @@ import { idleStatus } from "../app/defaults";
 import { formatTime, shortText } from "../lib/accounts";
 import { nextPollingDelay } from "../lib/polling";
 import { normalizeRegistrationJob, registrationJobIsTerminal } from "../lib/registration-job";
-import type { AccountListItem, RegistrationJobView, StatusState } from "../types";
+import type { AccountListItem, RegistrationJobMode, RegistrationJobView, StatusState } from "../types";
 
 export function AccountsPanel({
   accounts,
@@ -23,8 +23,9 @@ export function AccountsPanel({
 }) {
   const [status, setStatus] = useState<StatusState>(idleStatus);
   const [job, setJob] = useState<RegistrationJobView | undefined>();
-  const [jobTarget, setJobTarget] = useState(10);
-  const [jobConcurrency, setJobConcurrency] = useState(2);
+  const [fillTarget, setFillTarget] = useState(100);
+  const [createCount, setCreateCount] = useState(10);
+  const [jobConcurrency, setJobConcurrency] = useState(6);
   const [refreshingBalanceUid, setRefreshingBalanceUid] = useState<string | undefined>();
   const pollTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const pollFailures = useRef(0);
@@ -83,19 +84,23 @@ export function AccountsPanel({
     return Math.min(max, Math.max(min, Math.trunc(next)));
   }
 
-  async function startRegistrationJob(mode: "single" | "fill") {
+  async function startRegistrationJob(mode: RegistrationJobMode) {
     const requestVersion = markJobInteraction();
     clearPolling();
     pollFailures.current = 0;
     refreshedTerminalJobId.current = undefined;
     setStatus({ kind: "loading", message: "创建注册任务中" });
+    const payload = mode === "fill"
+      ? { mode: "fill" as const, target: fillTarget, concurrency: jobConcurrency }
+      : mode === "create"
+        ? { mode: "create" as const, count: createCount, concurrency: jobConcurrency }
+        : { mode: "single" as const };
+    const total = mode === "fill" ? fillTarget : mode === "create" ? createCount : 1;
 
     try {
       const response = await apiRequest<unknown>(apiKey, "/api/registration/jobs", {
         method: "POST",
-        body: JSON.stringify(mode === "single"
-          ? { mode: "single" }
-          : { mode: "fill", target: jobTarget, concurrency: jobConcurrency })
+        body: JSON.stringify(payload)
       });
       const jobId = readJobId(response);
       if (!jobId) {
@@ -106,9 +111,10 @@ export function AccountsPanel({
         id: jobId,
         mode,
         state: "queued",
-        target: mode === "fill" ? jobTarget : undefined,
-        concurrency: mode === "fill" ? jobConcurrency : undefined,
-        progress: { started: 0, completed: 0, failed: 0, total: mode === "fill" ? jobTarget : 1 },
+        target: mode === "fill" ? fillTarget : undefined,
+        count: mode === "create" ? createCount : undefined,
+        concurrency: mode === "single" ? undefined : jobConcurrency,
+        progress: { started: 0, completed: 0, failed: 0, total },
         logs: []
       }));
       await pollRegistrationJob(jobId);
@@ -315,25 +321,35 @@ export function AccountsPanel({
       </div>
 
       <div className="registration-ops" aria-label="注册任务">
-        <div className="form-row two compact">
+        <div className="form-row three compact">
           <label className="text-field ant-field">
-            <span>目标数量</span>
+            <span>补齐到 active 数量</span>
             <InputNumber
-              aria-label="目标数量"
+              aria-label="补齐到 active 数量"
               max={500}
               min={1}
-              value={jobTarget}
-              onChange={(value) => setJobTarget(clampJobNumber(value, 1, 500))}
+              value={fillTarget}
+              onChange={(value) => setFillTarget(clampJobNumber(value, 1, 500))}
             />
           </label>
           <label className="text-field ant-field">
-            <span>并发数</span>
+            <span>新增数量</span>
             <InputNumber
-              aria-label="并发数"
-              max={2}
+              aria-label="新增数量"
+              max={500}
+              min={1}
+              value={createCount}
+              onChange={(value) => setCreateCount(clampJobNumber(value, 1, 500))}
+            />
+          </label>
+          <label className="text-field ant-field">
+            <span>任务并发</span>
+            <InputNumber
+              aria-label="任务并发"
+              max={20}
               min={1}
               value={jobConcurrency}
-              onChange={(value) => setJobConcurrency(clampJobNumber(value, 1, 2))}
+              onChange={(value) => setJobConcurrency(clampJobNumber(value, 1, 20))}
             />
           </label>
         </div>
@@ -343,6 +359,9 @@ export function AccountsPanel({
           </AntButton>
           <AntButton icon={<Play size={16} />} onClick={() => void startRegistrationJob("fill")}>
             补齐账号池
+          </AntButton>
+          <AntButton icon={<Play size={16} />} onClick={() => void startRegistrationJob("create")}>
+            新增注册
           </AntButton>
           {job && !registrationJobIsTerminal(job) && (
             <AntButton icon={<Square size={16} />} onClick={() => void cancelRegistrationJob()}>

@@ -5,11 +5,13 @@ export function normalizeRegistrationJob(raw: unknown): RegistrationJobView {
   const progress = record.progress && typeof record.progress === "object"
     ? record.progress as Record<string, unknown>
     : {};
+  const modeValue = readString(record.mode);
   return {
     id: readString(record.id) ?? "",
-    mode: readString(record.mode) === "single" ? "single" : "fill",
+    mode: modeValue === "single" || modeValue === "create" ? modeValue : "fill",
     state: mapRegistrationJobState(readString(record.state)),
     target: readNumber(record.target),
+    count: readNumber(record.count),
     concurrency: readNumber(record.concurrency),
     progress: {
       started: readNumber(progress.started) ?? 0,
