@@ -144,6 +144,10 @@ describe("server routes", () => {
 
     for (const fetchImpl of [
       async () => Response.json({ error: "unavailable" }, { status: 503 }),
+      async () => {
+        throw new Error("socket hang up with secret upstream details");
+      },
+      async () => new Response("not json", { headers: { "content-type": "application/json" } }),
       async () => Response.json({ data: [{}] }),
       async () => Response.json({ data: "not-array" })
     ]) {
@@ -165,7 +169,36 @@ describe("server routes", () => {
           message: "YYDS domain refresh failed"
         }
       });
+      expect(response.body).not.toContain("socket hang up");
+      expect(response.body).not.toContain("not json");
     }
+  });
+
+  it("passes an abort signal to the YYDS domain pool public fetcher", async () => {
+    let signal: AbortSignal | undefined;
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+      fetchImpl: async (_url, init) => {
+        signal = init?.signal;
+        return Response.json({
+          data: [
+            { domain: "healthy.test", isPublic: true, isVerified: true, isMxValid: true, dnsRecords: { status: "healthy", receivingReady: true } }
+          ]
+        });
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/mail/yyds/domains/refresh",
+      headers: { authorization: "Bearer sk-test" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(signal).toBeDefined();
   });
 
   it("skips malformed YYDS domain pool fetch items and refreshes healthy entries", async () => {
@@ -208,7 +241,8 @@ describe("server routes", () => {
       { whitelist: "example.com" },
       { whitelist: ["example.com", 123] },
       { blacklist: ["blocked.test", false] },
-      { enabled: "false" }
+      { enabled: "false" },
+      { refreshIntervalMinute: 30 }
     ]) {
       const response = await app.inject({
         method: "PUT",
@@ -218,6 +252,55 @@ describe("server routes", () => {
       });
       expect(response.statusCode).toBe(400);
     }
+
+    for (const payload of ["[]", "null", "\"not-object\""]) {
+      const response = await app.inject({
+        method: "PUT",
+        url: "/api/mail/yyds/domain-pool/config",
+        headers: { authorization: "Bearer sk-test", "content-type": "application/json" },
+        payload
+      });
+      expect(response.statusCode).toBe(400);
+    }
+  });
+
+  it("allows partial YYDS domain pool config updates without changing other fields", async () => {
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+      fetchImpl: async () => Response.json({ ok: true })
+    });
+
+    const initial = await app.inject({
+      method: "PUT",
+      url: "/api/mail/yyds/domain-pool/config",
+      headers: { authorization: "Bearer sk-test" },
+      payload: {
+        enabled: true,
+        mode: "whitelist",
+        whitelist: ["Example.COM"],
+        blacklist: ["Blocked.TEST"],
+        refreshIntervalMinutes: 45
+      }
+    });
+    expect(initial.statusCode).toBe(200);
+
+    const partial = await app.inject({
+      method: "PUT",
+      url: "/api/mail/yyds/domain-pool/config",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { enabled: false }
+    });
+    expect(partial.statusCode).toBe(200);
+    expect(partial.json()).toEqual({
+      enabled: false,
+      mode: "whitelist",
+      whitelist: ["example.com"],
+      blacklist: ["blocked.test"],
+      refreshIntervalMinutes: 45
+    });
   });
 
   it("does not serve the built-in admin page from the backend", async () => {

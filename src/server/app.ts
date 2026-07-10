@@ -116,6 +116,7 @@ const DEFAULT_IMAGE_ACCOUNT_WAIT_MS = 120_000;
 const DEFAULT_MODEL_ACCOUNT_WAIT_MS = 30_000;
 const ACCOUNT_WAIT_POLL_INTERVAL_MS = 100;
 const DEFAULT_YYDS_DOMAINS_URL = "https://maliapi.215.im/v1/domains";
+const YYDS_DOMAIN_FETCH_TIMEOUT_MS = 10_000;
 
 function headersFromRequest(request: FastifyRequest): HeaderBag {
   const headers: HeaderBag = {};
@@ -477,21 +478,27 @@ function normalizeSecretRoot(value: string): string {
 }
 
 async function fetchPublicYydsDomains(fetchImpl: FetchLike = fetch): Promise<YydsFetchedDomain[]> {
-  const response = await fetchImpl(DEFAULT_YYDS_DOMAINS_URL);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch YYDS public domains: ${response.status} ${response.statusText}`.trim());
-  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), YYDS_DOMAIN_FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetchImpl(DEFAULT_YYDS_DOMAINS_URL, { signal: controller.signal });
+    if (!response.ok) {
+      throw new Error(`Failed to fetch YYDS public domains: ${response.status} ${response.statusText}`.trim());
+    }
 
-  const body = await response.json() as unknown;
-  const domains = Array.isArray(body)
-    ? body
-    : isPlainRecordValue(body) && Array.isArray(body.data)
-      ? body.data
-      : undefined;
-  if (!domains) {
-    throw new Error("YYDS public domains response must be an array or { data: array }");
+    const body = await response.json() as unknown;
+    const domains = Array.isArray(body)
+      ? body
+      : isPlainRecordValue(body) && Array.isArray(body.data)
+        ? body.data
+        : undefined;
+    if (!domains) {
+      throw new Error("YYDS public domains response must be an array or { data: array }");
+    }
+    return normalizeFetchedYydsDomains(domains);
+  } finally {
+    clearTimeout(timeout);
   }
-  return normalizeFetchedYydsDomains(domains);
 }
 
 function normalizeFetchedYydsDomains(domains: unknown[]): YydsFetchedDomain[] {
@@ -505,7 +512,7 @@ function normalizeFetchedYydsDomains(domains: unknown[]): YydsFetchedDomain[] {
 }
 
 function normalizeDomainPoolConfigInput(
-  body: Record<string, unknown>,
+  body: unknown,
   current: YydsDomainPoolConfig
 ): YydsDomainPoolConfig {
   assertDomainPoolConfigInput(body);
@@ -518,7 +525,16 @@ function normalizeDomainPoolConfigInput(
   };
 }
 
-function assertDomainPoolConfigInput(body: Record<string, unknown>): void {
+function assertDomainPoolConfigInput(body: unknown): asserts body is Record<string, unknown> {
+  if (!isPlainRecordValue(body)) {
+    throw new Error("config body must be an object");
+  }
+  const allowedKeys = new Set(["enabled", "mode", "whitelist", "blacklist", "refreshIntervalMinutes"]);
+  for (const key of Object.keys(body)) {
+    if (!allowedKeys.has(key)) {
+      throw new Error(`Unknown domain pool config field: ${key}`);
+    }
+  }
   if ("enabled" in body && typeof body.enabled !== "boolean") {
     throw new Error("enabled must be a boolean");
   }
@@ -1281,7 +1297,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     }
     try {
       const current = await yydsDomainPoolStore.getConfig();
-      const next = normalizeDomainPoolConfigInput(bodyRecord(request), current);
+      const next = normalizeDomainPoolConfigInput(request.body, current);
       await yydsDomainPoolStore.saveConfig(next);
       await reply.send(await yydsDomainPoolStore.getConfig());
     } catch (error) {
