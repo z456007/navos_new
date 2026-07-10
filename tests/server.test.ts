@@ -206,6 +206,97 @@ describe("server routes", () => {
     expect(response.body).not.toContain("database password");
   });
 
+  it("sanitizes YYDS domain pool list store failures", async () => {
+    const domainStore = new InMemoryYydsDomainPoolStore();
+    vi.spyOn(domainStore, "getConfig").mockRejectedValue(new Error("database password leaked in stack trace"));
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+      yydsDomainPoolStore: domainStore,
+      fetchImpl: async () => Response.json({ ok: true })
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/mail/yyds/domains",
+      headers: { authorization: "Bearer sk-test" }
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({
+      error: {
+        type: "yyds_domain_pool_error",
+        message: "YYDS domain pool operation failed"
+      }
+    });
+    expect(response.body).not.toContain("database password");
+  });
+
+  it("sanitizes YYDS domain pool config store failures without converting them to validation errors", async () => {
+    for (const fail of ["getConfig", "saveConfig"] as const) {
+      const domainStore = new InMemoryYydsDomainPoolStore();
+      vi.spyOn(domainStore, fail).mockRejectedValue(new Error(`database password leaked from ${fail}`));
+      const app = createApp({
+        masterApiKey: "sk-test",
+        providerBaseUrl: "https://upstream.test",
+        providerAuthMode: "uid-token",
+        accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+        yydsDomainPoolStore: domainStore,
+        fetchImpl: async () => Response.json({ ok: true })
+      });
+
+      const response = await app.inject({
+        method: "PUT",
+        url: "/api/mail/yyds/domain-pool/config",
+        headers: { authorization: "Bearer sk-test" },
+        payload: { enabled: false }
+      });
+
+      expect(response.statusCode).toBe(500);
+      expect(response.json()).toEqual({
+        error: {
+          type: "yyds_domain_pool_error",
+          message: "YYDS domain pool operation failed"
+        }
+      });
+      expect(response.body).not.toContain("database password");
+    }
+  });
+
+  it("rejects non-plain YYDS domain pool fetch records", async () => {
+    const domainRecord = Object.assign(new Date(), {
+      domain: "date-object.test",
+      isPublic: true,
+      isVerified: true,
+      isMxValid: true,
+      dnsRecords: { status: "healthy", receivingReady: true }
+    });
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+      yydsDomainFetchImpl: async () => [domainRecord],
+      fetchImpl: async () => Response.json({ ok: true })
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/mail/yyds/domains/refresh",
+      headers: { authorization: "Bearer sk-test" }
+    });
+
+    expect(response.statusCode).toBe(502);
+    expect(response.json()).toEqual({
+      error: {
+        type: "yyds_domain_fetch_error",
+        message: "YYDS domain refresh failed"
+      }
+    });
+  });
+
   it("passes an abort signal to the YYDS domain pool public fetcher", async () => {
     let signal: AbortSignal | undefined;
     const app = createApp({

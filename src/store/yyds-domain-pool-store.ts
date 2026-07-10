@@ -27,6 +27,7 @@ export interface YydsDomainHealthRecord {
   cooldownUntil: number;
   weight: number;
   lastCheckedAt: number;
+  lastAutoCheckedAt: number;
   lastError?: string;
 }
 
@@ -70,6 +71,7 @@ interface YydsDomainHealthRow extends RowDataPacket {
   cooldown_until: number;
   weight: number;
   last_checked_at: number;
+  last_auto_checked_at?: number;
   last_error: string | null;
 }
 
@@ -147,8 +149,13 @@ export class MysqlYydsDomainPoolStore implements YydsDomainPoolStore {
         cooldown_until BIGINT NOT NULL DEFAULT 0,
         weight INT NOT NULL DEFAULT 10,
         last_checked_at BIGINT NOT NULL DEFAULT 0,
+        last_auto_checked_at BIGINT NOT NULL DEFAULT 0,
         last_error TEXT NULL
       )
+    `);
+    await this.pool.query(`
+      ALTER TABLE yyds_domain_health
+        ADD COLUMN IF NOT EXISTS last_auto_checked_at BIGINT NOT NULL DEFAULT 0
     `);
   }
 
@@ -213,10 +220,12 @@ export class MysqlYydsDomainPoolStore implements YydsDomainPoolStore {
     await this.pool.execute(
       `INSERT INTO yyds_domain_health
         (domain, status, success_count, failure_count, verification_timeout_count, mailbox_rate_limit_count,
-         quota_exhausted_count, last_success_at, last_failure_at, cooldown_until, weight, last_checked_at, last_error)
+         quota_exhausted_count, last_success_at, last_failure_at, cooldown_until, weight, last_checked_at,
+         last_auto_checked_at, last_error)
        VALUES
         (:domain, :status, :successCount, :failureCount, :verificationTimeoutCount, :mailboxRateLimitCount,
-         :quotaExhaustedCount, :lastSuccessAt, :lastFailureAt, :cooldownUntil, :weight, :lastCheckedAt, :lastError)
+         :quotaExhaustedCount, :lastSuccessAt, :lastFailureAt, :cooldownUntil, :weight, :lastCheckedAt,
+         :lastAutoCheckedAt, :lastError)
        ON DUPLICATE KEY UPDATE
         status = VALUES(status),
         success_count = VALUES(success_count),
@@ -229,6 +238,7 @@ export class MysqlYydsDomainPoolStore implements YydsDomainPoolStore {
         cooldown_until = VALUES(cooldown_until),
         weight = VALUES(weight),
         last_checked_at = VALUES(last_checked_at),
+        last_auto_checked_at = VALUES(last_auto_checked_at),
         last_error = VALUES(last_error)`,
       {
         domain: normalized.domain,
@@ -243,6 +253,7 @@ export class MysqlYydsDomainPoolStore implements YydsDomainPoolStore {
         cooldownUntil: normalized.cooldownUntil,
         weight: normalized.weight,
         lastCheckedAt: normalized.lastCheckedAt,
+        lastAutoCheckedAt: normalized.lastAutoCheckedAt,
         lastError: normalized.lastError ?? null
       }
     );
@@ -284,7 +295,8 @@ function cloneHealth(record: YydsDomainHealthRecord): YydsDomainHealthRecord {
     lastFailureAt: parseNonNegativeInteger(record.lastFailureAt, 0),
     cooldownUntil: parseNonNegativeInteger(record.cooldownUntil, 0),
     weight: parsePositiveInteger(record.weight, DEFAULT_HEALTH_WEIGHT),
-    lastCheckedAt: parseNonNegativeInteger(record.lastCheckedAt, 0)
+    lastCheckedAt: parseNonNegativeInteger(record.lastCheckedAt, 0),
+    lastAutoCheckedAt: parseNonNegativeInteger(record.lastAutoCheckedAt, 0)
   };
   if (cloned.lastError === undefined) {
     delete cloned.lastError;
@@ -316,6 +328,7 @@ function healthFromRow(row: YydsDomainHealthRow): YydsDomainHealthRecord {
     cooldownUntil: Number(row.cooldown_until),
     weight: Number(row.weight),
     lastCheckedAt: Number(row.last_checked_at),
+    lastAutoCheckedAt: Number(row.last_auto_checked_at),
     lastError: row.last_error ?? undefined
   });
 }

@@ -21,6 +21,7 @@ export interface YydsDomainCandidate {
   lastFailureAt: number;
   cooldownUntil: number;
   lastCheckedAt: number;
+  lastAutoCheckedAt: number;
   lastError?: string;
 }
 
@@ -176,8 +177,8 @@ export class YydsDomainPool {
     const normalized = normalizeDomain(domain);
     const existing = await this.findHealthByNormalizedDomain(normalized);
     const record = existing
-      ? { ...existing, weight: Math.max(existing.weight, weight), lastCheckedAt: now }
-      : defaultHealth(normalized, now, weight);
+      ? { ...existing, weight: Math.max(existing.weight, weight), lastCheckedAt: now, lastAutoCheckedAt: now }
+      : { ...defaultHealth(normalized, now, weight), lastAutoCheckedAt: now };
     await this.store.saveHealth(record);
     return record;
   }
@@ -236,7 +237,8 @@ function defaultHealth(domain: string, now: number, weight: number): YydsDomainH
     lastFailureAt: 0,
     cooldownUntil: 0,
     weight,
-    lastCheckedAt: now
+    lastCheckedAt: now,
+    lastAutoCheckedAt: 0
   };
 }
 
@@ -253,10 +255,10 @@ function isFreshPersistedAutoHealth(
   config: YydsDomainPoolConfig,
   now: number
 ): boolean {
-  if (record.status === "disabled" || record.lastCheckedAt <= 0) {
+  if (record.status === "disabled" || record.lastAutoCheckedAt <= 0) {
     return false;
   }
-  return now - record.lastCheckedAt <= config.refreshIntervalMinutes * 60 * 1000;
+  return now - record.lastAutoCheckedAt <= config.refreshIntervalMinutes * 60 * 1000;
 }
 
 function toCandidate(record: YydsDomainHealthRecord): YydsDomainCandidate {

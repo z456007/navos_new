@@ -119,6 +119,40 @@ describe("YydsDomainPool", () => {
     expect(await secondPool.pickDomain()).toBeUndefined();
   });
 
+  it("does not treat manually updated whitelist health as a persisted auto source", async () => {
+    const store = new InMemoryYydsDomainPoolStore();
+    await store.saveConfig({
+      enabled: true,
+      mode: "whitelist",
+      whitelist: ["manual.test"],
+      blacklist: [],
+      refreshIntervalMinutes: 30
+    });
+    const firstPool = new YydsDomainPool({
+      store,
+      fetchDomains: vi.fn(async () => []),
+      now: () => 1000
+    });
+
+    await firstPool.recordSuccess("manual.test");
+    await store.saveConfig({
+      enabled: true,
+      mode: "auto",
+      whitelist: [],
+      blacklist: [],
+      refreshIntervalMinutes: 30
+    });
+
+    const secondPool = new YydsDomainPool({
+      store,
+      fetchDomains: vi.fn(async () => []),
+      now: () => 1001
+    });
+
+    expect(await secondPool.listCandidates()).toEqual([]);
+    expect(await secondPool.pickDomain()).toBeUndefined();
+  });
+
   it("keeps disabled domains disabled after recordSuccess and does not pick them", async () => {
     const store = new InMemoryYydsDomainPoolStore();
     await store.saveConfig({

@@ -282,7 +282,11 @@ function readProviderErrorNumber(value: unknown): number | undefined {
 }
 
 function isPlainRecordValue(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
 }
 
 function providerFailureDecisionFromText(text: string | undefined): ProviderFailureDecision | undefined {
@@ -487,6 +491,13 @@ class YydsDomainFetchError extends Error {
   }
 }
 
+class DomainPoolConfigValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DomainPoolConfigValidationError";
+  }
+}
+
 async function fetchPublicYydsDomains(fetchImpl: FetchLike = fetch): Promise<YydsFetchedDomain[]> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), YYDS_DOMAIN_FETCH_TIMEOUT_MS);
@@ -547,22 +558,22 @@ function normalizeDomainPoolConfigInput(
 
 function assertDomainPoolConfigInput(body: unknown): asserts body is Record<string, unknown> {
   if (!isPlainRecordValue(body)) {
-    throw new Error("config body must be an object");
+    throw new DomainPoolConfigValidationError("config body must be an object");
   }
   const allowedKeys = new Set(["enabled", "mode", "whitelist", "blacklist", "refreshIntervalMinutes"]);
   for (const key of Object.keys(body)) {
     if (!allowedKeys.has(key)) {
-      throw new Error(`Unknown domain pool config field: ${key}`);
+      throw new DomainPoolConfigValidationError(`Unknown domain pool config field: ${key}`);
     }
   }
   if ("enabled" in body && typeof body.enabled !== "boolean") {
-    throw new Error("enabled must be a boolean");
+    throw new DomainPoolConfigValidationError("enabled must be a boolean");
   }
   if ("mode" in body && parseYydsDomainPoolMode(body.mode) === undefined) {
-    throw new Error("mode must be auto, whitelist, or auto-plus-whitelist");
+    throw new DomainPoolConfigValidationError("mode must be auto, whitelist, or auto-plus-whitelist");
   }
   if ("refreshIntervalMinutes" in body && parsePositiveInteger(body.refreshIntervalMinutes) === undefined) {
-    throw new Error("refreshIntervalMinutes must be a positive integer");
+    throw new DomainPoolConfigValidationError("refreshIntervalMinutes must be a positive integer");
   }
   for (const key of ["whitelist", "blacklist"] as const) {
     if (!(key in body)) {
@@ -570,7 +581,7 @@ function assertDomainPoolConfigInput(body: unknown): asserts body is Record<stri
     }
     const value = body[key];
     if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
-      throw new Error(`${key} must be a string array`);
+      throw new DomainPoolConfigValidationError(`${key} must be a string array`);
     }
   }
 }
@@ -998,6 +1009,15 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     await reply.status(400).send({ error: { message: error instanceof Error ? error.message : "Invalid request" } });
   }
 
+  async function sendYydsDomainPoolOperationError(reply: FastifyReply): Promise<void> {
+    await reply.status(500).send({
+      error: {
+        type: "yyds_domain_pool_error",
+        message: "YYDS domain pool operation failed"
+      }
+    });
+  }
+
   async function sendRegistrationQueueUnavailable(
     reply: FastifyReply,
     message = "Registration queue is unavailable"
@@ -1289,10 +1309,14 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     if (!requireLocalAuth(request, reply)) {
       return;
     }
-    await reply.send({
-      config: await yydsDomainPoolStore.getConfig(),
-      domains: await yydsDomainPool.listCandidates()
-    });
+    try {
+      await reply.send({
+        config: await yydsDomainPoolStore.getConfig(),
+        domains: await yydsDomainPool.listCandidates()
+      });
+    } catch {
+      await sendYydsDomainPoolOperationError(reply);
+    }
   });
 
   app.post("/api/mail/yyds/domains/refresh", async (request, reply) => {
@@ -1325,12 +1349,17 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       return;
     }
     try {
+      assertDomainPoolConfigInput(request.body);
       const current = await yydsDomainPoolStore.getConfig();
       const next = normalizeDomainPoolConfigInput(request.body, current);
       await yydsDomainPoolStore.saveConfig(next);
       await reply.send(await yydsDomainPoolStore.getConfig());
     } catch (error) {
-      await sendBadRequest(reply, error);
+      if (error instanceof DomainPoolConfigValidationError) {
+        await sendBadRequest(reply, error);
+        return;
+      }
+      await sendYydsDomainPoolOperationError(reply);
     }
   });
 

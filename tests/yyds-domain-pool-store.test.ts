@@ -37,7 +37,7 @@ describe("MysqlYydsDomainPoolStore", () => {
     return new MysqlYydsDomainPoolStore(mysqlConfig);
   }
 
-  it("creates a named-placeholder mysql pool and ensures both schema tables", async () => {
+  it("creates a named-placeholder mysql pool and ensures domain pool schema tables", async () => {
     const store = createStore();
     mysqlMocks.pool.query.mockResolvedValue([[], undefined]);
 
@@ -49,9 +49,11 @@ describe("MysqlYydsDomainPoolStore", () => {
       connectionLimit: 10,
       namedPlaceholders: true
     });
-    expect(mysqlMocks.pool.query).toHaveBeenCalledTimes(2);
+    expect(mysqlMocks.pool.query).toHaveBeenCalledTimes(3);
     expect(mysqlMocks.pool.query.mock.calls[0]?.[0]).toContain("CREATE TABLE IF NOT EXISTS yyds_domain_pool_config");
     expect(mysqlMocks.pool.query.mock.calls[1]?.[0]).toContain("CREATE TABLE IF NOT EXISTS yyds_domain_health");
+    expect(mysqlMocks.pool.query.mock.calls[1]?.[0]).toContain("last_auto_checked_at");
+    expect(mysqlMocks.pool.query.mock.calls[2]?.[0]).toContain("ADD COLUMN IF NOT EXISTS last_auto_checked_at");
   });
 
   it("returns default config when no config row exists", async () => {
@@ -154,7 +156,8 @@ describe("MysqlYydsDomainPoolStore", () => {
       lastFailureAt: 7,
       cooldownUntil: 8,
       weight: 9,
-      lastCheckedAt: 10
+      lastCheckedAt: 10,
+      lastAutoCheckedAt: 11
     } as never);
 
     expect(mysqlMocks.pool.execute.mock.calls[0]?.[0]).toContain("ON DUPLICATE KEY UPDATE");
@@ -171,6 +174,7 @@ describe("MysqlYydsDomainPoolStore", () => {
       cooldownUntil: 8,
       weight: 9,
       lastCheckedAt: 10,
+      lastAutoCheckedAt: 11,
       lastError: null
     });
     await expect(store.saveHealth({ domain: " ", status: "active" } as never)).rejects.toThrow(/domain/i);
@@ -192,7 +196,8 @@ describe("MysqlYydsDomainPoolStore", () => {
       lastFailureAt: Number.NaN,
       cooldownUntil: 3.14,
       weight: 0,
-      lastCheckedAt: Number.NEGATIVE_INFINITY
+      lastCheckedAt: Number.NEGATIVE_INFINITY,
+      lastAutoCheckedAt: Number.NaN
     });
 
     expect(mysqlMocks.pool.execute.mock.calls[0]?.[1]).toMatchObject({
@@ -206,7 +211,8 @@ describe("MysqlYydsDomainPoolStore", () => {
       lastFailureAt: 0,
       cooldownUntil: 0,
       weight: 10,
-      lastCheckedAt: 0
+      lastCheckedAt: 0,
+      lastAutoCheckedAt: 0
     });
   });
 
@@ -225,6 +231,7 @@ describe("MysqlYydsDomainPoolStore", () => {
       cooldown_until: 18,
       weight: 19,
       last_checked_at: 20,
+      last_auto_checked_at: 21,
       last_error: "timeout"
     };
     mysqlMocks.pool.execute.mockResolvedValueOnce([[row]]);
@@ -243,6 +250,7 @@ describe("MysqlYydsDomainPoolStore", () => {
       cooldownUntil: 18,
       weight: 19,
       lastCheckedAt: 20,
+      lastAutoCheckedAt: 21,
       lastError: "timeout"
     });
     expect(mysqlMocks.pool.execute.mock.calls[0]?.[1]).toEqual({ domain: "example.com" });
@@ -258,7 +266,8 @@ describe("MysqlYydsDomainPoolStore", () => {
       lastFailureAt: 17,
       cooldownUntil: 18,
       weight: 19,
-      lastCheckedAt: 20
+      lastCheckedAt: 20,
+      lastAutoCheckedAt: 21
     }]);
   });
 
@@ -277,6 +286,7 @@ describe("MysqlYydsDomainPoolStore", () => {
       cooldown_until: 4.2,
       weight: 0,
       last_checked_at: Number.NEGATIVE_INFINITY,
+      last_auto_checked_at: Number.NaN,
       last_error: null
     };
     mysqlMocks.pool.execute.mockResolvedValueOnce([[invalidRow]]);
@@ -294,7 +304,8 @@ describe("MysqlYydsDomainPoolStore", () => {
       lastFailureAt: 0,
       cooldownUntil: 0,
       weight: 10,
-      lastCheckedAt: 0
+      lastCheckedAt: 0,
+      lastAutoCheckedAt: 0
     };
     await expect(store.getHealth("invalid-metrics.test")).resolves.toEqual(expected);
     await expect(store.listHealth()).resolves.toEqual([expected]);
