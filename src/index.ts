@@ -75,7 +75,7 @@ const registrationService = new RegistrationService({
   },
   vipClient,
   accountService,
-  domainPicker: async () => config.yydsDomainPool.enabled ? await yydsDomainPool.pickDomain() : undefined,
+  domainPicker: async () => await yydsDomainPool.pickDomain(),
   domainRecorder: yydsDomainPool
 });
 

@@ -81,6 +81,29 @@ describe("YydsDomainPool", () => {
     expect((await pool.pickDomain())?.domain).toBe("normal.test");
   });
 
+  it("moves domain_rejected failures to cooldown so the domain is not immediately picked", async () => {
+    const store = new InMemoryYydsDomainPoolStore();
+    await store.saveConfig({
+      enabled: true,
+      mode: "auto-plus-whitelist",
+      whitelist: ["bad.test", "normal.test"],
+      blacklist: [],
+      refreshIntervalMinutes: 30
+    });
+    const pool = new YydsDomainPool({
+      store,
+      fetchDomains: vi.fn(async () => []),
+      now: () => 1000
+    });
+
+    await pool.recordFailure("bad.test", "domain_rejected", "domain rejected");
+
+    const bad = (await pool.listCandidates()).find((item) => item.domain === "bad.test");
+    expect(bad?.status).toBe("cooldown");
+    expect(bad?.cooldownUntil).toBeGreaterThan(1000);
+    expect((await pool.pickDomain())?.domain).toBe("normal.test");
+  });
+
   it("excludes stale auto domains after refresh no longer reports them healthy", async () => {
     const fetchDomains = vi
       .fn()

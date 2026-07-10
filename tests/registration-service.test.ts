@@ -214,6 +214,120 @@ describe("RegistrationService", () => {
     expect(recorder.recordSuccess).not.toHaveBeenCalled();
   });
 
+  it("does not record domain failure when VIP send-code fails after mailbox creation", async () => {
+    const vipFetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = init?.body ? JSON.parse(init.body as string) : {};
+      if (body.template_scene) {
+        return Response.json({ error: "vip send failed" }, { status: 500 });
+      }
+      return Response.json({ resp_common: { ret: 0 } });
+    });
+    const mailFetch = mailFetchForCode("vipfail@mail.good.test", "mail-token", "445566");
+    const recorder = {
+      recordSuccess: vi.fn(async () => undefined),
+      recordFailure: vi.fn(async () => undefined)
+    };
+    const service = buildService(vipFetch, mailFetch, {
+      domainPicker: async () => ({ domain: "mail.good.test" }),
+      domainRecorder: recorder
+    });
+
+    const result = await service.registerOne();
+
+    expect(result.success).toBe(false);
+    expect(result.domain).toBe("mail.good.test");
+    expect(result.failureKind).toBe("unknown");
+    expect(recorder.recordFailure).not.toHaveBeenCalled();
+    expect(recorder.recordSuccess).not.toHaveBeenCalled();
+  });
+
+  it("does not record domain failure when YYDS API key is missing after a domain was picked", async () => {
+    const recorder = {
+      recordSuccess: vi.fn(async () => undefined),
+      recordFailure: vi.fn(async () => undefined)
+    };
+    const vipClient = new VipClient({
+      baseUrl: "https://vip.test",
+      hmacSecret: "test-secret-32!!",
+      fetchImpl: vi.fn()
+    });
+    const service = new RegistrationService({
+      yydsClientProvider: async () => undefined,
+      vipClient,
+      accountService,
+      domainPicker: async () => ({ domain: "mail.good.test" }),
+      domainRecorder: recorder,
+      maxPollAttempts: 1,
+      pollIntervalMs: 1,
+      mailboxMinIntervalMs: 0
+    });
+
+    const result = await service.registerOne();
+
+    expect(result.success).toBe(false);
+    expect(result.domain).toBe("mail.good.test");
+    expect(result.failureKind).toBe("unknown");
+    expect(recorder.recordFailure).not.toHaveBeenCalled();
+    expect(recorder.recordSuccess).not.toHaveBeenCalled();
+  });
+
+  it("uses the mailbox address domain as authoritative when YYDS ignores the picked domain", async () => {
+    const vipFetch = vipFetchForPipeline({});
+    const mailFetch = mailFetchForCode("user@other.test", "mail-token", "445566");
+    const recorder = {
+      recordSuccess: vi.fn(async () => undefined),
+      recordFailure: vi.fn(async () => undefined)
+    };
+    const service = buildService(vipFetch, mailFetch, {
+      domainPicker: async () => ({ domain: "mail.good.test" }),
+      domainRecorder: recorder
+    });
+
+    const result = await service.registerOne();
+
+    expect(result.success).toBe(true);
+    expect(result.domain).toBe("other.test");
+    expect(recorder.recordSuccess).not.toHaveBeenCalledWith("other.test");
+    expect(recorder.recordSuccess).not.toHaveBeenCalledWith("mail.good.test");
+    expect(recorder.recordSuccess).not.toHaveBeenCalled();
+    expect(recorder.recordFailure).not.toHaveBeenCalled();
+  });
+
+  it("returns message_poll_failed for YYDS polling failures without recording verification timeout", async () => {
+    const vipFetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = init?.body ? JSON.parse(init.body as string) : {};
+      if (body.template_scene) return Response.json({ resp_common: { ret: 0 } });
+      return Response.json({}, { status: 500 });
+    });
+    const mailFetch = vi.fn(async (url: string, init?: RequestInit) => {
+      const u = String(url);
+      if (u.includes("/accounts") && init?.method === "POST") {
+        return Response.json({ success: true, data: { address: "poll@mail.good.test", token: "mt" } });
+      }
+      if (u.includes("/messages")) {
+        return Response.json({ success: false, error: "mailbox temporarily unavailable" }, { status: 503 });
+      }
+      return Response.json({ success: true, data: {} });
+    });
+    const recorder = {
+      recordSuccess: vi.fn(async () => undefined),
+      recordFailure: vi.fn(async () => undefined)
+    };
+    const service = buildService(vipFetch, mailFetch, {
+      domainPicker: async () => ({ domain: "mail.good.test" }),
+      domainRecorder: recorder
+    });
+
+    const result = await service.registerOne();
+
+    expect(result.success).toBe(false);
+    expect(result.domain).toBe("mail.good.test");
+    expect(result.failureKind).toBe("message_poll_failed");
+    expect(result.error).toContain("mailbox temporarily unavailable");
+    expect(recorder.recordFailure).not.toHaveBeenCalled();
+    expect(recorder.recordSuccess).not.toHaveBeenCalled();
+  });
+
   it("records YYDS mailbox creation failures with failure kind and retry count", async () => {
     const mailFetch = vi.fn(async (url: string, init?: RequestInit) => {
       if (String(url).includes("/accounts") && init?.method === "POST") {
@@ -238,7 +352,7 @@ describe("RegistrationService", () => {
     expect(result.success).toBe(false);
     expect(result.domain).toBe("bad.test");
     expect(result.failureKind).toBe("domain_rejected");
-    expect(result.retryCount).toBe(1);
+    expect(result.retryCount).toBe(0);
     expect(result.elapsedMs).toEqual(expect.any(Number));
     expect(recorder.recordFailure).toHaveBeenCalledWith(
       "bad.test",
@@ -302,6 +416,7 @@ describe("RegistrationService", () => {
     expect(result.success).toBe(true);
     expect(result.email).toBe("retry@mail.test");
     expect(accountCreateAttempts).toBe(3);
+    expect(result.retryCount).toBe(2);
   });
 
   it("returns success without cert credits when enterprise cert fails", async () => {

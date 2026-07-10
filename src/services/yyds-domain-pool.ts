@@ -300,6 +300,11 @@ export class YydsDomainPool {
 
   async recordSuccess(domain: string): Promise<void> {
     const now = this.now();
+    const atomicRecordSuccess = (this.store as Partial<YydsDomainPoolStore>).recordSuccess;
+    if (atomicRecordSuccess) {
+      await atomicRecordSuccess.call(this.store, domain, now);
+      return;
+    }
     const record = await this.getOrCreateHealth(domain, now);
     const disabled = record.status === "disabled";
     await this.store.saveHealth({
@@ -316,10 +321,15 @@ export class YydsDomainPool {
 
   async recordFailure(domain: string, kind: YydsFailureKind, error: string): Promise<void> {
     const now = this.now();
+    const atomicRecordFailure = (this.store as Partial<YydsDomainPoolStore>).recordFailure;
+    if (atomicRecordFailure) {
+      await atomicRecordFailure.call(this.store, domain, kind, error, now);
+      return;
+    }
     const record = await this.getOrCreateHealth(domain, now);
     const verificationTimeoutCount = record.verificationTimeoutCount + (kind === "verification_timeout" ? 1 : 0);
     const disabled = record.status === "disabled";
-    const cooldown = !disabled && kind === "verification_timeout" && verificationTimeoutCount >= 2;
+    const cooldown = !disabled && (kind === "domain_rejected" || (kind === "verification_timeout" && verificationTimeoutCount >= 2));
 
     await this.store.saveHealth({
       ...record,

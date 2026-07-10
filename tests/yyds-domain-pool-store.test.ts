@@ -322,6 +322,77 @@ describe("MysqlYydsDomainPoolStore", () => {
     });
   });
 
+  it("records success with an atomic SQL increment instead of replacing counters", async () => {
+    const store = createStore();
+    mysqlMocks.pool.execute.mockResolvedValue([{}, undefined]);
+
+    await store.recordSuccess(" Atomic.Test ", 1234);
+
+    const sql = String(mysqlMocks.pool.execute.mock.calls[0]?.[0]);
+    expect(sql).toContain("ON DUPLICATE KEY UPDATE");
+    expect(sql).toContain("success_count = success_count + 1");
+    expect(sql).not.toContain("success_count = VALUES(success_count)");
+    expect(sql).toContain("status = IF(status = 'disabled', 'disabled', 'active')");
+    expect(mysqlMocks.pool.execute.mock.calls[0]?.[1]).toMatchObject({
+      domain: "atomic.test",
+      now: 1234
+    });
+  });
+
+  it("records failure with atomic SQL increments for failure telemetry", async () => {
+    const store = createStore();
+    mysqlMocks.pool.execute.mockResolvedValue([{}, undefined]);
+
+    await store.recordFailure(" Atomic-Fail.Test ", "domain_rejected", "domain rejected", 5678);
+
+    const sql = String(mysqlMocks.pool.execute.mock.calls[0]?.[0]);
+    expect(sql).toContain("ON DUPLICATE KEY UPDATE");
+    expect(sql).toContain("failure_count = failure_count + 1");
+    expect(sql).not.toContain("failure_count = VALUES(failure_count)");
+    expect(sql).toContain("verification_timeout_count = verification_timeout_count + IF(:kind = 'verification_timeout', 1, 0)");
+    expect(sql).toContain("status = IF(status = 'disabled', 'disabled', IF(:kind = 'domain_rejected'");
+    expect(mysqlMocks.pool.execute.mock.calls[0]?.[1]).toMatchObject({
+      domain: "atomic-fail.test",
+      kind: "domain_rejected",
+      error: "domain rejected",
+      now: 5678
+    });
+  });
+
+  it("keeps disabled domains disabled when recording health through the in-memory store", async () => {
+    const store = new InMemoryYydsDomainPoolStore();
+    await store.saveHealth({
+      domain: "disabled.test",
+      status: "disabled",
+      successCount: 0,
+      failureCount: 0,
+      verificationTimeoutCount: 0,
+      mailboxRateLimitCount: 0,
+      quotaExhaustedCount: 0,
+      lastSuccessAt: 0,
+      lastFailureAt: 0,
+      cooldownUntil: 9999,
+      weight: 200,
+      lastCheckedAt: 1,
+      lastAutoCheckedAt: 1
+    });
+
+    await store.recordSuccess("disabled.test", 2000);
+    await expect(store.getHealth("disabled.test")).resolves.toMatchObject({
+      status: "disabled",
+      successCount: 1,
+      cooldownUntil: 9999
+    });
+
+    await store.recordFailure("disabled.test", "domain_rejected", "domain rejected", 3000);
+    await expect(store.getHealth("disabled.test")).resolves.toMatchObject({
+      status: "disabled",
+      successCount: 1,
+      failureCount: 1,
+      cooldownUntil: 9999
+    });
+  });
+
   it("replaces the persisted auto snapshot in a mysql transaction", async () => {
     const store = createStore();
     mysqlMocks.connection.beginTransaction.mockResolvedValue(undefined);

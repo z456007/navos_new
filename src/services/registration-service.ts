@@ -196,25 +196,40 @@ export class RegistrationService {
     let resultDomain: string | undefined;
     let email: string | undefined;
     let retryCount: number | undefined;
+    let phase: "pick_domain" | "mailbox_create" | "send_code" | "poll" | "login" | "import" = "pick_domain";
 
     try {
       // 1. Create temp mailbox via YYDS
       pickedDomain = (await this.domainPicker?.())?.domain;
+      phase = "mailbox_create";
       const mailboxResult = await this.createMailboxWithRetry(pickedDomain);
       const mailbox = mailboxResult.mailbox;
       retryCount = mailboxResult.retryCount;
       email = mailbox.address;
       const mailboxToken = mailbox.token;
-      resultDomain = mailbox.domain ?? pickedDomain ?? domainFromEmail(email);
+      resultDomain = domainFromEmail(email) ?? mailbox.domain ?? pickedDomain;
 
       // 2. Send verification code via VIP API
+      phase = "send_code";
       await this.vipClient.sendEmailCode(email);
 
       // 3. Poll YYDS mailbox for verification code
-      const code = await this.pollVerificationCode(email, mailboxToken);
-      if (!code) {
+      phase = "poll";
+      const pollResult = await this.pollVerificationCode(email, mailboxToken);
+      if (pollResult.failure) {
+        return {
+          success: false,
+          email,
+          error: pollResult.failure.message,
+          domain: resultDomain,
+          failureKind: pollResult.failure.failureKind,
+          elapsedMs: Date.now() - startedAt,
+          retryCount
+        };
+      }
+      if (!pollResult.code) {
         const error = "verification code not received";
-        await this.recordDomainFailureBestEffort(resultDomain, "verification_timeout", error);
+        await this.recordDomainFailureBestEffort(this.recordableDomain(pickedDomain, resultDomain), "verification_timeout", error);
         return {
           success: false,
           email,
@@ -227,7 +242,8 @@ export class RegistrationService {
       }
 
       // 4. Login/register via VIP API
-      const { uid, token } = await this.vipClient.login(email, code);
+      phase = "login";
+      const { uid, token } = await this.vipClient.login(email, pollResult.code);
 
       // 5. Query initial balance (should be 1000 from registration)
       const balReg = await this.queryBalanceOrZero(uid, token);
@@ -251,6 +267,7 @@ export class RegistrationService {
       const balanceTotal = balReg.totalBalance + certCredits;
 
       // 7. Import into account pool
+      phase = "import";
       await this.accountService.importAccount({
         uid,
         token,
@@ -261,7 +278,7 @@ export class RegistrationService {
         status: "active"
       });
 
-      await this.recordDomainSuccessBestEffort(resultDomain);
+      await this.recordDomainSuccessBestEffort(this.recordableDomain(pickedDomain, resultDomain));
 
       return {
         success: true,
@@ -280,7 +297,9 @@ export class RegistrationService {
       const message = error instanceof Error ? error.message : "registration failed";
       const failureKind: YydsFailureKind = error instanceof YydsMailError ? error.failureKind : "unknown";
       const domain = resultDomain ?? pickedDomain ?? domainFromEmail(email);
-      await this.recordDomainFailureBestEffort(domain, failureKind, message);
+      if (phase === "mailbox_create" && error instanceof YydsMailError) {
+        await this.recordDomainFailureBestEffort(this.recordableDomain(pickedDomain, domain), failureKind, message);
+      }
       return {
         success: false,
         error: message,
@@ -351,9 +370,11 @@ export class RegistrationService {
   private async pollVerificationCode(
     email: string,
     mailboxToken?: string
-  ): Promise<string | undefined> {
+  ): Promise<{ code?: string; failure?: YydsMailError }> {
     const auth = { address: email, token: mailboxToken };
     const yydsClient = await this.resolveYydsClient();
+    let sawSuccessfulPoll = false;
+    let lastYydsError: YydsMailError | undefined;
 
     for (let attempt = 0; attempt < this.maxPollAttempts; attempt++) {
       if (attempt > 0) {
@@ -362,15 +383,22 @@ export class RegistrationService {
 
       try {
         const result = await yydsClient.findVerificationCode(auth);
+        sawSuccessfulPoll = true;
         if (result.code) {
-          return result.code;
+          return { code: result.code };
         }
-      } catch {
+      } catch (error) {
+        if (error instanceof YydsMailError) {
+          lastYydsError = error;
+        }
         // Continue polling on transient errors
       }
     }
 
-    return undefined;
+    if (!sawSuccessfulPoll && lastYydsError) {
+      return { failure: lastYydsError };
+    }
+    return {};
   }
 
   private async queryBalanceOrZero(uid: string, token: string): Promise<VipBalance> {
@@ -387,19 +415,19 @@ export class RegistrationService {
       try {
         return {
           mailbox: await this.createMailboxInThrottledSlot(domain),
-          retryCount: attempt
+          retryCount: attempt - 1
         };
       } catch (error) {
         lastError = error;
         if (!isMailboxRateLimitError(error) || attempt >= this.maxMailboxCreateAttempts) {
-          throw withMailboxCreateAttempts(error, attempt);
+          throw withMailboxCreateAttempts(error, attempt - 1);
         }
         await sleep(this.mailboxRetryDelayMs * attempt);
       }
     }
     throw withMailboxCreateAttempts(
       lastError instanceof Error ? lastError : new Error("YYDS mailbox creation failed"),
-      this.maxMailboxCreateAttempts
+      this.maxMailboxCreateAttempts - 1
     );
   }
 
@@ -452,6 +480,13 @@ export class RegistrationService {
     }
   }
 
+  private recordableDomain(pickedDomain: string | undefined, domain: string | undefined): string | undefined {
+    if (!pickedDomain || !domain) {
+      return undefined;
+    }
+    return normalizeComparableDomain(pickedDomain) === normalizeComparableDomain(domain) ? domain : undefined;
+  }
+
   private async resolveYydsClient(): Promise<YydsMailClient> {
     const client = this.yydsClientProvider
       ? await this.yydsClientProvider()
@@ -470,6 +505,10 @@ function sleep(ms: number): Promise<void> {
 function domainFromEmail(email: string | undefined): string | undefined {
   const domain = email?.split("@").at(-1);
   return domain && domain !== email ? domain : undefined;
+}
+
+function normalizeComparableDomain(domain: string): string {
+  return domain.trim().toLowerCase();
 }
 
 function isMailboxRateLimitError(error: unknown): boolean {

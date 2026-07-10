@@ -1,6 +1,7 @@
 import type { RowDataPacket } from "mysql2";
 import type { Pool, PoolConnection } from "mysql2/promise";
 import mysql from "mysql2/promise";
+import type { YydsFailureKind } from "../protocols/mail/yyds-mail.js";
 import type { MysqlConfig } from "./mysql-account-store.js";
 
 export type YydsDomainPoolMode = "auto" | "whitelist" | "auto-plus-whitelist";
@@ -39,6 +40,8 @@ export interface YydsDomainPoolStore {
   listHealth(): Promise<YydsDomainHealthRecord[]>;
   getHealth(domain: string): Promise<YydsDomainHealthRecord | undefined>;
   saveHealth(record: YydsDomainHealthRecord): Promise<void>;
+  recordSuccess(domain: string, now: number): Promise<void>;
+  recordFailure(domain: string, kind: YydsFailureKind, error: string, now: number): Promise<void>;
   replaceAutoSnapshot(records: YydsDomainHealthRecord[]): Promise<void>;
 }
 
@@ -50,6 +53,8 @@ const DEFAULT_CONFIG: YydsDomainPoolConfig = {
   refreshIntervalMinutes: 30
 };
 const DEFAULT_HEALTH_WEIGHT = 10;
+const DOMAIN_POOL_HEALTH_WEIGHT = 100;
+const HEALTH_COOLDOWN_MS = 10 * 60 * 1000;
 
 interface YydsDomainPoolConfigRow extends RowDataPacket {
   enabled: 0 | 1;
@@ -104,6 +109,49 @@ export class InMemoryYydsDomainPoolStore implements YydsDomainPoolStore {
   async saveHealth(record: YydsDomainHealthRecord): Promise<void> {
     const normalized = cloneHealth(record);
     this.health.set(normalized.domain, normalized);
+  }
+
+  async recordSuccess(domain: string, now: number): Promise<void> {
+    const normalizedDomain = normalizeDomain(domain);
+    if (!normalizedDomain) {
+      throw new Error("YYDS domain health domain must not be empty");
+    }
+    const record = this.health.get(normalizedDomain) ?? defaultHealthRecord(normalizedDomain, now);
+    const disabled = record.status === "disabled";
+    this.health.set(normalizedDomain, cloneHealth({
+      ...record,
+      status: disabled ? "disabled" : "active",
+      successCount: record.successCount + 1,
+      lastSuccessAt: now,
+      cooldownUntil: disabled ? record.cooldownUntil : 0,
+      weight: Math.max(DOMAIN_POOL_HEALTH_WEIGHT, record.weight + 1),
+      lastCheckedAt: now,
+      lastError: undefined
+    }));
+  }
+
+  async recordFailure(domain: string, kind: YydsFailureKind, error: string, now: number): Promise<void> {
+    const normalizedDomain = normalizeDomain(domain);
+    if (!normalizedDomain) {
+      throw new Error("YYDS domain health domain must not be empty");
+    }
+    const record = this.health.get(normalizedDomain) ?? defaultHealthRecord(normalizedDomain, now);
+    const verificationTimeoutCount = record.verificationTimeoutCount + (kind === "verification_timeout" ? 1 : 0);
+    const disabled = record.status === "disabled";
+    const cooldown = !disabled && (kind === "domain_rejected" || (kind === "verification_timeout" && verificationTimeoutCount >= 2));
+    this.health.set(normalizedDomain, cloneHealth({
+      ...record,
+      status: disabled ? "disabled" : cooldown ? "cooldown" : record.status,
+      failureCount: record.failureCount + 1,
+      verificationTimeoutCount,
+      mailboxRateLimitCount: record.mailboxRateLimitCount + (kind === "rate_limited" ? 1 : 0),
+      quotaExhaustedCount: record.quotaExhaustedCount + (kind === "quota_exhausted" ? 1 : 0),
+      lastFailureAt: now,
+      cooldownUntil: disabled ? record.cooldownUntil : cooldown ? now + HEALTH_COOLDOWN_MS : record.cooldownUntil,
+      weight: Math.max(1, record.weight - 10),
+      lastCheckedAt: now,
+      lastError: error
+    }));
   }
 
   async replaceAutoSnapshot(records: YydsDomainHealthRecord[]): Promise<void> {
@@ -265,6 +313,76 @@ export class MysqlYydsDomainPoolStore implements YydsDomainPoolStore {
 
   async saveHealth(record: YydsDomainHealthRecord): Promise<void> {
     await this.saveHealthWithExecutor(this.pool, record);
+  }
+
+  async recordSuccess(domain: string, now: number): Promise<void> {
+    const normalizedDomain = normalizeDomain(domain);
+    if (!normalizedDomain) {
+      throw new Error("YYDS domain health domain must not be empty");
+    }
+    await this.pool.execute(
+      `INSERT INTO yyds_domain_health
+        (domain, status, success_count, failure_count, verification_timeout_count, mailbox_rate_limit_count,
+         quota_exhausted_count, last_success_at, last_failure_at, cooldown_until, weight, last_checked_at,
+         last_auto_checked_at, last_error)
+       VALUES
+        (:domain, 'active', 1, 0, 0, 0, 0, :now, 0, 0, :defaultWeight, :now, 0, NULL)
+       ON DUPLICATE KEY UPDATE
+        cooldown_until = IF(status = 'disabled', cooldown_until, 0),
+        status = IF(status = 'disabled', 'disabled', 'active'),
+        success_count = success_count + 1,
+        last_success_at = :now,
+        weight = GREATEST(:defaultWeight, weight + 1),
+        last_checked_at = :now,
+        last_error = NULL`,
+      {
+        domain: normalizedDomain,
+        now,
+        defaultWeight: DOMAIN_POOL_HEALTH_WEIGHT
+      }
+    );
+  }
+
+  async recordFailure(domain: string, kind: YydsFailureKind, error: string, now: number): Promise<void> {
+    const normalizedDomain = normalizeDomain(domain);
+    if (!normalizedDomain) {
+      throw new Error("YYDS domain health domain must not be empty");
+    }
+    const startsCooldown = kind === "domain_rejected";
+    await this.pool.execute(
+      `INSERT INTO yyds_domain_health
+        (domain, status, success_count, failure_count, verification_timeout_count, mailbox_rate_limit_count,
+         quota_exhausted_count, last_success_at, last_failure_at, cooldown_until, weight, last_checked_at,
+         last_auto_checked_at, last_error)
+       VALUES
+        (:domain, :insertStatus, 0, 1, IF(:kind = 'verification_timeout', 1, 0),
+         IF(:kind = 'rate_limited', 1, 0), IF(:kind = 'quota_exhausted', 1, 0),
+         0, :now, :insertCooldownUntil, GREATEST(1, :defaultWeight - 10), :now, 0, :error)
+       ON DUPLICATE KEY UPDATE
+        cooldown_until = IF(status = 'disabled', cooldown_until,
+          IF(:kind = 'domain_rejected' OR (:kind = 'verification_timeout' AND verification_timeout_count + 1 >= 2),
+            :cooldownUntil,
+            cooldown_until)),
+        status = IF(status = 'disabled', 'disabled', IF(:kind = 'domain_rejected' OR (:kind = 'verification_timeout' AND verification_timeout_count + 1 >= 2), 'cooldown', status)),
+        failure_count = failure_count + 1,
+        verification_timeout_count = verification_timeout_count + IF(:kind = 'verification_timeout', 1, 0),
+        mailbox_rate_limit_count = mailbox_rate_limit_count + IF(:kind = 'rate_limited', 1, 0),
+        quota_exhausted_count = quota_exhausted_count + IF(:kind = 'quota_exhausted', 1, 0),
+        last_failure_at = :now,
+        weight = GREATEST(1, weight - 10),
+        last_checked_at = :now,
+        last_error = :error`,
+      {
+        domain: normalizedDomain,
+        kind,
+        error,
+        now,
+        defaultWeight: DOMAIN_POOL_HEALTH_WEIGHT,
+        insertStatus: startsCooldown ? "cooldown" : "active",
+        insertCooldownUntil: startsCooldown ? now + HEALTH_COOLDOWN_MS : 0,
+        cooldownUntil: now + HEALTH_COOLDOWN_MS
+      }
+    );
   }
 
   async replaceAutoSnapshot(records: YydsDomainHealthRecord[]): Promise<void> {
@@ -451,6 +569,24 @@ function healthFromRow(row: YydsDomainHealthRow): YydsDomainHealthRecord {
     lastAutoCheckedAt: Number(row.last_auto_checked_at),
     lastError: row.last_error ?? undefined
   });
+}
+
+function defaultHealthRecord(domain: string, now: number): YydsDomainHealthRecord {
+  return {
+    domain: normalizeDomain(domain),
+    status: "active",
+    successCount: 0,
+    failureCount: 0,
+    verificationTimeoutCount: 0,
+    mailboxRateLimitCount: 0,
+    quotaExhaustedCount: 0,
+    lastSuccessAt: 0,
+    lastFailureAt: 0,
+    cooldownUntil: 0,
+    weight: DOMAIN_POOL_HEALTH_WEIGHT,
+    lastCheckedAt: now,
+    lastAutoCheckedAt: 0
+  };
 }
 
 function parseMode(value: string): YydsDomainPoolMode {
