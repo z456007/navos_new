@@ -187,25 +187,6 @@ function normalizeProxyBody(path: string, body: unknown): unknown {
   return path && body !== undefined ? body : {};
 }
 
-function buildOpenAiChatBody(body: Record<string, unknown>, model: string): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(body)) {
-    if (key !== "model" && key !== "max_tokens" && key !== "stream") {
-      out[key] = value;
-    }
-  }
-  out.model = model;
-  out.messages = Array.isArray(body.messages) ? body.messages : [];
-  const maxTokens = readNumber(body.max_tokens) ?? readNumber(body.max_completion_tokens);
-  if (maxTokens !== undefined) {
-    out.max_completion_tokens = maxTokens;
-  }
-  if (out.reasoning_effort === "max") {
-    out.reasoning_effort = "high";
-  }
-  return out;
-}
-
 function buildOpenAiResponsesBody(body: Record<string, unknown>, model: string): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   out.model = model;
