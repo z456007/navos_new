@@ -354,6 +354,51 @@ describe("server routes", () => {
     expect(forwarded).toHaveLength(1);
   });
 
+  it("normalizes public Claude aliases before allow checks and forwarding", async () => {
+    const forwarded: Array<{ path: string; body: Record<string, unknown> }> = [];
+    const app = createApp({
+      masterApiKey: "sk-master",
+      publicProxyApiKeys: ["sk-public"],
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+      fetchImpl: async (url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        forwarded.push({ path: new URL(String(url)).pathname, body });
+        return Response.json({
+          id: "msg-1",
+          model: body.model,
+          content: [{ type: "text", text: "ok" }],
+          usage: { input_tokens: 1, output_tokens: 1 }
+        });
+      }
+    });
+
+    const chat = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: { authorization: "Bearer sk-public" },
+      payload: { model: "claude-sonnet-4-6", messages: [{ role: "user", content: "hi" }], max_tokens: 8 }
+    });
+    expect(chat.statusCode).toBe(200);
+    expect(forwarded[0]).toMatchObject({
+      path: "/v1/messages",
+      body: { model: "claude.sonnet-4.6" }
+    });
+
+    const messages = await app.inject({
+      method: "POST",
+      url: "/v1/messages",
+      headers: { authorization: "Bearer sk-public" },
+      payload: { model: "claude-opus-4-8", messages: [{ role: "user", content: "hi" }], max_tokens: 8 }
+    });
+    expect(messages.statusCode).toBe(200);
+    expect(forwarded[1]).toMatchObject({
+      path: "/v1/messages",
+      body: { model: "claude.opus-4.8" }
+    });
+  });
+
   it("allows public Anthropic messages only for Claude models", async () => {
     const forwarded: Record<string, unknown>[] = [];
     const app = createApp({

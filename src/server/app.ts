@@ -5,7 +5,12 @@ import { buildProviderAuthHeaders, isClientAuthorized } from "../protocols/auth.
 import type { FetchLike, ProviderResult } from "../protocols/http.js";
 import { ProviderHttpClient } from "../protocols/http.js";
 import { buildImageGenerationPayload, createImageGeneration } from "../protocols/image.js";
-import { forwardModelRequest, LOCAL_MODEL_IDS, PUBLIC_PROXY_MODEL_IDS } from "../protocols/model-proxy.js";
+import {
+  forwardModelRequest,
+  LOCAL_MODEL_IDS,
+  normalizePublicProxyModelId,
+  PUBLIC_PROXY_MODEL_IDS
+} from "../protocols/model-proxy.js";
 import { registerAccount } from "../protocols/register.js";
 import { uploadAsset } from "../protocols/upload.js";
 import type { VipBalanceClient } from "../protocols/vip-client.js";
@@ -165,6 +170,11 @@ function publicModelCatalog() {
 
 function readBodyModel(body: Record<string, unknown>): string | undefined {
   return typeof body.model === "string" && body.model.trim() ? body.model.trim() : undefined;
+}
+
+function normalizePublicProxyBody(body: Record<string, unknown>): Record<string, unknown> {
+  const model = normalizePublicProxyModelId(readBodyModel(body));
+  return model && model !== body.model ? { ...body, model } : body;
 }
 
 function isPublicChatModelAllowed(model: string | undefined): boolean {
@@ -630,7 +640,10 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     if (!requirePublicProxyAuth(request, reply)) {
       return;
     }
-    if (isPublicProxyOnly(request) && !isPublicChatModelAllowed(readBodyModel(bodyRecord(request)))) {
+    const body = isPublicProxyOnly(request)
+      ? normalizePublicProxyBody(bodyRecord(request))
+      : bodyRecord(request);
+    if (isPublicProxyOnly(request) && !isPublicChatModelAllowed(readBodyModel(body))) {
       await sendModelNotAllowed(reply, "Only public Claude and Codex models are allowed on this endpoint");
       return;
     }
@@ -641,7 +654,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     const result = await forwardModelRequest(client, {
       method: "POST",
       path: "/v1/chat/completions",
-      body: bodyRecord(request),
+      body,
       headers: auth.headers
     });
     await depleteProviderAccountIfNeeded(auth.account.uid, result);
@@ -652,7 +665,10 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     if (!requirePublicProxyAuth(request, reply)) {
       return;
     }
-    if (isPublicProxyOnly(request) && !isPublicMessagesModelAllowed(readBodyModel(bodyRecord(request)))) {
+    const body = isPublicProxyOnly(request)
+      ? normalizePublicProxyBody(bodyRecord(request))
+      : bodyRecord(request);
+    if (isPublicProxyOnly(request) && !isPublicMessagesModelAllowed(readBodyModel(body))) {
       await sendModelNotAllowed(reply, "Only public Claude models are allowed on this endpoint");
       return;
     }
@@ -663,7 +679,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     const result = await forwardModelRequest(client, {
       method: "POST",
       path: "/v1/messages",
-      body: bodyRecord(request),
+      body,
       headers: auth.headers
     });
     await depleteProviderAccountIfNeeded(auth.account.uid, result);

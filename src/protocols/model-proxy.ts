@@ -75,6 +75,29 @@ export const PUBLIC_PROXY_MODEL_IDS = [
   "gpt-image-2"
 ];
 
+const PUBLIC_PROXY_MODEL_ID_SET = new Set(PUBLIC_PROXY_MODEL_IDS);
+
+const PUBLIC_PROXY_MODEL_ALIASES: Record<string, string> = {
+  "claude-opus-4-8": "claude.opus-4.8",
+  "claude-opus-4.8": "claude.opus-4.8",
+  "opus-4-8": "claude.opus-4.8",
+  "opus-4.8": "claude.opus-4.8",
+  "ospu-4-8": "claude.opus-4.8",
+  "ospu-4.8": "claude.opus-4.8",
+  "claude-sonnet-4-6": "claude.sonnet-4.6",
+  "claude-sonnet-4.6": "claude.sonnet-4.6",
+  "sonnet-4-6": "claude.sonnet-4.6",
+  "sonnet-4.6": "claude.sonnet-4.6",
+  "claude-sonnet-4-5": "claude.sonnet-4.5",
+  "claude-sonnet-4.5": "claude.sonnet-4.5",
+  "sonnet-4-5": "claude.sonnet-4.5",
+  "sonnet-4.5": "claude.sonnet-4.5",
+  "claude-haiku-4-5": "claude.haiku-4.5",
+  "claude-haiku-4.5": "claude.haiku-4.5",
+  "haiku-4-5": "claude.haiku-4.5",
+  "haiku-4.5": "claude.haiku-4.5"
+};
+
 export const LOCAL_MODEL_IDS = [
   ...CLAUDE_MODEL_IDS,
   ...Object.keys(OPENAI_FAMILY_MODELS),
@@ -83,6 +106,34 @@ export const LOCAL_MODEL_IDS = [
   "navos/doubao-seedance-2-0-260128",
   "doubao-seedance-2-0-260128"
 ];
+
+export function normalizePublicProxyModelId(model: string | undefined): string | undefined {
+  const raw = model?.trim();
+  if (!raw) {
+    return undefined;
+  }
+  if (PUBLIC_PROXY_MODEL_ID_SET.has(raw)) {
+    return raw;
+  }
+
+  const name = raw.split("/").at(-1)?.trim() ?? raw;
+  if (PUBLIC_PROXY_MODEL_ID_SET.has(name)) {
+    return name;
+  }
+
+  const lowerName = name.toLowerCase();
+  const alias = PUBLIC_PROXY_MODEL_ALIASES[lowerName];
+  if (alias) {
+    return alias;
+  }
+
+  const normalizedClaude = normalizeClaudeModel(lowerName);
+  if (PUBLIC_PROXY_MODEL_ID_SET.has(normalizedClaude)) {
+    return normalizedClaude;
+  }
+
+  return resolvePublicClaudeFamilyAlias(lowerName) ?? raw;
+}
 
 export async function forwardModelRequest<T = unknown>(
   client: ProviderHttpClient,
@@ -207,6 +258,22 @@ function normalizeClaudeModel(model: string): string {
     }
   }
   return model;
+}
+
+function resolvePublicClaudeFamilyAlias(model: string): string | undefined {
+  if (!model.includes("claude")) {
+    return undefined;
+  }
+  if (/(^|[-._/])opus([-._/]|$)/.test(model) || /(^|[-._/])ospu([-._/]|$)/.test(model)) {
+    return "claude.opus-4.8";
+  }
+  if (/(^|[-._/])sonnet([-._/]|$)/.test(model)) {
+    return "claude.sonnet-4.6";
+  }
+  if (/(^|[-._/])haiku([-._/]|$)/.test(model)) {
+    return "claude.haiku-4.5";
+  }
+  return undefined;
 }
 
 function resolveOpenAiModel(model: string): string | undefined {
