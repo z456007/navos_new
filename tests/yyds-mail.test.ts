@@ -87,6 +87,22 @@ describe("YydsMailClient", () => {
     });
   });
 
+  it("classifies successful mailbox responses missing address as mailbox_create_failed failureKind", async () => {
+    const client = new YydsMailClient({
+      baseUrl: "https://mail.test/v1",
+      apiKey: "ac-test",
+      fetchImpl: async () => Response.json({
+        success: true,
+        data: { id: "m1", token: "mail-token", domain: "healthy.test" }
+      })
+    });
+
+    await expect(client.createMailbox()).rejects.toMatchObject({
+      status: 502,
+      failureKind: "mailbox_create_failed"
+    });
+  });
+
   it("classifies message failures with message_poll_failed failureKind", async () => {
     const client = new YydsMailClient({
       baseUrl: "https://mail.test/v1",
@@ -133,6 +149,35 @@ describe("YydsMailClient", () => {
     await expect(client.createMailbox({ domain: "healthy.test" })).rejects.toMatchObject({
       status: 500,
       failureKind: "mailbox_create_failed"
+    });
+  });
+
+  it("does not classify rate-limit text in non-error JSON fields as rate_limited failureKind", async () => {
+    const client = new YydsMailClient({
+      baseUrl: "https://mail.test/v1",
+      apiKey: "ac-test",
+      fetchImpl: async () => Response.json(
+        { success: false, error: "provider failed", errorCode: "provider_failed", domain: "rate-limit.test" },
+        { status: 500 }
+      )
+    });
+
+    await expect(client.createMailbox()).rejects.toMatchObject({
+      status: 500,
+      failureKind: "mailbox_create_failed"
+    });
+  });
+
+  it("classifies raw non-JSON rate limit text as rate_limited failureKind", async () => {
+    const client = new YydsMailClient({
+      baseUrl: "https://mail.test/v1",
+      apiKey: "ac-test",
+      fetchImpl: async () => new Response("Too many account creation requests", { status: 500 })
+    });
+
+    await expect(client.createMailbox()).rejects.toMatchObject({
+      status: 500,
+      failureKind: "rate_limited"
     });
   });
 

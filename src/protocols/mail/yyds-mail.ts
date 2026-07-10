@@ -98,7 +98,12 @@ export class YydsMailClient {
     });
 
     if (typeof data.address !== "string" || !data.address) {
-      throw new YydsMailError("YYDS Mail response did not include mailbox address", 502, data);
+      throw new YydsMailError(
+        "YYDS Mail response did not include mailbox address",
+        502,
+        data,
+        "mailbox_create_failed"
+      );
     }
 
     return {
@@ -280,13 +285,14 @@ function classifyYydsFailure(
   const message = [record.error, record.message]
     .filter((item): item is string => typeof item === "string")
     .join(" ");
-  const classifierText = [errorCode, code, type, message]
+  const structuredClassifierText = [errorCode, code, type, message]
     .filter((item) => item.length > 0)
     .join(" ");
+  const classifierText = structuredClassifierText || raw;
   if (status === 429 && errorCode === "quota_exhausted") {
     return "quota_exhausted";
   }
-  if (status === 429 || /too many account creation requests|rate.?limit/i.test(`${classifierText} ${raw}`)) {
+  if (status === 429 || /too many account creation requests|rate.?limit/i.test(classifierText)) {
     return "rate_limited";
   }
   if (isDomainRejected(classifierText)) {
