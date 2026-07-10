@@ -66,6 +66,8 @@ export async function processRegistrationJob(
     if (data.mode === "fill" || data.mode === "create") {
       return await processBulkRegistration(jobId, data, progress, registrationService, options);
     }
+
+    throw new Error("unsupported registration job mode");
   } finally {
     await clearCancelRequestBestEffort(jobId, options);
   }
@@ -145,11 +147,16 @@ async function processBulkRegistration(
     await progress.update(started, completed, failed, planned, "warn", `${data.mode} registration canceled`);
     return {
       canceled: true,
-      ...bulkRequestFields(data),
-      started,
-      completed,
-      failed,
-      results
+      ...createBulkRegistrationJobResult(
+        data,
+        stats.activeCount,
+        planned,
+        started,
+        completed,
+        failed,
+        skipped,
+        results
+      )
     };
   }
 
@@ -158,11 +165,16 @@ async function processBulkRegistration(
       await progress.update(started, completed, failed, planned, "warn", `${data.mode} registration canceled`);
       return {
         canceled: true,
-        ...bulkRequestFields(data),
-        started,
-        completed,
-        failed,
-        results
+        ...createBulkRegistrationJobResult(
+          data,
+          stats.activeCount,
+          planned,
+          started,
+          completed,
+          failed,
+          skipped,
+          results
+        )
       };
     }
 

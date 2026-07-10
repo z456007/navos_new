@@ -434,10 +434,15 @@ describe("processRegistrationJob", () => {
     await vi.waitFor(() => expect(registrationService.registerOne).toHaveBeenCalledTimes(2));
     await expect(secondProcessing).resolves.toEqual({
       canceled: true,
+      mode: "fill",
       target: 2,
+      concurrency: 2,
+      activeBefore: 0,
+      planned: 2,
       started: 0,
       completed: 0,
       failed: 0,
+      skipped: 0,
       results: []
     });
 
@@ -732,10 +737,15 @@ describe("processRegistrationJob", () => {
       processRegistrationJob(job, registrationService, { isCancelRequested, clearCancelRequest })
     ).resolves.toEqual({
       canceled: true,
+      mode: "fill",
       target: 4,
+      concurrency: 2,
+      activeBefore: 1,
+      planned: 3,
       started: 0,
       completed: 0,
       failed: 0,
+      skipped: 0,
       results: []
     });
 
@@ -771,10 +781,15 @@ describe("processRegistrationJob", () => {
       processRegistrationJob(job, registrationService, { isCancelRequested, clearCancelRequest })
     ).resolves.toEqual({
       canceled: true,
+      mode: "fill",
       target: 2,
+      concurrency: 1,
+      activeBefore: 0,
+      planned: 2,
       started: 0,
       completed: 0,
       failed: 0,
+      skipped: 0,
       results: []
     });
 
@@ -802,10 +817,15 @@ describe("processRegistrationJob", () => {
       processRegistrationJob(job, registrationService, { isCancelRequested, clearCancelRequest })
     ).resolves.toEqual({
       canceled: true,
+      mode: "fill",
       target: 3,
+      concurrency: 2,
+      activeBefore: 0,
+      planned: 3,
       started: 2,
       completed: 1,
       failed: 1,
+      skipped: 0,
       results: partialResults
     });
 
@@ -822,6 +842,59 @@ describe("processRegistrationJob", () => {
       level: "warn",
       message: expect.stringContaining("canceled")
     });
+  });
+
+  it("cancels create after stats before the first batch without registering", async () => {
+    const registrationService = makeRegistrationService({
+      getStats: vi.fn(async () => stats({ activeCount: 5 }))
+    });
+    const isCancelRequested = vi.fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    const clearCancelRequest = vi.fn(async () => undefined);
+    const job = makeJob({ mode: "create", count: 4, concurrency: 3 });
+
+    await expect(
+      processRegistrationJob(job, registrationService, { isCancelRequested, clearCancelRequest })
+    ).resolves.toEqual({
+      canceled: true,
+      mode: "create",
+      count: 4,
+      concurrency: 3,
+      activeBefore: 5,
+      planned: 4,
+      started: 0,
+      completed: 0,
+      failed: 0,
+      skipped: 0,
+      results: []
+    });
+
+    expect(isCancelRequested).toHaveBeenCalledTimes(2);
+    expect(clearCancelRequest).toHaveBeenCalledWith("job-1");
+    expect(registrationService.getStats).toHaveBeenCalledTimes(1);
+    expect(registrationService.registerOne).not.toHaveBeenCalled();
+    expect(lastProgress(job)).toMatchObject({
+      started: 0,
+      completed: 0,
+      failed: 0,
+      total: 4
+    });
+  });
+
+  it("rejects unsupported registration job modes", async () => {
+    const registrationService = makeRegistrationService();
+    const clearCancelRequest = vi.fn(async () => undefined);
+    const job = makeJob({ mode: "unknown" } as unknown as RegistrationJobPayload);
+
+    await expect(
+      processRegistrationJob(job, registrationService, { clearCancelRequest })
+    ).rejects.toThrow("unsupported registration job mode");
+
+    expect(clearCancelRequest).toHaveBeenCalledWith("job-1");
+    expect(registrationService.getStats).not.toHaveBeenCalled();
+    expect(registrationService.registerOne).not.toHaveBeenCalled();
+    expect(job.updateProgress).not.toHaveBeenCalled();
   });
 });
 
