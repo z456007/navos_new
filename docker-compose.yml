@@ -1,0 +1,78 @@
+services:
+  navos:
+    build:
+      context: .
+    container_name: navos-new
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PORT: "18888"
+      MYSQL_HOST: navos-mysql
+      MYSQL_PORT: "3306"
+      REDIS_URL: redis://navos-redis:6379
+      PROVIDER_AUTH_MODE: ${PROVIDER_AUTH_MODE:-uid-token}
+      QUEUE_PREFIX: ${QUEUE_PREFIX:-navos}
+    ports:
+      - "127.0.0.1:${NAVOS_BIND_PORT:-18888}:18888"
+    networks:
+      navos-internal:
+      sub2api-net:
+        aliases:
+          - navos-new
+    depends_on:
+      navos-mysql:
+        condition: service_healthy
+      navos-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:18888/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  navos-mysql:
+    image: mysql:8.0
+    container_name: navos-mysql
+    restart: unless-stopped
+    command: >
+      --default-authentication-plugin=mysql_native_password
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-navos_new}
+    volumes:
+      - ./mysql_data:/var/lib/mysql
+    networks:
+      - navos-internal
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  navos-redis:
+    image: redis:8-alpine
+    container_name: navos-redis
+    restart: unless-stopped
+    volumes:
+      - ./redis_data:/data
+    networks:
+      - navos-internal
+    command: redis-server --save 60 1 --appendonly yes --appendfsync everysec
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+networks:
+  navos-internal:
+    driver: bridge
+  sub2api-net:
+    external: true
+    name: sub2api-deploy_sub2api-network

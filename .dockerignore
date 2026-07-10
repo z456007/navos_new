@@ -1,0 +1,15 @@
+.git
+.claude
+node_modules
+dist
+dist-admin
+coverage
+.env
+.env.*
+*.log
+npm-debug.log*
+Dockerfile
+docker-compose.yml
+docs
+tests
+web
