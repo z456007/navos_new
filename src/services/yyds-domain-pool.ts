@@ -2,6 +2,7 @@ import {
   normalizeDomain,
   type YydsDomainHealthRecord,
   type YydsDomainHealthStatus,
+  type YydsDomainPoolConfig,
   type YydsDomainPoolStore
 } from "../store/yyds-domain-pool-store.js";
 
@@ -57,7 +58,7 @@ export class YydsDomainPool {
   }
 
   async refresh(): Promise<{ eligible: Array<{ domain: string }> }> {
-    const config = await this.store.getConfig();
+    const config = normalizeConfig(await this.store.getConfig());
     if (!config.enabled) {
       return { eligible: [] };
     }
@@ -79,7 +80,7 @@ export class YydsDomainPool {
   }
 
   async listCandidates(): Promise<YydsDomainCandidate[]> {
-    const config = await this.store.getConfig();
+    const config = normalizeConfig(await this.store.getConfig());
     if (!config.enabled) {
       return [];
     }
@@ -138,17 +139,18 @@ export class YydsDomainPool {
     const now = this.now();
     const record = await this.getOrCreateHealth(domain, now);
     const verificationTimeoutCount = record.verificationTimeoutCount + (kind === "verification_timeout" ? 1 : 0);
-    const cooldown = kind === "verification_timeout" && verificationTimeoutCount >= 2;
+    const disabled = record.status === "disabled";
+    const cooldown = !disabled && kind === "verification_timeout" && verificationTimeoutCount >= 2;
 
     await this.store.saveHealth({
       ...record,
-      status: cooldown ? "cooldown" : record.status,
+      status: disabled ? "disabled" : cooldown ? "cooldown" : record.status,
       failureCount: record.failureCount + 1,
       verificationTimeoutCount,
       mailboxRateLimitCount: record.mailboxRateLimitCount + (kind === "rate_limited" ? 1 : 0),
       quotaExhaustedCount: record.quotaExhaustedCount + (kind === "quota_exhausted" ? 1 : 0),
       lastFailureAt: now,
-      cooldownUntil: cooldown ? now + COOLDOWN_MS : record.cooldownUntil,
+      cooldownUntil: disabled ? record.cooldownUntil : cooldown ? now + COOLDOWN_MS : record.cooldownUntil,
       weight: Math.max(1, record.weight - 10),
       lastCheckedAt: now,
       lastError: error
@@ -209,6 +211,14 @@ function defaultHealth(domain: string, now: number, weight: number): YydsDomainH
     cooldownUntil: 0,
     weight,
     lastCheckedAt: now
+  };
+}
+
+function normalizeConfig(config: YydsDomainPoolConfig): YydsDomainPoolConfig {
+  return {
+    ...config,
+    whitelist: config.whitelist.map(normalizeDomain).filter(Boolean),
+    blacklist: config.blacklist.map(normalizeDomain).filter(Boolean)
   };
 }
 

@@ -116,4 +116,82 @@ describe("YydsDomainPool", () => {
     expect(disabled?.status).toBe("disabled");
     expect((await pool.pickDomain())?.domain).toBe("normal.test");
   });
+
+  it("keeps disabled domains disabled after verification timeout failures and cooldown expiry", async () => {
+    let now = 1000;
+    const store = new InMemoryYydsDomainPoolStore();
+    await store.saveConfig({
+      enabled: true,
+      mode: "auto-plus-whitelist",
+      whitelist: ["disabled.test"],
+      blacklist: [],
+      refreshIntervalMinutes: 30
+    });
+    await store.saveHealth({
+      domain: "disabled.test",
+      status: "disabled",
+      successCount: 0,
+      failureCount: 0,
+      verificationTimeoutCount: 0,
+      mailboxRateLimitCount: 0,
+      quotaExhaustedCount: 0,
+      lastSuccessAt: 0,
+      lastFailureAt: 0,
+      cooldownUntil: 0,
+      weight: 200,
+      lastCheckedAt: 1000
+    });
+    const pool = new YydsDomainPool({
+      store,
+      fetchDomains: vi.fn(async () => [domain("normal.test")]),
+      now: () => now
+    });
+
+    await pool.refresh();
+    await pool.recordFailure("disabled.test", "verification_timeout", "verification code not received");
+    await pool.recordFailure("disabled.test", "verification_timeout", "verification code not received");
+    now += 10 * 60 * 1000 + 1;
+
+    const disabled = (await pool.listCandidates()).find((item) => item.domain === "disabled.test");
+    expect(disabled?.status).toBe("disabled");
+    expect((await pool.pickDomain())?.domain).toBe("normal.test");
+  });
+
+  it("normalizes whitelist and blacklist in the service layer", async () => {
+    const health = new Map<string, Awaited<ReturnType<InMemoryYydsDomainPoolStore["listHealth"]>>[number]>();
+    const store = {
+      async getConfig() {
+        return {
+          enabled: true,
+          mode: "auto-plus-whitelist" as const,
+          whitelist: [" Boost.Test "],
+          blacklist: [" BLOCKED.TEST "],
+          refreshIntervalMinutes: 30
+        };
+      },
+      async saveConfig() {},
+      async listHealth() {
+        return Array.from(health.values());
+      },
+      async getHealth(domainName: string) {
+        return health.get(domainName);
+      },
+      async saveHealth(record: Awaited<ReturnType<InMemoryYydsDomainPoolStore["listHealth"]>>[number]) {
+        health.set(record.domain, record);
+      }
+    };
+    const pool = new YydsDomainPool({
+      store,
+      fetchDomains: vi.fn(async () => [domain("boost.test"), domain("blocked.test")]),
+      now: () => 1000
+    });
+
+    await pool.refresh();
+
+    const candidates = await pool.listCandidates();
+    expect(candidates.find((item) => item.domain === "blocked.test")).toBeUndefined();
+    const boostCandidates = candidates.filter((item) => item.domain === "boost.test");
+    expect(boostCandidates).toHaveLength(1);
+    expect(boostCandidates[0]?.weight).toBe(110);
+  });
 });
