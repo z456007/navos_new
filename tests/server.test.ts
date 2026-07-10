@@ -1,3 +1,5 @@
+import { once } from "node:events";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { AccountService } from "../src/services/account-service.js";
 import {
@@ -9,6 +11,39 @@ import { InMemoryAccountStore } from "../src/store/account-store.js";
 import { InMemoryCosConfigStore } from "../src/store/cos-config-store.js";
 import { InMemoryYydsMailConfigStore } from "../src/store/yyds-mail-config-store.js";
 import { InMemoryVideoTaskStore } from "../src/store/video-task-store.js";
+
+async function startFakeUpstream(
+  handler: (request: IncomingMessage, response: ServerResponse) => void | Promise<void>
+): Promise<{ baseUrl: string; close: () => Promise<void> }> {
+  const server = createServer((request, response) => {
+    void Promise.resolve(handler(request, response)).catch((error) => {
+      response.statusCode = 500;
+      response.end(error instanceof Error ? error.message : "fake upstream failed");
+    });
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("fake upstream did not bind to a TCP port");
+  }
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    close: () => new Promise((resolve, reject) => {
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    })
+  };
+}
+
+function uidFromAuthorization(authorization: string | undefined): string {
+  return (authorization ?? "").replace(/^Bearer\s+/i, "").split(":")[0] ?? "";
+}
 
 describe("server routes", () => {
   it("does not serve the built-in admin page from the backend", async () => {
@@ -1656,6 +1691,73 @@ describe("server routes", () => {
     await vi.waitFor(async () => {
       expect((await store.get("u1"))?.status).toBe("depleted");
     });
+  });
+
+  it("rotates to the next model account after a fake upstream streamed insufficient balance error", async () => {
+    const upstreamUids: string[] = [];
+    const fakeUpstream = await startFakeUpstream((request, response) => {
+      request.resume();
+      const uid = uidFromAuthorization(request.headers.authorization);
+      upstreamUids.push(uid);
+      response.setHeader("content-type", "text/event-stream");
+      if (uid === "u1") {
+        response.end('event: error\ndata: {"error":{"message":"insufficient_balance: u1 empty"}}\n\n');
+        return;
+      }
+      response.end([
+        'data: {"choices":[{"delta":{"content":"OK"},"index":0}]}',
+        "data: [DONE]",
+        ""
+      ].join("\n\n"));
+    });
+    try {
+      const store = new InMemoryAccountStore();
+      const accountService = new AccountService(store);
+      await accountService.importAccount({ uid: "u1", token: "t1", balanceRemaining: 1000, balanceTotal: 1000 });
+      await accountService.importAccount({ uid: "u2", token: "t2", balanceRemaining: 1000, balanceTotal: 1000 });
+      const app = createApp({
+        masterApiKey: "sk-test",
+        providerBaseUrl: fakeUpstream.baseUrl,
+        providerAuthMode: "uid-token",
+        accountService
+      });
+
+      const first = await app.inject({
+        method: "POST",
+        url: "/v1/chat/completions",
+        headers: { authorization: "Bearer sk-test" },
+        payload: {
+          model: "gpt-5.5",
+          stream: true,
+          messages: [{ role: "user", content: "hello" }]
+        }
+      });
+
+      expect(first.statusCode).toBe(200);
+      expect(first.body).toContain("insufficient_balance");
+      await vi.waitFor(async () => {
+        expect((await store.get("u1"))?.status).toBe("depleted");
+      });
+
+      const second = await app.inject({
+        method: "POST",
+        url: "/v1/chat/completions",
+        headers: { authorization: "Bearer sk-test" },
+        payload: {
+          model: "gpt-5.5",
+          stream: true,
+          messages: [{ role: "user", content: "hello again" }]
+        }
+      });
+
+      expect(second.statusCode).toBe(200);
+      expect(second.body).toContain("OK");
+      expect(upstreamUids).toEqual(["u1", "u2"]);
+      expect((await store.get("u1"))?.status).toBe("depleted");
+      expect((await store.get("u2"))?.status).toBe("active");
+    } finally {
+      await fakeUpstream.close();
+    }
   });
 
   it("does not deplete successful model accounts when assistant text mentions insufficient_balance", async () => {
