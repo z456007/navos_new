@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
+import { Transform } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import type { AccountIdentity, HeaderBag, ProviderAuthMode } from "../protocols/auth.js";
 import { buildProviderAuthHeaders, isClientAuthorized } from "../protocols/auth.js";
@@ -84,6 +86,13 @@ interface ProviderAuthContext {
   headers: Record<string, string>;
 }
 
+type ProviderFailureKind = "quota" | "temporary" | "invalid";
+
+interface ProviderFailureDecision {
+  kind: ProviderFailureKind;
+  text: string;
+}
+
 const CORS_ALLOW_METHODS = "GET,POST,PUT,PATCH,DELETE,OPTIONS";
 const CORS_DEFAULT_ALLOW_HEADERS = "authorization,content-type,x-api-key";
 const CORS_MAX_AGE_SECONDS = "86400";
@@ -162,32 +171,216 @@ function providerResultIndicatesQuotaExhausted(result: ProviderResult): boolean 
   if (result.status === 402) {
     return true;
   }
-  const bodyText = typeof result.body === "string"
-    ? result.body
-    : JSON.stringify(result.body);
-  return /insufficient_balance|积分不足|余额不足/.test(bodyText);
+  return providerFailureDecisionFromText(providerResultErrorText(result))?.kind === "quota";
 }
 
 function providerResultIndicatesTemporaryFailure(result: ProviderResult): boolean {
-  const bodyText = providerResultBodyText(result);
-  if (result.status === 403 && /access|permission|forbidden|model|not available/i.test(bodyText)) {
+  const errorText = providerResultErrorText(result);
+  if (result.status === 403 && /access|permission|forbidden|model|not available/i.test(errorText)) {
     return true;
   }
   if ([408, 409, 425, 429].includes(result.status) || result.status >= 500) {
     return true;
   }
-  return /temporar|rate.?limit|too many|timeout|timed out|overload|upstream/i.test(bodyText);
+  return providerFailureDecisionFromText(errorText)?.kind === "temporary";
 }
 
 function providerResultIndicatesInvalidAccount(result: ProviderResult): boolean {
-  const bodyText = providerResultBodyText(result);
+  const errorText = providerResultErrorText(result);
   if (result.status === 403) {
-    return /banned|disabled|invalid.*token|credential/i.test(bodyText);
+    return /banned|disabled|invalid.*token|credential/i.test(errorText);
   }
-  if (result.status !== 401) {
-    return false;
+  if (result.status === 401) {
+    return true;
   }
-  return /invalid|unauthorized|token|credential|account|banned|disabled/i.test(bodyText);
+  return providerFailureDecisionFromText(errorText)?.kind === "invalid";
+}
+
+function providerResultErrorText(result: ProviderResult): string {
+  if (result.status >= 400) {
+    return providerResultBodyText(result);
+  }
+  return providerStructuredErrorText(result.body) ?? "";
+}
+
+function providerStructuredErrorText(value: unknown, forceErrorContext: boolean = false): string | undefined {
+  if (typeof value === "string") {
+    return forceErrorContext ? value : undefined;
+  }
+  if (!isPlainRecordValue(value)) {
+    return undefined;
+  }
+
+  const parts: string[] = [];
+  const explicitError = value.error;
+  if (typeof explicitError === "string") {
+    parts.push(explicitError);
+  } else if (isPlainRecordValue(explicitError)) {
+    parts.push(...errorRecordTextParts(explicitError));
+  }
+
+  const code = readProviderErrorNumber(value.code)
+    ?? readProviderErrorNumber(value.status)
+    ?? readProviderErrorNumber(value.status_code);
+  const type = readProviderErrorString(value.type);
+  const hasErrorContext = forceErrorContext
+    || parts.length > 0
+    || Boolean(type && /error|failed|failure/i.test(type))
+    || (code !== undefined && code !== 0 && code !== 200);
+
+  if (hasErrorContext) {
+    parts.push(...errorRecordTextParts(value));
+    if (isPlainRecordValue(value.data)) {
+      const nested = providerStructuredErrorText(value.data, true);
+      if (nested) {
+        parts.push(nested);
+      }
+    }
+  }
+
+  const uniqueParts = [...new Set(parts.map((part) => part.trim()).filter(Boolean))];
+  return uniqueParts.length > 0 ? uniqueParts.join(" ") : undefined;
+}
+
+function errorRecordTextParts(record: Record<string, unknown>): string[] {
+  const parts: string[] = [];
+  for (const key of ["message", "msg", "error_message", "type", "code", "error_code", "status", "status_code", "reason"]) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      parts.push(value);
+    } else if (typeof value === "number" && Number.isFinite(value)) {
+      parts.push(String(value));
+    }
+  }
+  return parts;
+}
+
+function readProviderErrorString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readProviderErrorNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function isPlainRecordValue(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function providerFailureDecisionFromText(text: string | undefined): ProviderFailureDecision | undefined {
+  if (!text) {
+    return undefined;
+  }
+  if (/insufficient_balance|积分不足|余额不足/i.test(text)) {
+    return { kind: "quota", text };
+  }
+  if (/banned|disabled|invalid.*token|credential|unauthorized|authentication/i.test(text)) {
+    return { kind: "invalid", text };
+  }
+  if (/temporar|rate.?limit|too many|timeout|timed out|overload|upstream|access|permission|forbidden|model|not available/i.test(text)) {
+    return { kind: "temporary", text };
+  }
+  return undefined;
+}
+
+function isNodeReadable(value: unknown): value is NodeJS.ReadableStream {
+  return Boolean(value) && typeof value === "object" && typeof (value as NodeJS.ReadableStream).pipe === "function";
+}
+
+function createProviderFailureDetectionStream(
+  onFailure: (decision: ProviderFailureDecision) => Promise<void>
+): Transform {
+  const decoder = new StringDecoder("utf8");
+  let buffer = "";
+  let detected = false;
+
+  function inspectText(text: string): ProviderFailureDecision | undefined {
+    if (!text || detected) {
+      return undefined;
+    }
+    buffer += text;
+    const events = buffer.split(/\r?\n\r?\n/);
+    buffer = events.pop() ?? "";
+    if (buffer.length > 64 * 1024) {
+      buffer = buffer.slice(-64 * 1024);
+    }
+    return firstProviderFailureDecisionFromSseEvents(events);
+  }
+
+  function completeDetection(decision: ProviderFailureDecision | undefined, done: (error?: Error | null) => void): boolean {
+    if (!decision || detected) {
+      return false;
+    }
+    detected = true;
+    Promise.resolve(onFailure(decision)).then(
+      () => done(),
+      (error: unknown) => done(error instanceof Error ? error : new Error(String(error)))
+    );
+    return true;
+  }
+
+  return new Transform({
+    transform(chunk, encoding, callback) {
+      const text = typeof chunk === "string"
+        ? decoder.write(Buffer.from(chunk, encoding as BufferEncoding))
+        : decoder.write(Buffer.from(chunk as Uint8Array));
+      const decision = inspectText(text);
+      if (decision && !detected) {
+        detected = true;
+        Promise.resolve(onFailure(decision)).then(
+          () => {
+            this.push(chunk);
+            callback();
+          },
+          (error: unknown) => callback(error instanceof Error ? error : new Error(String(error)))
+        );
+        return;
+      }
+      this.push(chunk);
+      callback();
+    },
+    flush(callback) {
+      const decision = inspectText(decoder.end()) ?? firstProviderFailureDecisionFromSseEvents(buffer.trim() ? [buffer] : []);
+      if (completeDetection(decision, callback)) {
+        return;
+      }
+      callback();
+    }
+  });
+}
+
+function firstProviderFailureDecisionFromSseEvents(events: string[] | string): ProviderFailureDecision | undefined {
+  const list = typeof events === "string" ? [events] : events;
+  for (const event of list) {
+    const decision = providerFailureDecisionFromSseEvent(event);
+    if (decision) {
+      return decision;
+    }
+  }
+  return undefined;
+}
+
+function providerFailureDecisionFromSseEvent(event: string): ProviderFailureDecision | undefined {
+  const lines = event.split(/\r?\n/);
+  const eventName = lines
+    .map((line) => /^event:\s*(.+)$/i.exec(line)?.[1]?.trim().toLowerCase())
+    .find(Boolean);
+  const data = lines
+    .map((line) => /^data:\s?(.*)$/i.exec(line)?.[1])
+    .filter((line): line is string => line !== undefined)
+    .join("\n")
+    .trim();
+
+  if (!data || data === "[DONE]") {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(data) as unknown;
+    return providerFailureDecisionFromText(providerStructuredErrorText(parsed, eventName === "error"));
+  } catch {
+    return eventName === "error" ? providerFailureDecisionFromText(data) : undefined;
+  }
 }
 
 function providerExceptionResult(error: unknown): ProviderResult {
@@ -352,6 +545,31 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     }
   }
 
+  async function applyStreamedProviderFailure(uid: string, decision: ProviderFailureDecision): Promise<void> {
+    if (decision.kind === "quota") {
+      await accountService.depleteAccount(uid);
+      return;
+    }
+    if (decision.kind === "invalid") {
+      await accountService.disableAccount(uid);
+      return;
+    }
+    await accountService.cooldownAccount(uid, MODEL_PROXY_RETRY_COOLDOWN_SECONDS);
+  }
+
+  function wrapStreamingProviderResultForAccount(uid: string, result: ProviderResult): ProviderResult {
+    const contentType = result.headers.get("content-type") ?? "";
+    if (!contentType.includes("text/event-stream") || !isNodeReadable(result.body)) {
+      return result;
+    }
+    return {
+      ...result,
+      body: result.body.pipe(createProviderFailureDetectionStream((decision) =>
+        applyStreamedProviderFailure(uid, decision)
+      ))
+    };
+  }
+
   async function registerProviderAccountIfPossible(): Promise<boolean> {
     if (providerRegistrationAttempt) {
       return providerRegistrationAttempt;
@@ -426,12 +644,12 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
         break;
       }
 
-      const result = await forwardModelRequest(client, {
+      const result = wrapStreamingProviderResultForAccount(auth.account.uid, await forwardModelRequest(client, {
         method: "POST",
         path,
         body,
         headers: auth.headers
-      }).catch(providerExceptionResult);
+      }).catch(providerExceptionResult));
       lastResult = result;
 
       if (providerResultIndicatesQuotaExhausted(result)) {

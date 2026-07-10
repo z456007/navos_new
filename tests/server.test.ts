@@ -1619,6 +1619,80 @@ describe("server routes", () => {
     expect((await store.get("u2"))?.status).toBe("active");
   });
 
+  it("depletes a model account when a streamed provider error reports insufficient balance", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    await accountService.importAccount({ uid: "u1", token: "t1", balanceRemaining: 1000, balanceTotal: 1000 });
+    const encoder = new TextEncoder();
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      fetchImpl: async () => new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode('event: error\ndata: {"error":{"message":"insufficient_balance"}}\n\n'));
+            controller.close();
+          }
+        }),
+        { status: 200, headers: { "content-type": "text/event-stream" } }
+      )
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: { authorization: "Bearer sk-test" },
+      payload: {
+        model: "gpt-5.5",
+        stream: true,
+        messages: [{ role: "user", content: "hello" }]
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain("insufficient_balance");
+    await vi.waitFor(async () => {
+      expect((await store.get("u1"))?.status).toBe("depleted");
+    });
+  });
+
+  it("does not deplete successful model accounts when assistant text mentions insufficient_balance", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    await accountService.importAccount({ uid: "u1", token: "t1", balanceRemaining: 1000, balanceTotal: 1000 });
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      fetchImpl: async () => Response.json({
+        id: "chatcmpl_1",
+        object: "chat.completion",
+        choices: [{
+          message: { role: "assistant", content: "The literal word insufficient_balance is documentation text." },
+          finish_reason: "stop"
+        }]
+      })
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: { authorization: "Bearer sk-test" },
+      payload: {
+        model: "gpt-5.5",
+        messages: [{ role: "user", content: "explain this error token" }]
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const account = await store.get("u1");
+    expect(account?.status).toBe("active");
+    expect(account?.balanceRemaining).toBe(1000);
+  });
+
   it("auto-registers a model account when the pool has no available account", async () => {
     const store = new InMemoryAccountStore();
     const accountService = new AccountService(store);
