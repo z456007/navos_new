@@ -35,7 +35,11 @@ import {
 } from "../protocols/video.js";
 import { YydsMailClient, YydsMailError } from "../protocols/mail/yyds-mail.js";
 import { AccountService, IMAGE_ACCOUNT_COST } from "../services/account-service.js";
-import { YydsMailConfigService, type YydsMailConfigInput } from "../services/yyds-mail-config-service.js";
+import {
+  YydsMailConfigDecryptError,
+  YydsMailConfigService,
+  type YydsMailConfigInput
+} from "../services/yyds-mail-config-service.js";
 import { SecretBox } from "../security/secretbox.js";
 import { InMemoryAccountStore, type AccountRecord } from "../store/account-store.js";
 import { InMemoryImageTaskStore, type ImageTaskRecord, type ImageTaskStore } from "../store/image-task-store.js";
@@ -832,7 +836,16 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
   }
 
   async function yydsClient(reply: FastifyReply): Promise<YydsMailClient | undefined> {
-    const apiKey = await yydsMailConfigService.enabledApiKey();
+    let apiKey: string | undefined;
+    try {
+      apiKey = await yydsMailConfigService.enabledApiKey();
+    } catch (error) {
+      if (error instanceof YydsMailConfigDecryptError) {
+        await reply.status(503).send({ error: { message: error.message, type: "mail_unavailable" } });
+        return undefined;
+      }
+      throw error;
+    }
     if (!apiKey) {
       await reply.status(503).send({ error: { message: "YYDS Mail API key is not configured", type: "mail_unavailable" } });
       return undefined;

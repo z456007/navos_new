@@ -14,6 +14,15 @@ export interface YydsMailConfigDto {
   updatedAt: number;
 }
 
+const DECRYPT_ERROR_MESSAGE = "YYDS Mail API key cannot be decrypted; re-save YYDS Mail config with the current server secret";
+
+export class YydsMailConfigDecryptError extends Error {
+  constructor(cause?: unknown) {
+    super(DECRYPT_ERROR_MESSAGE, { cause });
+    this.name = "YydsMailConfigDecryptError";
+  }
+}
+
 export class YydsMailConfigService {
   constructor(
     private readonly store: YydsMailConfigStore,
@@ -43,9 +52,17 @@ export class YydsMailConfigService {
   async enabledApiKey(): Promise<string | undefined> {
     const raw = await this.store.getRaw();
     if (raw) {
-      return raw.enabled ? this.box.decrypt(raw.apiKeyEnc) : undefined;
+      return raw.enabled ? this.decryptApiKey(raw.apiKeyEnc) : undefined;
     }
     return undefined;
+  }
+
+  private decryptApiKey(apiKeyEnc: string): string {
+    try {
+      return this.box.decrypt(apiKeyEnc);
+    } catch (error) {
+      throw new YydsMailConfigDecryptError(error);
+    }
   }
 }
 

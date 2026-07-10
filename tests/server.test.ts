@@ -9,6 +9,7 @@ import {
 import { createApp } from "../src/server/app.js";
 import { InMemoryAccountStore } from "../src/store/account-store.js";
 import { InMemoryYydsMailConfigStore } from "../src/store/yyds-mail-config-store.js";
+import { SecretBox } from "../src/security/secretbox.js";
 import { InMemoryVideoTaskStore } from "../src/store/video-task-store.js";
 
 async function startFakeUpstream(
@@ -684,6 +685,38 @@ describe("server routes", () => {
 
     expect(mailbox.statusCode).toBe(200);
     expect(mailbox.json()).toMatchObject({ address: "navos-db@mail.test" });
+  });
+
+  it("returns a repair hint when YYDS Mail config is encrypted with a stale secret", async () => {
+    const yydsMailConfigStore = new InMemoryYydsMailConfigStore();
+    const staleBox = new SecretBox("stale-config-secret-123456789012345678", "navos:yyds_mail_config:v1");
+    await yydsMailConfigStore.saveRaw({
+      enabled: true,
+      apiKeyEnc: staleBox.encrypt("ac-stale-key")
+    });
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+      yydsMailConfigStore,
+      yydsMailConfigSecret: "current-config-secret-123456789012345",
+      fetchImpl: async () => Response.json({ ok: true })
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/mail/yyds/accounts",
+      headers: { authorization: "Bearer sk-test" }
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({
+      error: {
+        type: "mail_unavailable",
+        message: expect.stringContaining("YYDS Mail API key cannot be decrypted; re-save YYDS Mail config")
+      }
+    });
   });
 
   it("imports and lists accounts through protected account routes", async () => {
