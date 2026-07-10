@@ -49,7 +49,11 @@ export async function processRegistrationJob(
       return await processSingleRegistration(progress, registrationService);
     }
 
-    return await processFillRegistration(jobId, data, progress, registrationService, options);
+    if (data.mode === "fill") {
+      return await processFillRegistration(jobId, data, progress, registrationService, options);
+    }
+
+    throw new Error("create registration jobs are not supported by the worker yet");
   } finally {
     await clearCancelRequestBestEffort(jobId, options);
   }

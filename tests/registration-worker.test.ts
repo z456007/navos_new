@@ -537,6 +537,23 @@ describe("processRegistrationJob", () => {
     expect(registrationService.registerOne).not.toHaveBeenCalled();
   });
 
+  it("rejects create jobs before worker support without entering fill processing", async () => {
+    const registrationService = makeRegistrationService({
+      getStats: vi.fn(async () => stats({ activeCount: 0 }))
+    });
+    const clearCancelRequest = vi.fn(async () => undefined);
+    const job = makeJob({ mode: "create", count: 2, concurrency: 1 });
+
+    await expect(
+      processRegistrationJob(job, registrationService, { clearCancelRequest })
+    ).rejects.toThrow("create registration jobs are not supported by the worker yet");
+
+    expect(clearCancelRequest).toHaveBeenCalledWith("job-1");
+    expect(registrationService.getStats).not.toHaveBeenCalled();
+    expect(registrationService.registerOne).not.toHaveBeenCalled();
+    expect(job.updateProgress).not.toHaveBeenCalled();
+  });
+
   it("reduces fill attempts by the current active account count", async () => {
     const registrationService = makeRegistrationService({
       getStats: vi.fn(async () => stats({ activeCount: 3 })),
