@@ -163,17 +163,28 @@ export class YydsDomainPool {
   }
 
   private async ensureHealth(domain: string, now: number, weight: number): Promise<YydsDomainHealthRecord> {
-    const existing = await this.store.getHealth(domain);
+    const normalized = normalizeDomain(domain);
+    const existing = await this.findHealthByNormalizedDomain(normalized);
     const record = existing
       ? { ...existing, weight: Math.max(existing.weight, weight), lastCheckedAt: now }
-      : defaultHealth(domain, now, weight);
+      : defaultHealth(normalized, now, weight);
     await this.store.saveHealth(record);
     return record;
   }
 
   private async getOrCreateHealth(domain: string, now: number): Promise<YydsDomainHealthRecord> {
     const normalized = normalizeDomain(domain);
-    return (await this.store.getHealth(normalized)) ?? defaultHealth(normalized, now, DEFAULT_WEIGHT);
+    return (await this.findHealthByNormalizedDomain(normalized)) ?? defaultHealth(normalized, now, DEFAULT_WEIGHT);
+  }
+
+  private async findHealthByNormalizedDomain(normalized: string): Promise<YydsDomainHealthRecord | undefined> {
+    const exact = await this.store.getHealth(normalized);
+    if (exact) {
+      return { ...exact, domain: normalized };
+    }
+
+    const fallback = (await this.store.listHealth()).find((record) => normalizeDomain(record.domain) === normalized);
+    return fallback ? { ...fallback, domain: normalized } : undefined;
   }
 
   private async normalizeCooldown(record: YydsDomainHealthRecord): Promise<YydsDomainHealthRecord> {

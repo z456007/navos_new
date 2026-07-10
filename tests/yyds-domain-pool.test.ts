@@ -244,4 +244,88 @@ describe("YydsDomainPool", () => {
     expect(disabled?.status).toBe("disabled");
     expect((await pool.pickDomain())?.domain).toBe("normal.test");
   });
+
+  it("uses normalized lookup for persisted disabled health mutations", async () => {
+    function createExactKeyStore() {
+      const persistedHealth: Awaited<ReturnType<InMemoryYydsDomainPoolStore["listHealth"]>>[number] = {
+        domain: " Disabled.Test ",
+        status: "disabled",
+        successCount: 0,
+        failureCount: 0,
+        verificationTimeoutCount: 0,
+        mailboxRateLimitCount: 0,
+        quotaExhaustedCount: 0,
+        lastSuccessAt: 0,
+        lastFailureAt: 0,
+        cooldownUntil: 0,
+        weight: 200,
+        lastCheckedAt: 1000
+      };
+      const health = new Map([[persistedHealth.domain, persistedHealth]]);
+      return {
+        store: {
+          async getConfig() {
+            return {
+              enabled: true,
+              mode: "auto-plus-whitelist" as const,
+              whitelist: ["disabled.test"],
+              blacklist: [],
+              refreshIntervalMinutes: 30
+            };
+          },
+          async saveConfig() {},
+          async listHealth() {
+            return Array.from(health.values());
+          },
+          async getHealth(domainName: string) {
+            return health.get(domainName);
+          },
+          async saveHealth(record: Awaited<ReturnType<InMemoryYydsDomainPoolStore["listHealth"]>>[number]) {
+            health.set(record.domain, record);
+          }
+        },
+        health
+      };
+    }
+    const assertDisabledOnly = async (pool: YydsDomainPool) => {
+      const candidates = await pool.listCandidates();
+      const disabledCandidates = candidates.filter((item) => item.domain === "disabled.test");
+      expect(disabledCandidates).toHaveLength(1);
+      expect(disabledCandidates[0]?.status).toBe("disabled");
+      expect((await pool.pickDomain())?.domain).toBe("normal.test");
+    };
+
+    const successCase = createExactKeyStore();
+    const successPool = new YydsDomainPool({
+      store: successCase.store,
+      fetchDomains: vi.fn(async () => [domain("normal.test")]),
+      now: () => 1000
+    });
+    await successPool.refresh();
+    await successPool.recordSuccess("disabled.test");
+    await assertDisabledOnly(successPool);
+    expect(successCase.health.has("disabled.test")).toBe(true);
+
+    let now = 1000;
+    const failureCase = createExactKeyStore();
+    const failurePool = new YydsDomainPool({
+      store: failureCase.store,
+      fetchDomains: vi.fn(async () => [domain("normal.test")]),
+      now: () => now
+    });
+    await failurePool.refresh();
+    await failurePool.recordFailure("disabled.test", "verification_timeout", "verification code not received");
+    await failurePool.recordFailure("disabled.test", "verification_timeout", "verification code not received");
+    now += 10 * 60 * 1000 + 1;
+    await assertDisabledOnly(failurePool);
+
+    const refreshCase = createExactKeyStore();
+    const refreshPool = new YydsDomainPool({
+      store: refreshCase.store,
+      fetchDomains: vi.fn(async () => [domain("disabled.test"), domain("normal.test")]),
+      now: () => 1000
+    });
+    await refreshPool.refresh();
+    await assertDisabledOnly(refreshPool);
+  });
 });
