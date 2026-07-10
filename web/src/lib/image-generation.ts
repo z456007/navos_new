@@ -9,10 +9,6 @@ export interface ImageGenerationForm {
 
 export interface ImageResult {
   url: string;
-  cosUrl?: string;
-  archiveStatus?: string;
-  archiveError?: string;
-  sizeBytes?: number;
 }
 
 export function buildImageGenerationRequest(form: ImageGenerationForm): Record<string, unknown> {
@@ -47,18 +43,6 @@ export function parseImageGenerationResults(response: unknown): ImageResult[] {
         result.url = record.url;
       } else {
         return undefined;
-      }
-      if (typeof record.cosUrl === "string" && record.cosUrl) {
-        result.cosUrl = record.cosUrl;
-      }
-      if (typeof record.archiveStatus === "string" && record.archiveStatus) {
-        result.archiveStatus = record.archiveStatus;
-      }
-      if (typeof record.archiveError === "string" && record.archiveError) {
-        result.archiveError = record.archiveError;
-      }
-      if (typeof record.sizeBytes === "number" && Number.isFinite(record.sizeBytes)) {
-        result.sizeBytes = record.sizeBytes;
       }
       return result;
     })

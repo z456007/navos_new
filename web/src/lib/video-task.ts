@@ -62,10 +62,6 @@ export function normalizeVideoTask(raw: unknown, fallbackId?: string): VideoTask
     id: readVideoString(raw, ["id", "task_id", "taskId"]) ?? fallbackId,
     status,
     videoUrl: readVideoString(raw, ["videoUrl", "video_url", "url", "output_url"]),
-    cosUrl: readVideoString(raw, ["cosUrl", "cos_url"]),
-    cosKey: readVideoString(raw, ["cosKey", "cos_key"]),
-    archiveStatus: readVideoString(raw, ["archiveStatus", "archive_status"]),
-    archiveError: readVideoString(raw, ["archiveError", "archive_error"]),
     sizeBytes: readVideoNumber(raw, ["sizeBytes", "size_bytes"]),
     sha256: readVideoString(raw, ["sha256"]),
     error: status === "failed" ? readVideoString(raw, ["error", "error_message", "message"]) : undefined,
@@ -80,19 +76,6 @@ export function readVideoNumber(value: unknown, keys: string[]): number | undefi
   }
   const numeric = Number(found);
   return Number.isFinite(numeric) ? numeric : undefined;
-}
-
-export function archiveTone(status: string | undefined): "ok" | "wait" | "bad" | "muted" {
-  if (status === "archived") {
-    return "ok";
-  }
-  if (status === "failed") {
-    return "bad";
-  }
-  if (status === "archiving" || status === "pending") {
-    return "wait";
-  }
-  return "muted";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

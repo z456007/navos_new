@@ -2,10 +2,6 @@ import { ProviderHttpClient, type ProviderResult } from "./http.js";
 
 export interface ImageGenerationResult {
   url: string;
-  cosUrl?: string;
-  cosKey?: string;
-  archiveStatus?: string;
-  archiveError?: string;
   sizeBytes?: number;
   sha256?: string;
 }
@@ -69,14 +65,6 @@ export function imageResponseToResults(response: unknown): ImageGenerationResult
       } else {
         return undefined;
       }
-      copyString(record, result, "cosUrl", "cosUrl");
-      copyString(record, result, "cos_url", "cosUrl");
-      copyString(record, result, "cosKey", "cosKey");
-      copyString(record, result, "cos_key", "cosKey");
-      copyString(record, result, "archiveStatus", "archiveStatus");
-      copyString(record, result, "archive_status", "archiveStatus");
-      copyString(record, result, "archiveError", "archiveError");
-      copyString(record, result, "archive_error", "archiveError");
       copyNumber(record, result, "sizeBytes", "sizeBytes");
       copyNumber(record, result, "size_bytes", "sizeBytes");
       copyString(record, result, "sha256", "sha256");

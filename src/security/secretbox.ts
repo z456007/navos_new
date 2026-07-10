@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from "node:crypto";
 
-const DEFAULT_PURPOSE = "navos:cos_config:v1";
+const DEFAULT_PURPOSE = "navos:secretbox:v1";
 
 export class SecretBox {
   private readonly key: Buffer;

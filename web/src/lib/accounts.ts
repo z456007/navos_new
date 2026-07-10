@@ -23,9 +23,6 @@ export function panelTitle(panel: PanelId): string {
   if (panel === "video") {
     return "视频生成";
   }
-  if (panel === "cos") {
-    return "COS配置";
-  }
   if (panel === "probe") {
     return "代理测试";
   }

@@ -8,7 +8,6 @@ import {
 } from "../src/services/registration-job-service.js";
 import { createApp } from "../src/server/app.js";
 import { InMemoryAccountStore } from "../src/store/account-store.js";
-import { InMemoryCosConfigStore } from "../src/store/cos-config-store.js";
 import { InMemoryYydsMailConfigStore } from "../src/store/yyds-mail-config-store.js";
 import { InMemoryVideoTaskStore } from "../src/store/video-task-store.js";
 
@@ -983,14 +982,7 @@ describe("server routes", () => {
     ]);
   });
 
-  it("archives successful image outputs to COS when COS is enabled", async () => {
-    const cosConfigStore = new InMemoryCosConfigStore();
-    const archiveImage = vi.fn(async () => ({
-      cosUrl: "https://cdn.example.com/navos/images/2026/07/09/img_task_1_1.png",
-      cosKey: "navos/images/2026/07/09/img_task_1_1.png",
-      sizeBytes: 4321,
-      sha256: "image-hash-1"
-    }));
+  it("returns successful image outputs without COS archive metadata", async () => {
     const store = new InMemoryAccountStore();
     await store.upsert({ uid: "u1", token: "t1", balanceRemaining: 200, balanceTotal: 200 });
     const app = createApp({
@@ -998,9 +990,6 @@ describe("server routes", () => {
       providerBaseUrl: "https://upstream.test",
       providerAuthMode: "uid-token",
       accountService: new AccountService(store),
-      cosConfigStore,
-      cosConfigSecret: "12345678901234567890123456789012",
-      archiveImage,
       fetchImpl: async (url, init) => {
         const path = new URL(String(url)).pathname;
         if (path === "/api/tasks/navos-gpt-image-t2i") {
@@ -1010,22 +999,6 @@ describe("server routes", () => {
           return Response.json({ code: 200, data: { status: "succeeded", url: "https://oss.test/img_task_1.png" } });
         }
         return Response.json({ error: { message: `unexpected path ${path} ${init?.method ?? "GET"}` } }, { status: 404 });
-      }
-    });
-
-    await app.inject({
-      method: "PUT",
-      url: "/api/cos/config",
-      headers: { authorization: "Bearer sk-test" },
-      payload: {
-        name: "main",
-        secretId: "secret-id",
-        secretKey: "secret-key",
-        bucket: "bucket-123456",
-        region: "ap-shanghai",
-        publicDomain: "https://cdn.example.com",
-        uploadPrefix: "navos/videos",
-        enabled: true
       }
     });
 
@@ -1040,19 +1013,13 @@ describe("server routes", () => {
     expect(response.json()).toMatchObject({
       status: "succeeded",
       data: [{
-        url: "https://oss.test/img_task_1.png",
-        cosUrl: "https://cdn.example.com/navos/images/2026/07/09/img_task_1_1.png",
-        archiveStatus: "archived",
-        sizeBytes: 4321,
-        sha256: "image-hash-1"
+        url: "https://oss.test/img_task_1.png"
       }]
     });
-    expect(archiveImage).toHaveBeenCalledWith({
-      taskId: "img_task_1",
-      index: 1,
-      sourceUrl: "https://oss.test/img_task_1.png",
-      config: expect.objectContaining({ bucket: "bucket-123456", uploadPrefix: "navos/videos" })
-    });
+    expect(response.json().data[0]).not.toHaveProperty("cosUrl");
+    expect(response.json().data[0]).not.toHaveProperty("cosKey");
+    expect(response.json().data[0]).not.toHaveProperty("archiveStatus");
+    expect(response.json().data[0]).not.toHaveProperty("archiveError");
   });
 
   it("returns the nested image task error instead of the upstream success envelope", async () => {
@@ -1993,114 +1960,44 @@ describe("server routes", () => {
     expect(account?.rateLimitedUntil).toBe(0);
   });
 
-  it("stores COS config encrypted and never returns secrets", async () => {
-    const cosConfigStore = new InMemoryCosConfigStore();
+  it("does not expose COS config routes", async () => {
     const app = createApp({
       masterApiKey: "sk-test",
       providerBaseUrl: "https://upstream.test",
       providerAuthMode: "uid-token",
       accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
-      cosConfigStore,
-      cosConfigSecret: "12345678901234567890123456789012",
       fetchImpl: async () => Response.json({ ok: true })
     });
 
+    const read = await app.inject({
+      method: "GET",
+      url: "/api/cos/config",
+      headers: { authorization: "Bearer sk-test" }
+    });
     const saved = await app.inject({
       method: "PUT",
       url: "/api/cos/config",
       headers: { authorization: "Bearer sk-test" },
-      payload: {
-        name: "main",
-        secretId: "secret-id",
-        secretKey: "secret-key",
-        bucket: "bucket-123456",
-        region: "ap-shanghai",
-        publicDomain: "https://cdn.example.com",
-        uploadPrefix: "navos/videos",
-        enabled: true
-      }
+      payload: { enabled: true }
     });
 
-    expect(saved.statusCode).toBe(200);
-    expect(saved.json()).toMatchObject({
-      name: "main",
-      bucket: "bucket-123456",
-      region: "ap-shanghai",
-      publicDomain: "https://cdn.example.com",
-      uploadPrefix: "navos/videos",
-      secretIdConfigured: true,
-      secretKeyConfigured: true
-    });
-    expect(JSON.stringify(saved.json())).not.toContain("secret-id");
-    expect(JSON.stringify(saved.json())).not.toContain("secret-key");
-
-    const raw = await cosConfigStore.getRaw();
-    const originalSecretIdEnc = raw?.secretIdEnc;
-    const originalSecretKeyEnc = raw?.secretKeyEnc;
-    expect(originalSecretIdEnc).toBeTruthy();
-    expect(originalSecretKeyEnc).toBeTruthy();
-    expect(originalSecretIdEnc).not.toContain("secret-id");
-    expect(originalSecretKeyEnc).not.toContain("secret-key");
-
-    const updated = await app.inject({
-      method: "PUT",
-      url: "/api/cos/config",
-      headers: { authorization: "Bearer sk-test" },
-      payload: {
-        name: "main",
-        secretId: "",
-        secretKey: "",
-        bucket: "bucket-123456",
-        region: "ap-guangzhou",
-        uploadPrefix: "navos/videos",
-        enabled: true
-      }
-    });
-
-    expect(updated.statusCode).toBe(200);
-    expect((await cosConfigStore.getRaw())?.secretIdEnc).toBe(originalSecretIdEnc);
-    expect((await cosConfigStore.getRaw())?.secretKeyEnc).toBe(originalSecretKeyEnc);
+    expect(read.statusCode).toBe(404);
+    expect(saved.statusCode).toBe(404);
   });
 
-  it("archives successful video output to COS and returns archived URL", async () => {
-    const cosConfigStore = new InMemoryCosConfigStore();
+  it("returns successful video output without COS archive metadata", async () => {
     const videoTaskStore = new InMemoryVideoTaskStore();
-    const archiveVideo = vi.fn(async () => ({
-      cosUrl: "https://cdn.example.com/navos/videos/2026/07/08/task_1.mp4",
-      cosKey: "navos/videos/2026/07/08/task_1.mp4",
-      sizeBytes: 1234,
-      sha256: "hash-1"
-    }));
     const app = createApp({
       masterApiKey: "sk-test",
       providerBaseUrl: "https://upstream.test",
       providerAuthMode: "uid-token",
       accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
-      cosConfigStore,
-      cosConfigSecret: "12345678901234567890123456789012",
       videoTaskStore,
-      archiveVideo,
       fetchImpl: async (url) => {
         if (String(url).endsWith("/api/tasks/video/generations/task_1")) {
           return Response.json({ task_id: "task_1", status: "success", video_url: "https://oss.test/task_1.mp4" });
         }
         return Response.json({ task_id: "task_1", status: "queued" });
-      }
-    });
-
-    await app.inject({
-      method: "PUT",
-      url: "/api/cos/config",
-      headers: { authorization: "Bearer sk-test" },
-      payload: {
-        name: "main",
-        secretId: "secret-id",
-        secretKey: "secret-key",
-        bucket: "bucket-123456",
-        region: "ap-shanghai",
-        publicDomain: "https://cdn.example.com",
-        uploadPrefix: "navos/videos",
-        enabled: true
       }
     });
 
@@ -2114,16 +2011,16 @@ describe("server routes", () => {
     expect(polled.json()).toMatchObject({
       id: "task_1",
       status: "succeeded",
-      videoUrl: "https://oss.test/task_1.mp4",
-      cosUrl: "https://cdn.example.com/navos/videos/2026/07/08/task_1.mp4",
-      archiveStatus: "archived"
+      videoUrl: "https://oss.test/task_1.mp4"
     });
-    expect(archiveVideo).toHaveBeenCalledOnce();
+    expect(polled.json()).not.toHaveProperty("cosUrl");
+    expect(polled.json()).not.toHaveProperty("cosKey");
+    expect(polled.json()).not.toHaveProperty("archiveStatus");
+    expect(polled.json()).not.toHaveProperty("archiveError");
     expect(await videoTaskStore.get("task_1")).toMatchObject({
       taskId: "task_1",
       sourceUrl: "https://oss.test/task_1.mp4",
-      cosUrl: "https://cdn.example.com/navos/videos/2026/07/08/task_1.mp4",
-      archiveStatus: "archived"
+      status: "succeeded"
     });
   });
 });

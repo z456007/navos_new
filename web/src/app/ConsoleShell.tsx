@@ -4,7 +4,6 @@ import {
   Activity,
   Bot,
   Clapperboard,
-  Cloud,
   ImageIcon,
   Inbox,
   KeyRound,
@@ -17,7 +16,6 @@ import { NavButton } from "../components/nav-button";
 import { accountMetrics, panelTitle } from "../lib/accounts";
 import { AccountsPanel } from "../panels/AccountsPanel";
 import { ChatPanel } from "../panels/ChatPanel";
-import { CosConfigPanel } from "../panels/CosConfigPanel";
 import { ImagePanel } from "../panels/ImagePanel";
 import { ProbePanel } from "../panels/ProbePanel";
 import { VideoPanel } from "../panels/VideoPanel";
@@ -75,9 +73,6 @@ export function ConsoleShell({
             <NavButton active={activePanel === "yydsConfig"} icon={<KeyRound size={17} />} onClick={() => onPanelChange("yydsConfig")}>
               YYDS配置
             </NavButton>
-            <NavButton active={activePanel === "cos"} icon={<Cloud size={17} />} onClick={() => onPanelChange("cos")}>
-              COS配置
-            </NavButton>
           </nav>
         </div>
         <AntButton className="sidebar-exit" icon={<LogOut size={16} />} onClick={onSignOut}>
@@ -115,7 +110,6 @@ export function ConsoleShell({
         {activePanel === "image" && <ImagePanel apiKey={apiKey} />}
         {activePanel === "yydsConfig" && <YydsMailConfigPanel apiKey={apiKey} />}
         {activePanel === "video" && <VideoPanel apiKey={apiKey} />}
-        {activePanel === "cos" && <CosConfigPanel apiKey={apiKey} />}
         {activePanel === "probe" && (
           <ProbePanel
             apiKey={apiKey}

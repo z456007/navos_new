@@ -15,10 +15,6 @@ export interface NormalizedVideoTask {
   id?: string;
   status: NormalizedVideoStatus;
   videoUrl?: string;
-  cosUrl?: string;
-  cosKey?: string;
-  archiveStatus?: string;
-  archiveError?: string;
   sizeBytes?: number;
   sha256?: string;
   error?: string;

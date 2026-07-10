@@ -29,13 +29,9 @@ import {
 } from "../protocols/video.js";
 import { YydsMailClient, YydsMailError } from "../protocols/mail/yyds-mail.js";
 import { AccountService, IMAGE_ACCOUNT_COST } from "../services/account-service.js";
-import { CosConfigService, type CosConfigInput, type EnabledCosConfig } from "../services/cos-config-service.js";
-import { archiveImageToCos, type ArchiveImageResult } from "../services/image-archive.js";
-import { archiveVideoToCos, type ArchiveVideoResult } from "../services/video-archive.js";
 import { YydsMailConfigService, type YydsMailConfigInput } from "../services/yyds-mail-config-service.js";
 import { SecretBox } from "../security/secretbox.js";
 import { InMemoryAccountStore, type AccountRecord } from "../store/account-store.js";
-import { InMemoryCosConfigStore, type CosConfigStore } from "../store/cos-config-store.js";
 import { InMemoryYydsMailConfigStore, type YydsMailConfigStore } from "../store/yyds-mail-config-store.js";
 import { InMemoryVideoTaskStore, type VideoTaskRecord, type VideoTaskStore } from "../store/video-task-store.js";
 import type { RegistrationService } from "../services/registration-service.js";
@@ -56,11 +52,7 @@ export interface CreateAppOptions {
   yydsMailBaseUrl?: string;
   yydsMailConfigSecret?: string;
   yydsMailConfigStore?: YydsMailConfigStore;
-  cosConfigSecret?: string;
-  cosConfigStore?: CosConfigStore;
   videoTaskStore?: VideoTaskStore;
-  archiveImage?: (input: { taskId: string; index: number; sourceUrl: string; config: EnabledCosConfig }) => Promise<ArchiveImageResult>;
-  archiveVideo?: (input: { taskId: string; sourceUrl: string; config: EnabledCosConfig }) => Promise<ArchiveVideoResult>;
   fetchImpl?: FetchLike;
   vipClient?: VipBalanceClient;
   registrationService?: RegistrationService;
@@ -458,24 +450,15 @@ function normalizeSecretRoot(value: string): string {
 export function createApp(options: CreateAppOptions): FastifyInstance {
   const app = Fastify({ logger: false, bodyLimit: JSON_BODY_LIMIT_BYTES });
   const accountService = options.accountService ?? new AccountService(new InMemoryAccountStore(options.defaultAccount));
-  const cosConfigStore = options.cosConfigStore ?? new InMemoryCosConfigStore();
-  const cosConfigService = new CosConfigService(
-    cosConfigStore,
-    new SecretBox(normalizeSecretRoot(options.cosConfigSecret ?? options.masterApiKey))
-  );
   const yydsMailConfigStore = options.yydsMailConfigStore ?? new InMemoryYydsMailConfigStore();
   const yydsMailConfigService = new YydsMailConfigService(
     yydsMailConfigStore,
     new SecretBox(
-      normalizeSecretRoot(options.yydsMailConfigSecret ?? options.cosConfigSecret ?? options.masterApiKey),
+      normalizeSecretRoot(options.yydsMailConfigSecret ?? options.masterApiKey),
       "navos:yyds_mail_config:v1"
     )
   );
   const videoTaskStore = options.videoTaskStore ?? new InMemoryVideoTaskStore();
-  const archiveImage = options.archiveImage ?? ((input: { taskId: string; index: number; sourceUrl: string; config: EnabledCosConfig }) =>
-    archiveImageToCos({ ...input, fetchImpl: options.fetchImpl }));
-  const archiveVideo = options.archiveVideo ?? ((input: { taskId: string; sourceUrl: string; config: EnabledCosConfig }) =>
-    archiveVideoToCos({ ...input, fetchImpl: options.fetchImpl }));
   const client = new ProviderHttpClient(options.providerBaseUrl, options.fetchImpl);
   let providerRegistrationAttempt: Promise<boolean> | undefined;
 
@@ -857,152 +840,6 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     });
   }
 
-  async function archiveVideoTask(task: NormalizedVideoTask): Promise<NormalizedVideoTask> {
-    if (!task.id) {
-      return task;
-    }
-
-    let record = await saveVideoTask(task);
-    if (task.status !== "succeeded" || !task.videoUrl || !record) {
-      return decorateVideoTask(task, record);
-    }
-
-    if (record.archiveStatus === "archived" && record.cosUrl) {
-      return decorateVideoTask(task, record);
-    }
-
-    const config = await cosConfigService.enabledConfig();
-    if (!config) {
-      record = await videoTaskStore.upsert({
-        taskId: task.id,
-        status: task.status,
-        sourceUrl: task.videoUrl,
-        raw: task.raw,
-        archiveStatus: "skipped",
-        archiveError: "COS config is not enabled",
-        completedAt: Date.now()
-      });
-      return decorateVideoTask(task, record);
-    }
-
-    await videoTaskStore.upsert({
-      taskId: task.id,
-      status: task.status,
-      sourceUrl: task.videoUrl,
-      raw: task.raw,
-      archiveStatus: "archiving",
-      completedAt: Date.now()
-    });
-
-    try {
-      const archived = await archiveVideo({ taskId: task.id, sourceUrl: task.videoUrl, config });
-      record = await videoTaskStore.upsert({
-        taskId: task.id,
-        status: task.status,
-        sourceUrl: task.videoUrl,
-        raw: task.raw,
-        archiveStatus: "archived",
-        archiveError: undefined,
-        cosUrl: archived.cosUrl,
-        cosKey: archived.cosKey,
-        sizeBytes: archived.sizeBytes,
-        sha256: archived.sha256,
-        completedAt: Date.now(),
-        archivedAt: Date.now()
-      });
-    } catch (error) {
-      record = await videoTaskStore.upsert({
-        taskId: task.id,
-        status: task.status,
-        sourceUrl: task.videoUrl,
-        raw: task.raw,
-        archiveStatus: "failed",
-        archiveError: error instanceof Error ? error.message : "COS archive failed",
-        completedAt: Date.now()
-      });
-    }
-
-    return decorateVideoTask(task, record);
-  }
-
-  function decorateVideoTask(task: NormalizedVideoTask, record?: VideoTaskRecord): NormalizedVideoTask {
-    if (!record) {
-      return task;
-    }
-    return {
-      ...task,
-      cosUrl: record.cosUrl,
-      cosKey: record.cosKey,
-      archiveStatus: record.archiveStatus,
-      archiveError: record.archiveError,
-      sizeBytes: record.sizeBytes,
-      sha256: record.sha256
-    };
-  }
-
-  async function archiveImageGenerationBody(body: unknown): Promise<unknown> {
-    if (!isPlainRecord(body) || !Array.isArray(body.data)) {
-      return body;
-    }
-    const taskId = typeof body.task_id === "string"
-      ? body.task_id
-      : typeof body.id === "string"
-        ? body.id
-        : "image";
-    const config = await cosConfigService.enabledConfig();
-    if (!config) {
-      return {
-        ...body,
-        data: body.data.map((item) => isPlainRecord(item)
-          ? { ...item, archiveStatus: "skipped", archiveError: "COS config is not enabled" }
-          : item)
-      };
-    }
-
-    const data = await Promise.all(body.data.map(async (item, index) => {
-      if (!isPlainRecord(item)) {
-        return item;
-      }
-      const sourceUrl = imageOutputSource(item);
-      if (!sourceUrl) {
-        return item;
-      }
-      try {
-        const archived = await archiveImage({ taskId, index: index + 1, sourceUrl, config });
-        return {
-          ...item,
-          cosUrl: archived.cosUrl,
-          cosKey: archived.cosKey,
-          archiveStatus: "archived",
-          archiveError: undefined,
-          sizeBytes: archived.sizeBytes,
-          sha256: archived.sha256
-        };
-      } catch (error) {
-        return {
-          ...item,
-          archiveStatus: "failed",
-          archiveError: error instanceof Error ? error.message : "COS archive failed"
-        };
-      }
-    }));
-    return { ...body, data };
-  }
-
-  function imageOutputSource(item: Record<string, unknown>): string | undefined {
-    if (typeof item.url === "string" && item.url) {
-      return item.url;
-    }
-    if (typeof item.b64_json === "string" && item.b64_json) {
-      return `data:image/png;base64,${item.b64_json}`;
-    }
-    return undefined;
-  }
-
-  function isPlainRecord(value: unknown): value is Record<string, unknown> {
-    return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-  }
-
   app.get("/health", async () => ({ ok: true }));
 
   app.get("/v1/models", async (request, reply) => {
@@ -1144,24 +981,6 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
           type: "balance_refresh_failed"
         }
       });
-    }
-  });
-
-  app.get("/api/cos/config", async (request, reply) => {
-    if (!requireLocalAuth(request, reply)) {
-      return;
-    }
-    await reply.send(await cosConfigService.get() ?? { configured: false });
-  });
-
-  app.put("/api/cos/config", async (request, reply) => {
-    if (!requireLocalAuth(request, reply)) {
-      return;
-    }
-    try {
-      await reply.send(await cosConfigService.save(bodyRecord(request) as CosConfigInput));
-    } catch (error) {
-      await sendBadRequest(reply, error);
     }
   });
 
@@ -1393,8 +1212,10 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       return;
     }
     const result = await getVideoTask(client, params.taskId, headers);
-    const body = await archiveVideoTask(result.body);
-    await sendProviderResult(reply, { ...result, body });
+    if (result.body.id) {
+      await saveVideoTask(result.body, existingTask?.accountUid);
+    }
+    await sendProviderResult(reply, result);
   }
 
   async function handleImageGeneration(request: FastifyRequest, reply: FastifyReply): Promise<void> {
@@ -1421,9 +1242,8 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       const result = await createImageGeneration(client, payload, headers);
       lastResult = result;
       if (result.status === 200) {
-        const body = await archiveImageGenerationBody(result.body);
         await accountService.consumeImageAccount(account.uid, leaseId, IMAGE_ACCOUNT_COST);
-        await sendProviderResult(reply, { ...result, body });
+        await sendProviderResult(reply, result);
         return;
       }
       if (providerResultIndicatesQuotaExhausted(result)) {

@@ -1,24 +1,15 @@
 import mysql, { type Pool, type RowDataPacket } from "mysql2/promise";
 import type { MysqlConfig } from "./mysql-account-store.js";
 
-export type VideoArchiveStatus = "pending" | "archiving" | "archived" | "failed" | "skipped";
-
 export interface VideoTaskRecord {
   taskId: string;
   accountUid?: string;
   status: string;
   sourceUrl?: string;
-  cosUrl?: string;
-  cosKey?: string;
-  archiveStatus: VideoArchiveStatus;
-  archiveError?: string;
-  sizeBytes?: number;
-  sha256?: string;
   raw?: unknown;
   createdAt: number;
   updatedAt: number;
   completedAt?: number;
-  archivedAt?: number;
 }
 
 export interface SaveVideoTaskInput {
@@ -26,15 +17,8 @@ export interface SaveVideoTaskInput {
   accountUid?: string;
   status: string;
   sourceUrl?: string;
-  cosUrl?: string;
-  cosKey?: string;
-  archiveStatus?: VideoArchiveStatus;
-  archiveError?: string;
-  sizeBytes?: number;
-  sha256?: string;
   raw?: unknown;
   completedAt?: number;
-  archivedAt?: number;
 }
 
 export interface VideoTaskStore {
@@ -48,17 +32,10 @@ interface VideoTaskRow extends RowDataPacket {
   account_uid: string | null;
   status: string;
   source_url: string | null;
-  cos_url: string | null;
-  cos_key: string | null;
-  archive_status: VideoArchiveStatus;
-  archive_error: string | null;
-  size_bytes: number | null;
-  sha256: string | null;
   raw_json: unknown;
   created_at: number;
   updated_at: number;
   completed_at: number | null;
-  archived_at: number | null;
 }
 
 export class InMemoryVideoTaskStore implements VideoTaskStore {
@@ -77,17 +54,10 @@ export class InMemoryVideoTaskStore implements VideoTaskStore {
       accountUid: input.accountUid ?? existing?.accountUid,
       status: input.status,
       sourceUrl: input.sourceUrl ?? existing?.sourceUrl,
-      cosUrl: input.cosUrl ?? existing?.cosUrl,
-      cosKey: input.cosKey ?? existing?.cosKey,
-      archiveStatus: input.archiveStatus ?? existing?.archiveStatus ?? "pending",
-      archiveError: input.archiveError,
-      sizeBytes: input.sizeBytes ?? existing?.sizeBytes,
-      sha256: input.sha256 ?? existing?.sha256,
       raw: input.raw ?? existing?.raw,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
-      completedAt: input.completedAt ?? existing?.completedAt,
-      archivedAt: input.archivedAt ?? existing?.archivedAt
+      completedAt: input.completedAt ?? existing?.completedAt
     };
     this.tasks.set(input.taskId, next);
     return cloneRecord(next);
@@ -117,18 +87,11 @@ export class MysqlVideoTaskStore implements VideoTaskStore {
         account_uid VARCHAR(128) NULL,
         status VARCHAR(32) NOT NULL,
         source_url VARCHAR(1000) NULL,
-        cos_url VARCHAR(1000) NULL,
-        cos_key VARCHAR(600) NULL,
-        archive_status ENUM('pending', 'archiving', 'archived', 'failed', 'skipped') NOT NULL DEFAULT 'pending',
-        archive_error TEXT NULL,
-        size_bytes BIGINT NULL,
-        sha256 VARCHAR(64) NULL,
         raw_json JSON NULL,
         created_at BIGINT NOT NULL,
         updated_at BIGINT NOT NULL,
         completed_at BIGINT NULL,
-        archived_at BIGINT NULL,
-        INDEX idx_video_tasks_status (status, archive_status, updated_at)
+        INDEX idx_video_tasks_status (status, updated_at)
       )
     `);
     await this.addColumnIfMissing("account_uid", "ALTER TABLE video_tasks ADD COLUMN account_uid VARCHAR(128) NULL AFTER task_id");
@@ -159,53 +122,32 @@ export class MysqlVideoTaskStore implements VideoTaskStore {
       accountUid: input.accountUid ?? existing?.accountUid,
       status: input.status,
       sourceUrl: input.sourceUrl ?? existing?.sourceUrl,
-      cosUrl: input.cosUrl ?? existing?.cosUrl,
-      cosKey: input.cosKey ?? existing?.cosKey,
-      archiveStatus: input.archiveStatus ?? existing?.archiveStatus ?? "pending",
-      archiveError: input.archiveError,
-      sizeBytes: input.sizeBytes ?? existing?.sizeBytes,
-      sha256: input.sha256 ?? existing?.sha256,
       raw: input.raw ?? existing?.raw,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
-      completedAt: input.completedAt ?? existing?.completedAt,
-      archivedAt: input.archivedAt ?? existing?.archivedAt
+      completedAt: input.completedAt ?? existing?.completedAt
     };
     await this.pool.execute(
       `INSERT INTO video_tasks
-        (task_id, account_uid, status, source_url, cos_url, cos_key, archive_status, archive_error, size_bytes, sha256, raw_json, created_at, updated_at, completed_at, archived_at)
+        (task_id, account_uid, status, source_url, raw_json, created_at, updated_at, completed_at)
        VALUES
-        (:taskId, :accountUid, :status, :sourceUrl, :cosUrl, :cosKey, :archiveStatus, :archiveError, :sizeBytes, :sha256, CAST(:rawJson AS JSON), :createdAt, :updatedAt, :completedAt, :archivedAt)
+        (:taskId, :accountUid, :status, :sourceUrl, CAST(:rawJson AS JSON), :createdAt, :updatedAt, :completedAt)
        ON DUPLICATE KEY UPDATE
         account_uid = COALESCE(VALUES(account_uid), account_uid),
         status = VALUES(status),
         source_url = VALUES(source_url),
-        cos_url = VALUES(cos_url),
-        cos_key = VALUES(cos_key),
-        archive_status = VALUES(archive_status),
-        archive_error = VALUES(archive_error),
-        size_bytes = VALUES(size_bytes),
-        sha256 = VALUES(sha256),
         raw_json = VALUES(raw_json),
         updated_at = VALUES(updated_at),
-        completed_at = VALUES(completed_at),
-        archived_at = VALUES(archived_at)`,
+        completed_at = VALUES(completed_at)`,
       {
         taskId: next.taskId,
         accountUid: next.accountUid ?? null,
         status: next.status,
         sourceUrl: next.sourceUrl ?? null,
-        cosUrl: next.cosUrl ?? null,
-        cosKey: next.cosKey ?? null,
-        archiveStatus: next.archiveStatus,
-        archiveError: next.archiveError ?? null,
-        sizeBytes: next.sizeBytes ?? null,
-        sha256: next.sha256 ?? null,
         rawJson: JSON.stringify(next.raw ?? null),
         createdAt: next.createdAt,
         updatedAt: next.updatedAt,
-        completedAt: next.completedAt ?? null,
-        archivedAt: next.archivedAt ?? null
+        completedAt: next.completedAt ?? null
       }
     );
     return next;
@@ -222,17 +164,10 @@ function fromRow(row: VideoTaskRow): VideoTaskRecord {
     accountUid: row.account_uid ?? undefined,
     status: row.status,
     sourceUrl: row.source_url ?? undefined,
-    cosUrl: row.cos_url ?? undefined,
-    cosKey: row.cos_key ?? undefined,
-    archiveStatus: row.archive_status,
-    archiveError: row.archive_error ?? undefined,
-    sizeBytes: row.size_bytes ?? undefined,
-    sha256: row.sha256 ?? undefined,
     raw: parseVideoTaskRawJson(row.raw_json),
     createdAt: Number(row.created_at),
     updatedAt: Number(row.updated_at),
-    completedAt: row.completed_at === null ? undefined : Number(row.completed_at),
-    archivedAt: row.archived_at === null ? undefined : Number(row.archived_at)
+    completedAt: row.completed_at === null ? undefined : Number(row.completed_at)
   };
 }
 

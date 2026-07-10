@@ -11,7 +11,6 @@ import { createRegistrationWorker } from "./services/registration-worker.js";
 import { YydsMailConfigService } from "./services/yyds-mail-config-service.js";
 import { SecretBox } from "./security/secretbox.js";
 import { MysqlAccountStore } from "./store/mysql-account-store.js";
-import { MysqlCosConfigStore } from "./store/cos-config-store.js";
 import { MysqlYydsMailConfigStore } from "./store/yyds-mail-config-store.js";
 import { MysqlVideoTaskStore } from "./store/video-task-store.js";
 
@@ -24,11 +23,9 @@ function normalizeSecretRoot(value: string): string {
 const config = loadConfig();
 await MysqlAccountStore.createDatabaseIfMissing(config.mysql);
 const accountStore = new MysqlAccountStore(config.mysql);
-const cosConfigStore = new MysqlCosConfigStore(config.mysql);
 const yydsMailConfigStore = new MysqlYydsMailConfigStore(config.mysql);
 const videoTaskStore = new MysqlVideoTaskStore(config.mysql);
 await accountStore.ensureSchema();
-await cosConfigStore.ensureSchema();
 await yydsMailConfigStore.ensureSchema();
 await videoTaskStore.ensureSchema();
 
@@ -40,7 +37,7 @@ const accountService = new AccountService(accountStore);
 const yydsMailConfigService = new YydsMailConfigService(
   yydsMailConfigStore,
   new SecretBox(
-    normalizeSecretRoot(config.cosConfigSecret ?? config.masterApiKey),
+    normalizeSecretRoot(config.masterApiKey),
     "navos:yyds_mail_config:v1"
   )
 );
@@ -92,9 +89,7 @@ registrationWorker.on("error", () => {
 const app = createApp({
   ...config,
   accountService,
-  cosConfigSecret: config.cosConfigSecret,
-  cosConfigStore,
-  yydsMailConfigSecret: config.cosConfigSecret,
+  yydsMailConfigSecret: config.masterApiKey,
   yydsMailConfigStore,
   videoTaskStore,
   vipClient,

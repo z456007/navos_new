@@ -218,15 +218,15 @@ export function ImagePanel({ apiKey }: { apiKey: string }) {
             ) : images.length > 0 ? (
               <div className="image-result-grid">
                 {images.map((image, index) => (
-                  <figure className="image-result-tile" key={`${image.cosUrl ?? image.url}-${index}`}>
-                    <img alt={`生成图片 ${index + 1}`} src={image.cosUrl ?? image.url} />
+                  <figure className="image-result-tile" key={`${image.url}-${index}`}>
+                    <img alt={`生成图片 ${index + 1}`} src={image.url} />
                     <figcaption>
                       <span>#{index + 1} {image.archiveStatus ? `· ${image.archiveStatus}` : ""}</span>
                       <span className="image-result-actions">
-                        <AntButton href={image.cosUrl ?? image.url} icon={<ExternalLink size={14} />} rel="noreferrer" size="small" target="_blank">
+                        <AntButton href={image.url} icon={<ExternalLink size={14} />} rel="noreferrer" size="small" target="_blank">
                           打开
                         </AntButton>
-                        <AntButton href={image.cosUrl ?? image.url} icon={<Download size={14} />} size="small" download>
+                        <AntButton href={image.url} icon={<Download size={14} />} size="small" download>
                           下载
                         </AntButton>
                       </span>

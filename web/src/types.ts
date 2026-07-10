@@ -48,23 +48,7 @@ export interface RegistrationJobView {
   finishedAt?: number;
 }
 
-export type PanelId = "accounts" | "chat" | "image" | "probe" | "video" | "cos" | "yydsConfig";
-
-export interface CosConfig {
-  id?: number;
-  name?: string;
-  configured?: boolean;
-  enabled?: boolean;
-  secretIdConfigured?: boolean;
-  secretKeyConfigured?: boolean;
-  bucket?: string;
-  region?: string;
-  appId?: string;
-  publicDomain?: string;
-  uploadPrefix?: string;
-  createdAt?: number;
-  updatedAt?: number;
-}
+export type PanelId = "accounts" | "chat" | "image" | "probe" | "video" | "yydsConfig";
 
 export interface YydsMailConfig {
   id?: number;
@@ -81,10 +65,6 @@ export interface VideoTaskView {
   id?: string;
   status: VideoTaskStatus;
   videoUrl?: string;
-  cosUrl?: string;
-  cosKey?: string;
-  archiveStatus?: string;
-  archiveError?: string;
   sizeBytes?: number;
   sha256?: string;
   error?: string;

@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { accountMetrics, panelTitle } from "../web/src/lib/accounts";
+import { parseImageGenerationResults } from "../web/src/lib/image-generation";
 import { normalizeRegistrationJob, registrationJobIsTerminal } from "../web/src/lib/registration-job";
 import { nextPollingDelay } from "../web/src/lib/polling";
-import { archiveTone, normalizeVideoTask, videoDurationLimit } from "../web/src/lib/video-task";
+import { normalizeVideoTask, videoDurationLimit } from "../web/src/lib/video-task";
 import { buildVideoGenerationPayload } from "../web/src/lib/video-payload";
 import type { AccountListItem } from "../web/src/types";
 
@@ -82,8 +83,7 @@ describe("web helper modules", () => {
         data: {
           task_id: "task_1",
           status: "success",
-          cos_url: "https://cdn.example.com/task_1.mp4",
-          archive_status: "archived",
+          video_url: "https://cdn.example.com/task_1.mp4",
           size_bytes: "1234"
         }
       },
@@ -93,13 +93,29 @@ describe("web helper modules", () => {
     expect(task).toMatchObject({
       id: "task_1",
       status: "succeeded",
-      cosUrl: "https://cdn.example.com/task_1.mp4",
-      archiveStatus: "archived",
+      videoUrl: "https://cdn.example.com/task_1.mp4",
       sizeBytes: 1234
     });
+    expect(task).not.toHaveProperty("cosUrl");
+    expect(task).not.toHaveProperty("cosKey");
+    expect(task).not.toHaveProperty("archiveStatus");
+    expect(task).not.toHaveProperty("archiveError");
     expect(videoDurationLimit("1080P")).toBe(5);
     expect(videoDurationLimit("unknown")).toBe(10);
-    expect(archiveTone("failed")).toBe("bad");
+  });
+
+  it("parses image generation results without COS archive metadata", () => {
+    const results = parseImageGenerationResults({
+      data: [{
+        url: "https://oss.example.com/image.png",
+        cosUrl: "https://cdn.example.com/image.png",
+        archiveStatus: "archived",
+        archiveError: "old metadata",
+        sizeBytes: 123
+      }]
+    });
+
+    expect(results).toEqual([{ url: "https://oss.example.com/image.png" }]);
   });
 
   it("builds video payloads with text, image, video and audio references", () => {

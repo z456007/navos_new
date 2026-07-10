@@ -6,7 +6,6 @@ export interface AppConfig {
   providerBaseUrl: string;
   providerAuthMode: ProviderAuthMode;
   listenPort: number;
-  cosConfigSecret?: string;
   mysql: MysqlEnvConfig;
   defaultAccount?: AccountIdentity;
   vipBaseUrl: string;
@@ -112,7 +111,6 @@ export function loadConfig(env: EnvInput = process.env): AppConfig {
     providerBaseUrl: requireEnv(env, "PROVIDER_BASE_URL").replace(/\/+$/, ""),
     providerAuthMode: parseProviderAuthMode(env.PROVIDER_AUTH_MODE),
     listenPort: parsePort(env.PORT),
-    cosConfigSecret: env.COS_CONFIG_SECRET?.trim() || undefined,
     mysql: {
       host: env.MYSQL_HOST?.trim() || "127.0.0.1",
       port: parseMysqlPort(env.MYSQL_PORT),
