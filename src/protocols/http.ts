@@ -1,3 +1,5 @@
+import { Readable } from "node:stream";
+
 export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 export interface ProviderResult<T = unknown> {
@@ -55,7 +57,9 @@ export class ProviderHttpClient {
     const contentType = response.headers.get("content-type") ?? "";
     let body: unknown;
 
-    if (contentType.includes("application/json")) {
+    if (contentType.includes("text/event-stream") && response.body) {
+      body = Readable.fromWeb(response.body as unknown as Parameters<typeof Readable.fromWeb>[0]);
+    } else if (contentType.includes("application/json")) {
       body = await response.json();
     } else {
       body = await response.text();

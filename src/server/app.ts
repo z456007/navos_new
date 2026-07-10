@@ -9,6 +9,7 @@ import {
   forwardModelRequest,
   isPublicProxyChatModelAllowed,
   isPublicProxyMessagesModelAllowed,
+  isPublicProxyResponsesModelAllowed,
   LOCAL_MODEL_IDS,
   normalizePublicProxyModelId,
   PUBLIC_PROXY_MODEL_IDS
@@ -125,7 +126,28 @@ function bodyRecord(request: FastifyRequest): Record<string, unknown> {
 }
 
 async function sendProviderResult(reply: FastifyReply, result: ProviderResult): Promise<void> {
+  copyProviderResponseHeaders(reply, result.headers);
   await reply.status(result.status).send(result.body);
+}
+
+function copyProviderResponseHeaders(reply: FastifyReply, headers: Headers): void {
+  headers.forEach((value, key) => {
+    const lower = key.toLowerCase();
+    if ([
+      "connection",
+      "content-length",
+      "keep-alive",
+      "proxy-authenticate",
+      "proxy-authorization",
+      "te",
+      "trailer",
+      "transfer-encoding",
+      "upgrade"
+    ].includes(lower)) {
+      return;
+    }
+    reply.header(key, value);
+  });
 }
 
 function providerResultIndicatesQuotaExhausted(result: ProviderResult): boolean {
@@ -185,6 +207,10 @@ function isPublicChatModelAllowed(model: string | undefined): boolean {
 
 function isPublicMessagesModelAllowed(model: string | undefined): boolean {
   return isPublicProxyMessagesModelAllowed(model);
+}
+
+function isPublicResponsesModelAllowed(model: string | undefined): boolean {
+  return isPublicProxyResponsesModelAllowed(model);
 }
 
 function isPublicImageModelAllowed(model: string | undefined): boolean {
@@ -637,6 +663,31 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     const result = await forwardModelRequest(client, {
       method: "POST",
       path: "/v1/chat/completions",
+      body,
+      headers: auth.headers
+    });
+    await depleteProviderAccountIfNeeded(auth.account.uid, result);
+    await sendProviderResult(reply, result);
+  });
+
+  app.post("/v1/responses", async (request, reply) => {
+    if (!requirePublicProxyAuth(request, reply)) {
+      return;
+    }
+    const body = isPublicProxyOnly(request)
+      ? normalizePublicProxyBody(bodyRecord(request))
+      : bodyRecord(request);
+    if (isPublicProxyOnly(request) && !isPublicResponsesModelAllowed(readBodyModel(body))) {
+      await sendModelNotAllowed(reply, "Only public Codex and GPT Responses models are allowed on this endpoint");
+      return;
+    }
+    const auth = await providerAuth(reply);
+    if (!auth) {
+      return;
+    }
+    const result = await forwardModelRequest(client, {
+      method: "POST",
+      path: "/v1/responses",
       body,
       headers: auth.headers
     });

@@ -369,6 +369,108 @@ describe("server routes", () => {
     expect(forwarded).toHaveLength(2);
   });
 
+  it("proxies public native responses models and preserves upstream stream headers", async () => {
+    const forwarded: Array<{ path: string; body: Record<string, unknown> }> = [];
+    const app = createApp({
+      masterApiKey: "sk-master",
+      publicProxyApiKeys: ["sk-public"],
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+      fetchImpl: async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        forwarded.push({ path, body: JSON.parse(String(init?.body ?? "{}")) });
+        return new Response("data: {\"type\":\"response.completed\"}\n\ndata: [DONE]\n\n", {
+          status: 200,
+          headers: { "content-type": "text/event-stream", "x-request-id": "req_1" }
+        });
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/responses",
+      headers: { authorization: "Bearer sk-public" },
+      payload: { model: "codex", input: "hi", stream: true, max_output_tokens: 16 }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/event-stream");
+    expect(response.headers["x-request-id"]).toBe("req_1");
+    expect(response.body).toContain("data: [DONE]");
+    expect(forwarded[0]).toMatchObject({
+      path: "/responses",
+      body: { model: "openai.gpt-5.3-codex", input: "hi", stream: true }
+    });
+  });
+
+  it("bridges public GPT-5.5 native responses streams through chat completions", async () => {
+    const forwarded: Array<{ path: string; body: Record<string, unknown> }> = [];
+    const app = createApp({
+      masterApiKey: "sk-master",
+      publicProxyApiKeys: ["sk-public"],
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+      fetchImpl: async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        forwarded.push({ path, body: JSON.parse(String(init?.body ?? "{}")) });
+        const chunk = {
+          id: "chatcmpl_1",
+          model: "openai.gpt-5.5",
+          choices: [{ delta: { content: "OK" }, finish_reason: null }]
+        };
+        return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, {
+          status: 200,
+          headers: { "content-type": "text/event-stream" }
+        });
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/responses",
+      headers: { authorization: "Bearer sk-public" },
+      payload: { model: "gpt-5.5", input: "hi", stream: true, max_output_tokens: 16 }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/event-stream");
+    expect(response.body).toContain("\"type\":\"response.output_text.delta\"");
+    expect(response.body).toContain("\"type\":\"response.completed\"");
+    expect(response.body).toContain("data: [DONE]");
+    expect(forwarded[0]).toMatchObject({
+      path: "/chat/completions",
+      body: { model: "openai.gpt-5.5", stream: true }
+    });
+  });
+
+  it("blocks public native responses requests for non-public models", async () => {
+    const forwarded: Record<string, unknown>[] = [];
+    const app = createApp({
+      masterApiKey: "sk-master",
+      publicProxyApiKeys: ["sk-public"],
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+      fetchImpl: async (_url, init) => {
+        forwarded.push(JSON.parse(String(init?.body ?? "{}")));
+        return Response.json({ ok: true });
+      }
+    });
+
+    const blocked = await app.inject({
+      method: "POST",
+      url: "/v1/responses",
+      headers: { authorization: "Bearer sk-public" },
+      payload: { model: "gpt-5.4", input: "hi" }
+    });
+
+    expect(blocked.statusCode).toBe(400);
+    expect(blocked.json()).toMatchObject({ error: { type: "model_not_allowed" } });
+    expect(forwarded).toHaveLength(0);
+  });
+
   it("normalizes public Claude aliases before allow checks and forwarding", async () => {
     const forwarded: Array<{ path: string; body: Record<string, unknown> }> = [];
     const app = createApp({
