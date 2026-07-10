@@ -35,7 +35,16 @@ import {
 } from "../protocols/video.js";
 import { YydsMailClient, YydsMailError } from "../protocols/mail/yyds-mail.js";
 import { AccountService, IMAGE_ACCOUNT_COST } from "../services/account-service.js";
-import { YydsDomainPool, type YydsFetchedDomain } from "../services/yyds-domain-pool.js";
+import {
+  assertYydsDomainPoolConfigInput,
+  isValidYydsDomainPoolDomain,
+  normalizeYydsDomainPoolConfigInput,
+  YYDS_DOMAIN_POOL_MAX_DOMAINS,
+  YydsDomainPool,
+  YydsDomainPoolConfigValidationError,
+  YydsDomainPoolSourceValidationError,
+  type YydsFetchedDomain
+} from "../services/yyds-domain-pool.js";
 import {
   YydsMailConfigDecryptError,
   YydsMailConfigService,
@@ -44,7 +53,7 @@ import {
 import { SecretBox } from "../security/secretbox.js";
 import { InMemoryAccountStore, type AccountRecord } from "../store/account-store.js";
 import { InMemoryImageTaskStore, type ImageTaskRecord, type ImageTaskStore } from "../store/image-task-store.js";
-import { InMemoryYydsDomainPoolStore, type YydsDomainPoolConfig, type YydsDomainPoolMode, type YydsDomainPoolStore } from "../store/yyds-domain-pool-store.js";
+import { InMemoryYydsDomainPoolStore, type YydsDomainPoolStore } from "../store/yyds-domain-pool-store.js";
 import { InMemoryYydsMailConfigStore, type YydsMailConfigStore } from "../store/yyds-mail-config-store.js";
 import { InMemoryVideoTaskStore, type VideoTaskRecord, type VideoTaskStore } from "../store/video-task-store.js";
 import type { RegistrationService } from "../services/registration-service.js";
@@ -117,8 +126,6 @@ const DEFAULT_MODEL_ACCOUNT_WAIT_MS = 30_000;
 const ACCOUNT_WAIT_POLL_INTERVAL_MS = 100;
 const DEFAULT_YYDS_DOMAINS_URL = "https://maliapi.215.im/v1/domains";
 const YYDS_DOMAIN_FETCH_TIMEOUT_MS = 10_000;
-const YYDS_DOMAIN_POOL_MAX_LIST_SIZE = 500;
-const YYDS_DOMAIN_POOL_MAX_REFRESH_INTERVAL_MINUTES = 1440;
 
 function headersFromRequest(request: FastifyRequest): HeaderBag {
   const headers: HeaderBag = {};
@@ -493,13 +500,6 @@ class YydsDomainFetchError extends Error {
   }
 }
 
-class DomainPoolConfigValidationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "DomainPoolConfigValidationError";
-  }
-}
-
 async function fetchPublicYydsDomains(fetchImpl: FetchLike = fetch): Promise<YydsFetchedDomain[]> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), YYDS_DOMAIN_FETCH_TIMEOUT_MS);
@@ -535,106 +535,20 @@ async function fetchInjectedYydsDomains(fetchDomains: () => Promise<unknown[]>):
 }
 
 function normalizeFetchedYydsDomains(domains: unknown[]): YydsFetchedDomain[] {
+  if (domains.length > YYDS_DOMAIN_POOL_MAX_DOMAINS) {
+    throw new Error(`YYDS public domains response contains more than ${YYDS_DOMAIN_POOL_MAX_DOMAINS} domains`);
+  }
   const normalized = domains
-    .filter((item): item is Record<string, unknown> => isPlainRecordValue(item) && typeof item.domain === "string")
+    .filter((item): item is Record<string, unknown> => (
+      isPlainRecordValue(item)
+      && typeof item.domain === "string"
+      && isValidYydsDomainPoolDomain(item.domain)
+    ))
     .map((item) => item as unknown as YydsFetchedDomain);
   if (domains.length > 0 && normalized.length === 0) {
     throw new Error("YYDS public domains response did not contain valid domain records");
   }
   return normalized;
-}
-
-function normalizeDomainPoolConfigInput(
-  body: unknown,
-  current: YydsDomainPoolConfig
-): YydsDomainPoolConfig {
-  assertDomainPoolConfigInput(body);
-  return {
-    enabled: typeof body.enabled === "boolean" ? body.enabled : current.enabled,
-    mode: parseYydsDomainPoolMode(body.mode) ?? current.mode,
-    whitelist: Array.isArray(body.whitelist) ? normalizeDomainStringList(body.whitelist) : current.whitelist,
-    blacklist: Array.isArray(body.blacklist) ? normalizeDomainStringList(body.blacklist) : current.blacklist,
-    refreshIntervalMinutes: parsePositiveInteger(body.refreshIntervalMinutes) ?? current.refreshIntervalMinutes
-  };
-}
-
-function assertDomainPoolConfigInput(body: unknown): asserts body is Record<string, unknown> {
-  if (!isPlainRecordValue(body)) {
-    throw new DomainPoolConfigValidationError("config body must be an object");
-  }
-  const allowedKeys = new Set(["enabled", "mode", "whitelist", "blacklist", "refreshIntervalMinutes"]);
-  for (const key of Object.keys(body)) {
-    if (!allowedKeys.has(key)) {
-      throw new DomainPoolConfigValidationError(`Unknown domain pool config field: ${key}`);
-    }
-  }
-  if ("enabled" in body && typeof body.enabled !== "boolean") {
-    throw new DomainPoolConfigValidationError("enabled must be a boolean");
-  }
-  if ("mode" in body && parseYydsDomainPoolMode(body.mode) === undefined) {
-    throw new DomainPoolConfigValidationError("mode must be auto, whitelist, or auto-plus-whitelist");
-  }
-  if ("refreshIntervalMinutes" in body) {
-    const refreshIntervalMinutes = parsePositiveInteger(body.refreshIntervalMinutes);
-    if (
-      refreshIntervalMinutes === undefined
-      || refreshIntervalMinutes > YYDS_DOMAIN_POOL_MAX_REFRESH_INTERVAL_MINUTES
-    ) {
-      throw new DomainPoolConfigValidationError(
-        `refreshIntervalMinutes must be a positive integer no greater than ${YYDS_DOMAIN_POOL_MAX_REFRESH_INTERVAL_MINUTES}`
-      );
-    }
-  }
-  for (const key of ["whitelist", "blacklist"] as const) {
-    if (!(key in body)) {
-      continue;
-    }
-    const value = body[key];
-    if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
-      throw new DomainPoolConfigValidationError(`${key} must be a string array`);
-    }
-    if (value.length > YYDS_DOMAIN_POOL_MAX_LIST_SIZE) {
-      throw new DomainPoolConfigValidationError(`${key} must contain no more than ${YYDS_DOMAIN_POOL_MAX_LIST_SIZE} domains`);
-    }
-    for (const domain of value) {
-      if (!isValidDomainPoolDomain(domain)) {
-        throw new DomainPoolConfigValidationError(`${key} contains an invalid domain`);
-      }
-    }
-  }
-}
-
-function parseYydsDomainPoolMode(value: unknown): YydsDomainPoolMode | undefined {
-  return value === "auto" || value === "whitelist" || value === "auto-plus-whitelist" ? value : undefined;
-}
-
-function normalizeDomainStringList(value: unknown[]): string[] {
-  return Array.from(new Set(
-    value
-      .filter((item): item is string => typeof item === "string")
-      .map((item) => item.trim().toLowerCase())
-      .filter(Boolean)
-  ));
-}
-
-function isValidDomainPoolDomain(value: string): boolean {
-  const domain = value.trim().toLowerCase();
-  if (!domain || domain.length > 253 || domain.includes("..")) {
-    return false;
-  }
-  const labels = domain.split(".");
-  if (labels.length < 2) {
-    return false;
-  }
-  return labels.every((label) => (
-    label.length >= 1
-    && label.length <= 63
-    && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label)
-  ));
-}
-
-function parsePositiveInteger(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
 export function createApp(options: CreateAppOptions): FastifyInstance {
@@ -1360,7 +1274,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     try {
       await reply.send(await yydsDomainPool.refresh());
     } catch (error) {
-      if (error instanceof YydsDomainFetchError) {
+      if (error instanceof YydsDomainFetchError || error instanceof YydsDomainPoolSourceValidationError) {
         await reply.status(502).send({
           error: {
             type: "yyds_domain_fetch_error",
@@ -1383,13 +1297,13 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       return;
     }
     try {
-      assertDomainPoolConfigInput(request.body);
+      assertYydsDomainPoolConfigInput(request.body);
       const current = await yydsDomainPoolStore.getConfig();
-      const next = normalizeDomainPoolConfigInput(request.body, current);
+      const next = normalizeYydsDomainPoolConfigInput(request.body, current);
       await yydsDomainPoolStore.saveConfig(next);
       await reply.send(await yydsDomainPoolStore.getConfig());
     } catch (error) {
-      if (error instanceof DomainPoolConfigValidationError) {
+      if (error instanceof YydsDomainPoolConfigValidationError) {
         await sendBadRequest(reply, error);
         return;
       }

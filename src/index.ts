@@ -8,6 +8,7 @@ import { BullmqRegistrationQueue } from "./services/bullmq-registration-queue.js
 import { RegistrationJobService } from "./services/registration-job-service.js";
 import { RegistrationService } from "./services/registration-service.js";
 import { createRegistrationWorker } from "./services/registration-worker.js";
+import { normalizeYydsDomainPoolConfig } from "./services/yyds-domain-pool.js";
 import { YydsMailConfigService } from "./services/yyds-mail-config-service.js";
 import { SecretBox } from "./security/secretbox.js";
 import { MysqlImageTaskStore } from "./store/image-task-store.js";
@@ -33,7 +34,7 @@ await accountStore.ensureSchema();
 await yydsMailConfigStore.ensureSchema();
 await yydsDomainPoolStore.ensureSchema();
 if (!(await yydsDomainPoolStore.hasConfig())) {
-  await yydsDomainPoolStore.saveConfig(config.yydsDomainPool);
+  await yydsDomainPoolStore.saveConfig(normalizeYydsDomainPoolConfig(config.yydsDomainPool));
 }
 await imageTaskStore.ensureSchema();
 await videoTaskStore.ensureSchema();

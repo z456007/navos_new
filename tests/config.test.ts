@@ -167,4 +167,46 @@ describe("loadConfig", () => {
 
     expect(config.registrationJobConcurrency).toBe(1);
   });
+
+  it("rejects invalid YYDS domain pool env domains", () => {
+    const baseEnv = {
+      MASTER_API_KEY: "sk-test",
+      PROVIDER_BASE_URL: "https://upstream.test",
+      VIP_HMAC_SECRET: "test-secret-32-chars-long-key!!"
+    };
+
+    for (const invalidDomain of [
+      "http://example.com",
+      "bad domain.test",
+      `${"a".repeat(64)}.test`,
+      "example.com/path"
+    ]) {
+      expect(() => loadConfig({
+        ...baseEnv,
+        YYDS_DOMAIN_WHITELIST: invalidDomain
+      })).toThrow(/invalid domain/i);
+      expect(() => loadConfig({
+        ...baseEnv,
+        YYDS_DOMAIN_BLACKLIST: invalidDomain
+      })).toThrow(/invalid domain/i);
+    }
+  });
+
+  it("rejects oversized YYDS domain pool env lists and refresh intervals", () => {
+    const baseEnv = {
+      MASTER_API_KEY: "sk-test",
+      PROVIDER_BASE_URL: "https://upstream.test",
+      VIP_HMAC_SECRET: "test-secret-32-chars-long-key!!"
+    };
+
+    expect(() => loadConfig({
+      ...baseEnv,
+      YYDS_DOMAIN_WHITELIST: Array.from({ length: 501 }, (_, index) => `d${index}.example.com`).join(",")
+    })).toThrow(/no more than 500/i);
+
+    expect(() => loadConfig({
+      ...baseEnv,
+      YYDS_DOMAIN_REFRESH_MINUTES: "1441"
+    })).toThrow(/refreshIntervalMinutes/i);
+  });
 });

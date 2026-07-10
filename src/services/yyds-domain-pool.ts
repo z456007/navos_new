@@ -3,6 +3,7 @@ import {
   type YydsDomainHealthRecord,
   type YydsDomainHealthStatus,
   type YydsDomainPoolConfig,
+  type YydsDomainPoolMode,
   type YydsDomainPoolStore
 } from "../store/yyds-domain-pool-store.js";
 
@@ -45,6 +46,141 @@ export interface YydsDomainPoolOptions {
 const DEFAULT_WEIGHT = 100;
 const WHITELIST_WEIGHT = 110;
 const COOLDOWN_MS = 10 * 60 * 1000;
+export const YYDS_DOMAIN_POOL_MAX_DOMAINS = 500;
+export const YYDS_DOMAIN_POOL_MAX_REFRESH_INTERVAL_MINUTES = 1440;
+
+export const DEFAULT_YYDS_DOMAIN_POOL_CONFIG: YydsDomainPoolConfig = {
+  enabled: true,
+  mode: "auto-plus-whitelist",
+  whitelist: [],
+  blacklist: [],
+  refreshIntervalMinutes: 30
+};
+
+const DOMAIN_POOL_CONFIG_KEYS = new Set([
+  "enabled",
+  "mode",
+  "whitelist",
+  "blacklist",
+  "refreshIntervalMinutes"
+]);
+
+export class YydsDomainPoolConfigValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "YydsDomainPoolConfigValidationError";
+  }
+}
+
+export class YydsDomainPoolSourceValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "YydsDomainPoolSourceValidationError";
+  }
+}
+
+export function normalizeYydsDomainPoolConfig(config: YydsDomainPoolConfig): YydsDomainPoolConfig {
+  return normalizeYydsDomainPoolConfigInput(config, DEFAULT_YYDS_DOMAIN_POOL_CONFIG);
+}
+
+export function normalizeYydsDomainPoolConfigInput(
+  body: unknown,
+  current: YydsDomainPoolConfig
+): YydsDomainPoolConfig {
+  assertYydsDomainPoolConfigInput(body);
+  return {
+    enabled: typeof body.enabled === "boolean" ? body.enabled : current.enabled,
+    mode: parseYydsDomainPoolMode(body.mode) ?? current.mode,
+    whitelist: Array.isArray(body.whitelist) ? normalizeYydsDomainStringList(body.whitelist) : current.whitelist,
+    blacklist: Array.isArray(body.blacklist) ? normalizeYydsDomainStringList(body.blacklist) : current.blacklist,
+    refreshIntervalMinutes: parsePositiveInteger(body.refreshIntervalMinutes) ?? current.refreshIntervalMinutes
+  };
+}
+
+export function assertYydsDomainPoolConfigInput(body: unknown): asserts body is Record<string, unknown> {
+  if (!isPlainRecordValue(body)) {
+    throw new YydsDomainPoolConfigValidationError("config body must be an object");
+  }
+  for (const key of Object.keys(body)) {
+    if (!DOMAIN_POOL_CONFIG_KEYS.has(key)) {
+      throw new YydsDomainPoolConfigValidationError(`Unknown domain pool config field: ${key}`);
+    }
+  }
+  if ("enabled" in body && typeof body.enabled !== "boolean") {
+    throw new YydsDomainPoolConfigValidationError("enabled must be a boolean");
+  }
+  if ("mode" in body && parseYydsDomainPoolMode(body.mode) === undefined) {
+    throw new YydsDomainPoolConfigValidationError("mode must be auto, whitelist, or auto-plus-whitelist");
+  }
+  if ("refreshIntervalMinutes" in body) {
+    const refreshIntervalMinutes = parsePositiveInteger(body.refreshIntervalMinutes);
+    if (
+      refreshIntervalMinutes === undefined
+      || refreshIntervalMinutes > YYDS_DOMAIN_POOL_MAX_REFRESH_INTERVAL_MINUTES
+    ) {
+      throw new YydsDomainPoolConfigValidationError(
+        `refreshIntervalMinutes must be a positive integer no greater than ${YYDS_DOMAIN_POOL_MAX_REFRESH_INTERVAL_MINUTES}`
+      );
+    }
+  }
+  for (const key of ["whitelist", "blacklist"] as const) {
+    if (!(key in body)) {
+      continue;
+    }
+    const value = body[key];
+    if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
+      throw new YydsDomainPoolConfigValidationError(`${key} must be a string array`);
+    }
+    if (value.length > YYDS_DOMAIN_POOL_MAX_DOMAINS) {
+      throw new YydsDomainPoolConfigValidationError(`${key} must contain no more than ${YYDS_DOMAIN_POOL_MAX_DOMAINS} domains`);
+    }
+    for (const domain of value) {
+      if (!isValidYydsDomainPoolDomain(domain)) {
+        throw new YydsDomainPoolConfigValidationError(`${key} contains an invalid domain`);
+      }
+    }
+  }
+}
+
+export function normalizeYydsDomainStringList(value: string[]): string[] {
+  return Array.from(new Set(
+    value
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean)
+  ));
+}
+
+export function isValidYydsDomainPoolDomain(value: string): boolean {
+  const domain = value.trim().toLowerCase();
+  if (!domain || domain.length > 253 || domain.includes("..")) {
+    return false;
+  }
+  const labels = domain.split(".");
+  if (labels.length < 2) {
+    return false;
+  }
+  return labels.every((label) => (
+    label.length >= 1
+    && label.length <= 63
+    && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label)
+  ));
+}
+
+function parseYydsDomainPoolMode(value: unknown): YydsDomainPoolMode | undefined {
+  return value === "auto" || value === "whitelist" || value === "auto-plus-whitelist" ? value : undefined;
+}
+
+function parsePositiveInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+function isPlainRecordValue(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
 
 export class YydsDomainPool {
   private readonly store: YydsDomainPoolStore;
@@ -67,12 +203,22 @@ export class YydsDomainPool {
 
     const blacklist = new Set(config.blacklist.map(normalizeDomain));
     const fetched = await this.fetchDomains();
+    if (fetched.length > YYDS_DOMAIN_POOL_MAX_DOMAINS) {
+      throw new YydsDomainPoolSourceValidationError(
+        `YYDS domain refresh returned more than ${YYDS_DOMAIN_POOL_MAX_DOMAINS} domains`
+      );
+    }
     const eligibleDomains = fetched
       .filter(isHealthyReceivingDomain)
       .map((item) => normalizeDomain(item.domain))
       .filter((domain) => domain && !blacklist.has(domain));
 
     const uniqueDomains = Array.from(new Set(eligibleDomains));
+    if (uniqueDomains.length > YYDS_DOMAIN_POOL_MAX_DOMAINS) {
+      throw new YydsDomainPoolSourceValidationError(
+        `YYDS domain refresh produced more than ${YYDS_DOMAIN_POOL_MAX_DOMAINS} eligible domains`
+      );
+    }
     const uniqueDomainSet = new Set(uniqueDomains);
     this.autoEligibleDomains = new Set(uniqueDomains);
     this.hasAutoRefreshSnapshot = true;
@@ -231,7 +377,7 @@ export class YydsDomainPool {
 
 function isHealthyReceivingDomain(domain: YydsFetchedDomain): boolean {
   return (
-    Boolean(normalizeDomain(domain.domain)) &&
+    isValidYydsDomainPoolDomain(domain.domain) &&
     domain.isPublic === true &&
     domain.isVerified === true &&
     domain.isMxValid === true &&
@@ -261,8 +407,8 @@ function defaultHealth(domain: string, now: number, weight: number): YydsDomainH
 function normalizeConfig(config: YydsDomainPoolConfig): YydsDomainPoolConfig {
   return {
     ...config,
-    whitelist: config.whitelist.map(normalizeDomain).filter(Boolean),
-    blacklist: config.blacklist.map(normalizeDomain).filter(Boolean)
+    whitelist: config.whitelist.map(normalizeDomain).filter(isValidYydsDomainPoolDomain),
+    blacklist: config.blacklist.map(normalizeDomain).filter(isValidYydsDomainPoolDomain)
   };
 }
 

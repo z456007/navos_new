@@ -1,4 +1,5 @@
 import type { AccountIdentity, ProviderAuthMode } from "../protocols/auth.js";
+import { normalizeYydsDomainPoolConfig } from "../services/yyds-domain-pool.js";
 import type { YydsDomainPoolConfig, YydsDomainPoolMode } from "../store/yyds-domain-pool-store.js";
 
 export interface AppConfig {
@@ -136,7 +137,18 @@ function parseDomainPoolMode(value: string | undefined): YydsDomainPoolMode {
   if (normalized === "auto" || normalized === "whitelist" || normalized === "auto-plus-whitelist") {
     return normalized;
   }
+  if (value?.trim()) {
+    return normalized as YydsDomainPoolMode;
+  }
   return "auto-plus-whitelist";
+}
+
+function parseYydsDomainRefreshIntervalMinutes(value: string | undefined): number {
+  if (!value?.trim()) {
+    return 30;
+  }
+  const normalized = value.trim();
+  return /^\d+$/.test(normalized) ? Number(normalized) : Number.NaN;
 }
 
 export function loadConfig(env: EnvInput = process.env): AppConfig {
@@ -184,12 +196,12 @@ export function loadConfig(env: EnvInput = process.env): AppConfig {
     imageAccountWaitMs: parsePositiveInt(env.IMAGE_ACCOUNT_WAIT_MS, 120_000),
     imageMaxPollAttempts: parsePositiveInt(env.IMAGE_MAX_POLL_ATTEMPTS, 30),
     imagePollIntervalMs: parsePositiveInt(env.IMAGE_POLL_INTERVAL_MS, 4_000),
-    yydsDomainPool: {
+    yydsDomainPool: normalizeYydsDomainPoolConfig({
       enabled: parseBool(env.YYDS_DOMAIN_POOL_ENABLED, true),
       mode: parseDomainPoolMode(env.YYDS_DOMAIN_POOL_MODE),
       whitelist: parseCsv(env.YYDS_DOMAIN_WHITELIST).map((item) => item.toLowerCase()),
       blacklist: parseCsv(env.YYDS_DOMAIN_BLACKLIST).map((item) => item.toLowerCase()),
-      refreshIntervalMinutes: parsePositiveInt(env.YYDS_DOMAIN_REFRESH_MINUTES, 30)
-    }
+      refreshIntervalMinutes: parseYydsDomainRefreshIntervalMinutes(env.YYDS_DOMAIN_REFRESH_MINUTES)
+    })
   };
 }
