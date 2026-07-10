@@ -325,6 +325,86 @@ describe("model proxy", () => {
     expect(capturedBody.stream_options).toEqual({ include_usage: true });
   });
 
+  it("preserves Codex chat image_url parts when routing through Responses", async () => {
+    let capturedBody: Record<string, unknown> = {};
+    const client = new ProviderHttpClient("https://upstream.test", async (_url, init) => {
+      capturedBody = JSON.parse(String(init?.body));
+      return Response.json({
+        id: "resp_vision",
+        output: [{
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "red" }]
+        }]
+      });
+    });
+
+    await forwardModelRequest(client, {
+      method: "POST",
+      path: "/v1/chat/completions",
+      body: {
+        model: "codex",
+        messages: [{
+          role: "user",
+          content: [
+            { type: "text", text: "What color is this?" },
+            { type: "image_url", image_url: { url: "data:image/png;base64,cmVk" } }
+          ]
+        }],
+        max_tokens: 16
+      },
+      headers: { authorization: "Bearer t" }
+    });
+
+    expect(capturedBody.input).toEqual([{
+      role: "user",
+      content: [
+        { type: "input_text", text: "What color is this?" },
+        { type: "input_image", image_url: "data:image/png;base64,cmVk" }
+      ]
+    }]);
+  });
+
+  it("converts Claude chat image_url parts into Anthropic image blocks", async () => {
+    let capturedBody: Record<string, unknown> = {};
+    const client = new ProviderHttpClient("https://upstream.test", async (_url, init) => {
+      capturedBody = JSON.parse(String(init?.body));
+      return Response.json({
+        id: "msg_vision",
+        model: "claude.sonnet-4.6",
+        content: [{ type: "text", text: "blue" }]
+      });
+    });
+
+    await forwardModelRequest(client, {
+      method: "POST",
+      path: "/v1/chat/completions",
+      body: {
+        model: "claude-sonnet-4-6",
+        messages: [{
+          role: "user",
+          content: [
+            { type: "text", text: "What color is this?" },
+            { type: "image_url", image_url: { url: "data:image/png;base64,Ymx1ZQ==" } }
+          ]
+        }],
+        max_tokens: 16
+      },
+      headers: { authorization: "Bearer t" }
+    });
+
+    expect(capturedBody.messages).toEqual([{
+      role: "user",
+      content: [
+        { type: "text", text: "What color is this?" },
+        {
+          type: "image",
+          source: { type: "base64", media_type: "image/png", data: "Ymx1ZQ==" }
+        }
+      ]
+    }]);
+  });
+
   it("rejects unsupported proxy paths", async () => {
     const client = new ProviderHttpClient("https://upstream.test", async () => Response.json({}));
     await expect(forwardModelRequest(client, {

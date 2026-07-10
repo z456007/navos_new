@@ -576,6 +576,10 @@ function normalizeResponseContent(value: unknown): unknown {
   if (typeof value === "string") {
     return value;
   }
+  if (Array.isArray(value)) {
+    const parts = openAiContentPartsToResponses(value);
+    return parts.some((part) => part.type === "input_image") ? parts : collectContent(value);
+  }
   return collectContent(value);
 }
 
@@ -1263,8 +1267,11 @@ function bodyRecord(body: unknown): Record<string, unknown> {
 }
 
 function normalizeContent(value: unknown): unknown {
-  if (typeof value === "string" || Array.isArray(value)) {
+  if (typeof value === "string") {
     return value;
+  }
+  if (Array.isArray(value)) {
+    return openAiContentPartsToAnthropic(value);
   }
   return collectContent(value);
 }
@@ -1284,6 +1291,77 @@ function collectContent(value: unknown): string {
     return collectContent(record.text ?? record.content);
   }
   return value === undefined || value === null ? "" : String(value);
+}
+
+function openAiContentPartsToResponses(value: unknown[]): Array<Record<string, unknown>> {
+  const parts: Array<Record<string, unknown>> = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") {
+      const text = collectContent(item);
+      if (text) {
+        parts.push({ type: "input_text", text });
+      }
+      continue;
+    }
+    const record = item as Record<string, unknown>;
+    const type = readString(record.type);
+    const imageUrl = readImageUrl(record);
+    if ((type === "image_url" || type === "input_image") && imageUrl) {
+      parts.push({ type: "input_image", image_url: imageUrl });
+      continue;
+    }
+    const text = collectContent(record.text ?? record.content);
+    if (text) {
+      parts.push({ type: "input_text", text });
+    }
+  }
+  return parts;
+}
+
+function openAiContentPartsToAnthropic(value: unknown[]): unknown[] {
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        const text = collectContent(item);
+        return text ? { type: "text", text } : undefined;
+      }
+      const record = item as Record<string, unknown>;
+      if (readString(record.type) === "image" && record.source) {
+        return record;
+      }
+      const imageUrl = readImageUrl(record);
+      if (imageUrl) {
+        return anthropicImageBlockFromUrl(imageUrl);
+      }
+      const text = collectContent(record.text ?? record.content);
+      return text ? { type: "text", text } : undefined;
+    })
+    .filter((item) => item !== undefined);
+}
+
+function readImageUrl(record: Record<string, unknown>): string | undefined {
+  return readString(record.image_url)
+    ?? readString((record.image_url as Record<string, unknown> | undefined)?.url)
+    ?? readString(record.url)
+    ?? readString(record.source);
+}
+
+function anthropicImageBlockFromUrl(url: string): Record<string, unknown> {
+  const dataUrl = /^data:([^;,]+);base64,(.+)$/i.exec(url);
+  if (dataUrl) {
+    return {
+      type: "image",
+      source: {
+        type: "base64",
+        media_type: dataUrl[1] ?? "image/png",
+        data: dataUrl[2] ?? ""
+      }
+    };
+  }
+  return {
+    type: "image",
+    source: { type: "url", url }
+  };
 }
 
 function readString(value: unknown): string | undefined {

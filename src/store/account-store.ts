@@ -35,6 +35,7 @@ export interface AccountStore {
     nowMs?: number,
     minimumBalanceRemaining?: number
   ): Promise<AccountRecord | undefined>;
+  consumeLease(uid: string, leaseId: string | undefined, cost: number, nowMs?: number): Promise<boolean>;
   releaseLease(uid: string, leaseId?: string): Promise<void>;
   markUsed(uid: string, usedAtMs?: number): Promise<void>;
   setStatus(uid: string, status: AccountStatus): Promise<void>;
@@ -127,6 +128,27 @@ export class InMemoryAccountStore implements AccountStore {
       account.leaseId = undefined;
       account.leaseUntil = 0;
     }
+  }
+
+  async consumeLease(uid: string, leaseId: string | undefined, cost: number, nowMs: number = now()): Promise<boolean> {
+    const account = this.accounts.get(uid);
+    if (!account) {
+      return false;
+    }
+    if (leaseId && account.leaseId !== leaseId) {
+      return false;
+    }
+    const nextBalance = Math.max(0, account.balanceRemaining - Math.max(0, cost));
+    account.balanceRemaining = nextBalance;
+    account.lastBalanceAt = nowMs;
+    account.leaseId = undefined;
+    account.leaseUntil = 0;
+    if (nextBalance <= 0) {
+      account.status = "depleted";
+      return true;
+    }
+    account.lastUsedAt = nowMs;
+    return true;
   }
 
   async markUsed(uid: string, usedAtMs: number = now()): Promise<void> {

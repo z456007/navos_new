@@ -66,6 +66,38 @@ describe("AccountService", () => {
     expect((await store.get("low"))?.leaseId).toBeUndefined();
   });
 
+  it("consumes an image account lease only once", async () => {
+    const store = new InMemoryAccountStore();
+    const service = new AccountService(store);
+    await service.importAccount({ uid: "u1", token: "t1", balanceRemaining: 300, balanceTotal: 300 });
+
+    const leased = await service.leaseImageAccount("image-job-1");
+    expect(leased?.uid).toBe("u1");
+
+    await service.consumeImageAccount("u1", "image-job-1", 100);
+    await service.consumeImageAccount("u1", "image-job-1", 100);
+
+    expect(await store.get("u1")).toMatchObject({ balanceRemaining: 200, leaseUntil: 0 });
+  });
+
+  it("leases model accounts without requiring image or video balance", async () => {
+    const store = new InMemoryAccountStore();
+    const service = new AccountService(store);
+    await service.importAccount({ uid: "u1", token: "t1", balanceRemaining: 0, balanceTotal: 0 });
+    await service.importAccount({ uid: "u2", token: "t2", balanceRemaining: 0, balanceTotal: 0 });
+
+    const [first, second, third] = await Promise.all([
+      service.leaseModelAccount("model-job-1"),
+      service.leaseModelAccount("model-job-2"),
+      service.leaseModelAccount("model-job-3")
+    ]);
+
+    expect([first?.uid, second?.uid].sort()).toEqual(["u1", "u2"]);
+    expect(third).toBeUndefined();
+    await service.releaseModelAccount(first?.uid ?? "", "model-job-1");
+    expect((await store.get(first?.uid ?? ""))?.leaseUntil).toBe(0);
+  });
+
   it("skips disabled and cooling-down accounts", async () => {
     const service = new AccountService(new InMemoryAccountStore());
     await service.importAccount({ uid: "disabled", token: "t1" });

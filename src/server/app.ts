@@ -6,7 +6,13 @@ import type { AccountIdentity, HeaderBag, ProviderAuthMode } from "../protocols/
 import { buildProviderAuthHeaders, isClientAuthorized } from "../protocols/auth.js";
 import type { FetchLike, ProviderResult } from "../protocols/http.js";
 import { ProviderHttpClient } from "../protocols/http.js";
-import { buildImageGenerationPayload, createImageGeneration } from "../protocols/image.js";
+import {
+  buildImageGenerationPayload,
+  createImageGeneration,
+  imageTaskPollPathForPayload,
+  pollImageTask,
+  readImageTaskId
+} from "../protocols/image.js";
 import {
   forwardModelRequest,
   isPublicProxyChatModelAllowed,
@@ -32,6 +38,7 @@ import { AccountService, IMAGE_ACCOUNT_COST } from "../services/account-service.
 import { YydsMailConfigService, type YydsMailConfigInput } from "../services/yyds-mail-config-service.js";
 import { SecretBox } from "../security/secretbox.js";
 import { InMemoryAccountStore, type AccountRecord } from "../store/account-store.js";
+import { InMemoryImageTaskStore, type ImageTaskRecord, type ImageTaskStore } from "../store/image-task-store.js";
 import { InMemoryYydsMailConfigStore, type YydsMailConfigStore } from "../store/yyds-mail-config-store.js";
 import { InMemoryVideoTaskStore, type VideoTaskRecord, type VideoTaskStore } from "../store/video-task-store.js";
 import type { RegistrationService } from "../services/registration-service.js";
@@ -52,11 +59,16 @@ export interface CreateAppOptions {
   yydsMailBaseUrl?: string;
   yydsMailConfigSecret?: string;
   yydsMailConfigStore?: YydsMailConfigStore;
+  imageTaskStore?: ImageTaskStore;
   videoTaskStore?: VideoTaskStore;
   fetchImpl?: FetchLike;
   vipClient?: VipBalanceClient;
   registrationService?: RegistrationService;
   registrationJobService?: RegistrationJobServicePort;
+  imageMaxPollAttempts?: number;
+  imagePollIntervalMs?: number;
+  imageAccountWaitMs?: number;
+  modelAccountWaitMs?: number;
 }
 
 interface UploadRequestBody {
@@ -75,6 +87,7 @@ interface CooldownBody {
 
 interface ProviderAuthContext {
   account: AccountRecord;
+  leaseId?: string;
   headers: Record<string, string>;
 }
 
@@ -91,6 +104,9 @@ const CORS_MAX_AGE_SECONDS = "86400";
 const JSON_BODY_LIMIT_BYTES = 64 * 1024 * 1024;
 const MODEL_PROXY_MAX_ATTEMPTS = 5;
 const MODEL_PROXY_RETRY_COOLDOWN_SECONDS = 30;
+const DEFAULT_IMAGE_ACCOUNT_WAIT_MS = 120_000;
+const DEFAULT_MODEL_ACCOUNT_WAIT_MS = 30_000;
+const ACCOUNT_WAIT_POLL_INTERVAL_MS = 100;
 
 function headersFromRequest(request: FastifyRequest): HeaderBag {
   const headers: HeaderBag = {};
@@ -388,6 +404,10 @@ function providerExceptionResult(error: unknown): ProviderResult {
   };
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+}
+
 function imageResultIsRetryable(result: ProviderResult): boolean {
   if (result.status < 500) {
     return false;
@@ -459,6 +479,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     )
   );
   const videoTaskStore = options.videoTaskStore ?? new InMemoryVideoTaskStore();
+  const imageTaskStore = options.imageTaskStore ?? new InMemoryImageTaskStore();
   const client = new ProviderHttpClient(options.providerBaseUrl, options.fetchImpl);
   let providerRegistrationAttempt: Promise<boolean> | undefined;
 
@@ -511,9 +532,10 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     return authContextForAccount(account);
   }
 
-  function authContextForAccount(account: AccountRecord): ProviderAuthContext {
+  function authContextForAccount(account: AccountRecord, leaseId?: string): ProviderAuthContext {
     return {
       account,
+      leaseId,
       headers: buildProviderAuthHeaders(account, options.providerAuthMode)
     };
   }
@@ -540,16 +562,24 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     await accountService.cooldownAccount(uid, MODEL_PROXY_RETRY_COOLDOWN_SECONDS);
   }
 
-  function wrapStreamingProviderResultForAccount(uid: string, result: ProviderResult): ProviderResult {
+  function wrapStreamingProviderResultForAccount(uid: string, leaseId: string | undefined, result: ProviderResult): ProviderResult {
     const contentType = result.headers.get("content-type") ?? "";
     if (!contentType.includes("text/event-stream") || !isNodeReadable(result.body)) {
       return result;
     }
+    let failed = false;
+    const detector = createProviderFailureDetectionStream(async (decision) => {
+      failed = true;
+      await applyStreamedProviderFailure(uid, decision);
+    });
+    detector.once("finish", () => {
+      if (!failed && leaseId) {
+        void accountService.releaseModelAccount(uid, leaseId);
+      }
+    });
     return {
       ...result,
-      body: result.body.pipe(createProviderFailureDetectionStream((decision) =>
-        applyStreamedProviderFailure(uid, decision)
-      ))
+      body: result.body.pipe(detector)
     };
   }
 
@@ -592,22 +622,64 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     return providerRegistrationAttempt;
   }
 
-  async function providerAuthOrRegister(allowRegister: boolean): Promise<{
+  async function leaseModelAccountOrRegister(leaseId: string, allowRegister: boolean): Promise<{
     auth?: ProviderAuthContext;
     registered: boolean;
   }> {
-    let account = await accountService.pickAccount();
+    let account = await accountService.leaseModelAccount(leaseId);
     let registered = false;
     if (!account && allowRegister) {
       registered = await registerProviderAccountIfPossible();
     }
     if (!account && registered) {
-      account = await accountService.pickAccount();
+      account = await accountService.leaseModelAccount(leaseId);
     }
     if (!account) {
       return { registered };
     }
-    return { auth: authContextForAccount(account), registered };
+    return { auth: authContextForAccount(account, leaseId), registered };
+  }
+
+  async function modelAuthOrWait(leaseId: string, allowRegister: boolean): Promise<{
+    auth?: ProviderAuthContext;
+    registered: boolean;
+  }> {
+    const deadline = Date.now() + Math.max(0, options.modelAccountWaitMs ?? DEFAULT_MODEL_ACCOUNT_WAIT_MS);
+    let first = true;
+    let registered = false;
+    while (first || Date.now() < deadline) {
+      first = false;
+      const next = await leaseModelAccountOrRegister(leaseId, allowRegister && !registered);
+      if (next.registered) {
+        registered = true;
+      }
+      if (next.auth) {
+        return { auth: next.auth, registered };
+      }
+      if (!await hasActiveModelAccountCandidate()) {
+        break;
+      }
+      await delay(Math.min(ACCOUNT_WAIT_POLL_INTERVAL_MS, Math.max(1, deadline - Date.now())));
+    }
+    return { registered };
+  }
+
+  async function hasActiveModelAccountCandidate(): Promise<boolean> {
+    const now = Date.now();
+    return (await accountService.listAccounts()).some((account) =>
+      account.status === "active" && account.rateLimitedUntil <= now
+    );
+  }
+
+  async function finalizeModelLease(auth: ProviderAuthContext, result: ProviderResult): Promise<void> {
+    if (!auth.leaseId) {
+      return;
+    }
+    const contentType = result.headers.get("content-type") ?? "";
+    if (contentType.includes("text/event-stream")) {
+      return;
+    }
+    await accountService.releaseModelAccount(auth.account.uid, auth.leaseId);
   }
 
   async function forwardModelRequestWithAccountRotation(
@@ -618,7 +690,8 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     let registeredDuringRequest = false;
 
     for (let attempt = 0; attempt < MODEL_PROXY_MAX_ATTEMPTS; attempt += 1) {
-      const nextAuth = await providerAuthOrRegister(!registeredDuringRequest);
+      const leaseId = `model:${randomUUID()}`;
+      const nextAuth = await modelAuthOrWait(leaseId, !registeredDuringRequest);
       if (nextAuth.registered) {
         registeredDuringRequest = true;
       }
@@ -627,7 +700,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
         break;
       }
 
-      const result = wrapStreamingProviderResultForAccount(auth.account.uid, await forwardModelRequest(client, {
+      const result = wrapStreamingProviderResultForAccount(auth.account.uid, auth.leaseId, await forwardModelRequest(client, {
         method: "POST",
         path,
         body,
@@ -650,6 +723,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
         continue;
       }
 
+      await finalizeModelLease(auth, result);
       return result;
     }
 
@@ -722,66 +796,39 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     reply: FastifyReply,
     sendUnavailable: boolean = true
   ): Promise<AccountRecord | undefined> {
-    const existingAccount = await accountService.leaseImageAccount(leaseId);
-    if (existingAccount) {
-      return existingAccount;
-    }
-
-    const registrationService = options.registrationService;
-    if (!registrationService) {
-      if (sendUnavailable) {
-        await reply.status(503).send({
-          error: {
-            message: "No available account for image generation",
-            type: "account_unavailable"
-          }
-        });
+    const waitMs = sendUnavailable ? Math.max(0, options.imageAccountWaitMs ?? DEFAULT_IMAGE_ACCOUNT_WAIT_MS) : 0;
+    const deadline = Date.now() + waitMs;
+    let attemptedRegistration = false;
+    do {
+      const existingAccount = await accountService.leaseImageAccount(leaseId);
+      if (existingAccount) {
+        return existingAccount;
       }
-      return undefined;
-    }
 
-    const registrationResult = await registrationService.registerOne();
-    if (!registrationResult.success) {
-      if (sendUnavailable) {
-        await reply.status(503).send({
-          error: {
-            message: registrationResult.error ?? "Image account registration failed",
-            type: "image_account_registration_failed"
-          }
-        });
+      if (!attemptedRegistration && options.registrationService) {
+        attemptedRegistration = true;
+        await registerProviderAccountIfPossible();
+        const registeredAccount = await accountService.leaseImageAccount(leaseId);
+        if (registeredAccount) {
+          return registeredAccount;
+        }
       }
-      return undefined;
-    }
 
-    if (registrationResult.uid && registrationResult.token) {
-      const savedAccount = await accountService.getProviderAccount(registrationResult.uid);
-      if (!savedAccount) {
-        await accountService.importAccount({
-          uid: registrationResult.uid,
-          token: registrationResult.token,
-          mailboxAddr: registrationResult.email,
-          mailboxToken: registrationResult.mailboxToken,
-          balanceRemaining: registrationResult.balance,
-          balanceTotal: registrationResult.balance,
-          status: "active"
-        });
+      if (Date.now() >= deadline) {
+        break;
       }
-    }
+      await delay(Math.min(ACCOUNT_WAIT_POLL_INTERVAL_MS, Math.max(1, deadline - Date.now())));
+    } while (Date.now() <= deadline);
 
-    const registeredAccount = await accountService.leaseImageAccount(leaseId);
-    if (!registeredAccount) {
-      if (sendUnavailable) {
-        await reply.status(503).send({
-          error: {
-            message: "Image account registration completed, but no account could be leased",
-            type: "account_unavailable"
-          }
-        });
-      }
-      return undefined;
+    if (sendUnavailable) {
+      await reply.status(503).send({
+        error: {
+          message: "No available account for image generation",
+          type: "account_unavailable"
+        }
+      });
     }
-
-    return registeredAccount;
+    return undefined;
   }
 
   async function yydsClient(reply: FastifyReply): Promise<YydsMailClient | undefined> {
@@ -838,6 +885,101 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       raw: task.raw,
       completedAt: task.status === "succeeded" ? Date.now() : undefined
     });
+  }
+
+  async function saveImageTaskFromResult(
+    result: ProviderResult,
+    pollPath: ImageTaskRecord["pollPath"],
+    accountUid?: string,
+    leaseId?: string
+  ): Promise<ImageTaskRecord | undefined> {
+    const taskId = readImageTaskId(result.body);
+    if (!taskId) {
+      return undefined;
+    }
+    const status = readImageResponseStatus(result.body, result.status);
+    return imageTaskStore.upsert({
+      taskId,
+      accountUid,
+      leaseId,
+      pollPath,
+      status,
+      sourceUrl: readFirstImageUrl(result.body),
+      raw: result.body,
+      completedAt: status === "succeeded" || status === "failed" ? Date.now() : undefined
+    });
+  }
+
+  function readImageResponseStatus(body: unknown, httpStatus: number): string {
+    if (httpStatus === 202) {
+      return "running";
+    }
+    if (httpStatus >= 500) {
+      return "failed";
+    }
+    const status = readDeepImageString(body, ["status", "state"])?.toLowerCase();
+    if (status === "success" || status === "completed") {
+      return "succeeded";
+    }
+    if (status) {
+      return status;
+    }
+    return httpStatus >= 200 && httpStatus < 300 ? "succeeded" : "failed";
+  }
+
+  function isTerminalImageTask(task: ImageTaskRecord): boolean {
+    return ["succeeded", "success", "completed", "failed", "error", "cancelled", "canceled"]
+      .includes(task.status.toLowerCase());
+  }
+
+  function cachedImageTaskResult(task: ImageTaskRecord): ProviderResult | undefined {
+    if (!isTerminalImageTask(task)) {
+      return undefined;
+    }
+    const status = task.status.toLowerCase();
+    const succeeded = status === "succeeded" || status === "success" || status === "completed";
+    const body = task.raw ?? {
+      created: Math.floor((task.completedAt ?? task.updatedAt) / 1000),
+      status: succeeded ? "succeeded" : "failed",
+      task_id: task.taskId,
+      id: task.taskId,
+      data: succeeded && task.sourceUrl ? [{ url: task.sourceUrl }] : []
+    };
+    return {
+      status: succeeded ? 200 : 500,
+      body,
+      headers: new Headers()
+    };
+  }
+
+  function readFirstImageUrl(body: unknown): string | undefined {
+    if (!body || typeof body !== "object") {
+      return undefined;
+    }
+    if (Array.isArray(body)) {
+      return body.map(readFirstImageUrl).find(Boolean);
+    }
+    const record = body as Record<string, unknown>;
+    if (typeof record.url === "string") {
+      return record.url;
+    }
+    if (Array.isArray(record.data)) {
+      return record.data.map(readFirstImageUrl).find(Boolean);
+    }
+    return readFirstImageUrl(record.data) ?? readFirstImageUrl(record.result) ?? readFirstImageUrl(record.output);
+  }
+
+  function readDeepImageString(value: unknown, keys: string[]): string | undefined {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return undefined;
+    }
+    const record = value as Record<string, unknown>;
+    for (const key of keys) {
+      if (typeof record[key] === "string" && record[key]) {
+        return record[key];
+      }
+    }
+    return readDeepImageString(record.data, keys) ?? readDeepImageString(record.result, keys);
   }
 
   app.get("/health", async () => ({ ok: true }));
@@ -1227,6 +1369,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       return;
     }
 
+    const pollPath = imageTaskPollPathForPayload(payload);
     let lastResult: ProviderResult | undefined;
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const leaseId = `image:${randomUUID()}`;
@@ -1239,10 +1382,19 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       }
 
       const headers = buildProviderAuthHeaders(account, options.providerAuthMode);
-      const result = await createImageGeneration(client, payload, headers);
+      const result = await createImageGeneration(client, payload, headers, {
+        maxAttempts: options.imageMaxPollAttempts,
+        intervalMs: options.imagePollIntervalMs
+      });
       lastResult = result;
       if (result.status === 200) {
         await accountService.consumeImageAccount(account.uid, leaseId, IMAGE_ACCOUNT_COST);
+        await saveImageTaskFromResult(result, pollPath, account.uid, leaseId);
+        await sendProviderResult(reply, result);
+        return;
+      }
+      if (result.status === 202) {
+        await saveImageTaskFromResult(result, pollPath, account.uid, leaseId);
         await sendProviderResult(reply, result);
         return;
       }
@@ -1265,11 +1417,68 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     });
   }
 
+  async function handleGetImageGeneration(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const params = request.params as { taskId?: string };
+    if (!params.taskId) {
+      await reply.status(400).send({ error: { message: "taskId is required" } });
+      return;
+    }
+    const existingTask = await imageTaskStore.get(params.taskId);
+    if (!existingTask) {
+      await reply.status(404).send({ error: { message: "Image task not found" } });
+      return;
+    }
+    const cachedResult = cachedImageTaskResult(existingTask);
+    if (cachedResult) {
+      await sendProviderResult(reply, cachedResult);
+      return;
+    }
+    const taskAccount = existingTask.accountUid ? await accountService.getProviderAccount(existingTask.accountUid) : undefined;
+    const headers = taskAccount
+      ? buildProviderAuthHeaders(taskAccount, options.providerAuthMode)
+      : await providerHeaders(reply);
+    if (!headers) {
+      return;
+    }
+    const result = await pollImageTask(client, params.taskId, existingTask.pollPath, headers);
+    const status = readImageResponseStatus(result.body, result.status);
+    if (existingTask.accountUid && result.status === 200) {
+      await accountService.consumeImageAccount(existingTask.accountUid, existingTask.leaseId, IMAGE_ACCOUNT_COST);
+    } else if (existingTask.accountUid && result.status !== 202) {
+      if (providerResultIndicatesQuotaExhausted(result)) {
+        await accountService.depleteAccount(existingTask.accountUid);
+      } else {
+        await accountService.releaseImageAccount(existingTask.accountUid, existingTask.leaseId);
+      }
+    }
+    await saveImageTaskFromResult(result, existingTask.pollPath, existingTask.accountUid, existingTask.leaseId);
+    if (status === "succeeded" || status === "failed") {
+      await imageTaskStore.upsert({
+        taskId: existingTask.taskId,
+        accountUid: existingTask.accountUid,
+        leaseId: existingTask.leaseId,
+        pollPath: existingTask.pollPath,
+        status,
+        sourceUrl: readFirstImageUrl(result.body),
+        raw: result.body,
+        completedAt: Date.now()
+      });
+    }
+    await sendProviderResult(reply, result);
+  }
+
   app.post("/api/images/generations", async (request, reply) => {
     if (!requireLocalAuth(request, reply)) {
       return;
     }
     await handleImageGeneration(request, reply);
+  });
+
+  app.get("/api/images/generations/:taskId", async (request, reply) => {
+    if (!requireLocalAuth(request, reply)) {
+      return;
+    }
+    await handleGetImageGeneration(request, reply);
   });
 
   app.post("/v1/images/generations", async (request, reply) => {
@@ -1281,6 +1490,13 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       return;
     }
     await handleImageGeneration(request, reply);
+  });
+
+  app.get("/v1/images/generations/:taskId", async (request, reply) => {
+    if (!requirePublicProxyAuth(request, reply)) {
+      return;
+    }
+    await handleGetImageGeneration(request, reply);
   });
 
   app.post("/api/video/generations", handleCreateVideo);

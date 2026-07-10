@@ -17,6 +17,9 @@ export interface AppConfig {
   registrationJobConcurrency: number;
   registrationJobRemoveOnComplete: number;
   registrationJobRemoveOnFail: number;
+  imageAccountWaitMs: number;
+  imageMaxPollAttempts: number;
+  imagePollIntervalMs: number;
 }
 
 export interface MysqlEnvConfig {
@@ -133,6 +136,9 @@ export function loadConfig(env: EnvInput = process.env): AppConfig {
       SMALL_SERVER_REGISTRATION_JOB_CONCURRENCY
     ),
     registrationJobRemoveOnComplete: parsePositiveInt(env.REGISTRATION_JOB_REMOVE_ON_COMPLETE, 50),
-    registrationJobRemoveOnFail: parsePositiveInt(env.REGISTRATION_JOB_REMOVE_ON_FAIL, 100)
+    registrationJobRemoveOnFail: parsePositiveInt(env.REGISTRATION_JOB_REMOVE_ON_FAIL, 100),
+    imageAccountWaitMs: parsePositiveInt(env.IMAGE_ACCOUNT_WAIT_MS, 120_000),
+    imageMaxPollAttempts: parsePositiveInt(env.IMAGE_MAX_POLL_ATTEMPTS, 30),
+    imagePollIntervalMs: parsePositiveInt(env.IMAGE_POLL_INTERVAL_MS, 4_000)
   };
 }

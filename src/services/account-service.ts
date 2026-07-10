@@ -82,6 +82,13 @@ export class AccountService {
     return this.store.leaseActive(leaseId, Date.now() + ttlMs, undefined, minimumBalanceRemaining);
   }
 
+  async leaseModelAccount(
+    leaseId: string,
+    ttlMs: number = 10 * 60 * 1000
+  ): Promise<AccountRecord | undefined> {
+    return this.store.leaseActive(leaseId, Date.now() + ttlMs, undefined, 0);
+  }
+
   async releaseVideoAccount(uid: string, leaseId?: string): Promise<void> {
     await this.store.releaseLease(uid, leaseId);
   }
@@ -90,21 +97,16 @@ export class AccountService {
     await this.store.releaseLease(uid, leaseId);
   }
 
-  async consumeImageAccount(uid: string, leaseId?: string, cost: number = IMAGE_ACCOUNT_COST): Promise<void> {
+  async releaseModelAccount(uid: string, leaseId?: string): Promise<void> {
     const account = await this.store.get(uid);
-    if (!account) {
-      return;
-    }
-    if (leaseId && account.leaseId && account.leaseId !== leaseId) {
-      return;
-    }
-    const nextBalance = Math.max(0, account.balanceRemaining - Math.max(0, cost));
-    await this.store.setBalance(uid, nextBalance, account.balanceTotal);
-    if (nextBalance <= 0) {
-      await this.store.setStatus(uid, "depleted");
+    if (leaseId && account?.leaseId && account.leaseId !== leaseId) {
       return;
     }
     await this.store.markUsed(uid);
+  }
+
+  async consumeImageAccount(uid: string, leaseId?: string, cost: number = IMAGE_ACCOUNT_COST): Promise<void> {
+    await this.store.consumeLease(uid, leaseId, cost);
   }
 
   async depleteAccount(uid: string): Promise<void> {

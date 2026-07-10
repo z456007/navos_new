@@ -6,9 +6,18 @@ export interface ImageGenerationResult {
   sha256?: string;
 }
 
+export type ImageTaskPollPath = "/api/tasks/image/generations" | "/api/tasks/image/edits";
+
+export interface ImageGenerationPollOptions {
+  maxAttempts?: number;
+  intervalMs?: number;
+}
+
 const DEFAULT_IMAGE_MODEL = "gpt-image-2";
 const DEFAULT_IMAGE_SIZE = "1024x1024";
 const DEFAULT_IMAGE_QUALITY = "auto";
+const DEFAULT_IMAGE_POLL_ATTEMPTS = 30;
+const DEFAULT_IMAGE_POLL_INTERVAL_MS = 4000;
 const MAX_IMAGE_COUNT = 4;
 const MAX_REFERENCE_IMAGES = 8;
 const IMAGE_SIZE_PATTERN = /^(auto|\d{2,5}x\d{2,5})$/i;
@@ -41,13 +50,14 @@ export function buildImageGenerationPayload(body: Record<string, unknown>): Reco
 export async function createImageGeneration<T = unknown>(
   client: ProviderHttpClient,
   payload: Record<string, unknown>,
-  headers: Record<string, string>
+  headers: Record<string, string>,
+  options: ImageGenerationPollOptions = {}
 ): Promise<ProviderResult<T>> {
   const references = referenceImagesFromPayload(payload);
   if (references.length > 0) {
-    return createImageEdit(client, payload, references, headers);
+    return createImageEdit(client, payload, references, headers, options);
   }
-  return createTextImageGeneration(client, payload, headers);
+  return createTextImageGeneration(client, payload, headers, options);
 }
 
 export function imageResponseToResults(response: unknown): ImageGenerationResult[] {
@@ -76,17 +86,19 @@ export function imageResponseToResults(response: unknown): ImageGenerationResult
 async function createTextImageGeneration<T = unknown>(
   client: ProviderHttpClient,
   payload: Record<string, unknown>,
-  headers: Record<string, string>
+  headers: Record<string, string>,
+  options: ImageGenerationPollOptions
 ): Promise<ProviderResult<T>> {
   const created = await client.requestJson("POST", "/api/tasks/navos-gpt-image-t2i", stripModelAndReferences(payload), headers);
-  return pollCreatedImageTask(client, created, headers, "/api/tasks/image/generations") as Promise<ProviderResult<T>>;
+  return pollCreatedImageTask(client, created, headers, "/api/tasks/image/generations", options) as Promise<ProviderResult<T>>;
 }
 
 async function createImageEdit<T = unknown>(
   client: ProviderHttpClient,
   payload: Record<string, unknown>,
   references: string[],
-  headers: Record<string, string>
+  headers: Record<string, string>,
+  options: ImageGenerationPollOptions
 ): Promise<ProviderResult<T>> {
   const form = new FormData();
   form.set("prompt", String(payload.prompt ?? ""));
@@ -110,14 +122,15 @@ async function createImageEdit<T = unknown>(
     body: form,
     headers: formHeaders
   });
-  return pollCreatedImageTask(client, created, headers, "/api/tasks/image/edits") as Promise<ProviderResult<T>>;
+  return pollCreatedImageTask(client, created, headers, "/api/tasks/image/edits", options) as Promise<ProviderResult<T>>;
 }
 
 async function pollCreatedImageTask(
   client: ProviderHttpClient,
   created: ProviderResult,
   headers: Record<string, string>,
-  pollBasePath: string
+  pollBasePath: ImageTaskPollPath,
+  options: ImageGenerationPollOptions = {}
 ): Promise<ProviderResult> {
   if (created.status < 200 || created.status >= 300) {
     return created;
@@ -141,52 +154,91 @@ async function pollCreatedImageTask(
     };
   }
 
-  for (let attempt = 0; attempt < 30; attempt += 1) {
+  const maxAttempts = options.maxAttempts ?? DEFAULT_IMAGE_POLL_ATTEMPTS;
+  const intervalMs = options.intervalMs ?? DEFAULT_IMAGE_POLL_INTERVAL_MS;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     if (attempt > 0) {
-      await delay(4000);
+      await delay(intervalMs);
     }
-    const polled = await client.requestJson(
-      "GET",
-      `${pollBasePath}/${encodeURIComponent(taskId)}`,
-      undefined,
-      headers
-    );
-    if (polled.status < 200 || polled.status >= 300) {
+    const polled = await pollImageTask(client, taskId, pollBasePath, headers);
+    if (polled.status !== 202) {
       return polled;
-    }
-    const status = readTaskStatus(polled.body);
-    if (status === "succeeded" || status === "success" || status === "completed") {
-      const results = imageResponseToResults(polled.body);
-      if (results.length === 0) {
-        return {
-          ...polled,
-          status: 502,
-          body: { error: { message: "Image task succeeded but no image URL returned", type: "server_error" } }
-        };
-      }
-      return {
-        ...polled,
-        status: 200,
-        body: {
-          created: Math.floor(Date.now() / 1000),
-          status: "succeeded",
-          task_id: taskId,
-          id: taskId,
-          data: results
-        }
-      };
-    }
-    if (status === "failed" || status === "error" || status === "cancelled" || status === "canceled") {
-      return {
-        ...polled,
-        status: 500,
-        body: { error: { message: readMessage(polled.body) ?? "Image task failed", type: "server_error" }, task_id: taskId, id: taskId }
-      };
     }
   }
 
   return {
     ...created,
+    status: 202,
+    body: {
+      created: Math.floor(Date.now() / 1000),
+      status: "running",
+      task_id: taskId,
+      id: taskId,
+      data: []
+    }
+  };
+}
+
+export async function pollImageTask(
+  client: ProviderHttpClient,
+  taskId: string,
+  pollBasePath: ImageTaskPollPath,
+  headers: Record<string, string>
+): Promise<ProviderResult> {
+  const polled = await client.requestJson(
+    "GET",
+    `${pollBasePath}/${encodeURIComponent(taskId)}`,
+    undefined,
+    headers
+  );
+  if (polled.status < 200 || polled.status >= 300) {
+    return polled;
+  }
+  return normalizePolledImageTask(polled, taskId);
+}
+
+export function imageTaskPollPathForPayload(payload: Record<string, unknown>): ImageTaskPollPath {
+  return referenceImagesFromPayload(payload).length > 0
+    ? "/api/tasks/image/edits"
+    : "/api/tasks/image/generations";
+}
+
+export function readImageTaskId(value: unknown): string | undefined {
+  return readTaskId(value);
+}
+
+function normalizePolledImageTask(polled: ProviderResult, taskId: string): ProviderResult {
+  const status = readTaskStatus(polled.body);
+  if (status === "succeeded" || status === "success" || status === "completed") {
+    const results = imageResponseToResults(polled.body);
+    if (results.length === 0) {
+      return {
+        ...polled,
+        status: 502,
+        body: { error: { message: "Image task succeeded but no image URL returned", type: "server_error" } }
+      };
+    }
+    return {
+      ...polled,
+      status: 200,
+      body: {
+        created: Math.floor(Date.now() / 1000),
+        status: "succeeded",
+        task_id: taskId,
+        id: taskId,
+        data: results
+      }
+    };
+  }
+  if (status === "failed" || status === "error" || status === "cancelled" || status === "canceled") {
+    return {
+      ...polled,
+      status: 500,
+      body: { error: { message: readMessage(polled.body) ?? "Image task failed", type: "server_error" }, task_id: taskId, id: taskId }
+    };
+  }
+  return {
+    ...polled,
     status: 202,
     body: {
       created: Math.floor(Date.now() / 1000),

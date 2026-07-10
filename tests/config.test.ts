@@ -19,6 +19,9 @@ describe("loadConfig", () => {
       REGISTRATION_JOB_CONCURRENCY: "3",
       REGISTRATION_JOB_REMOVE_ON_COMPLETE: "25",
       REGISTRATION_JOB_REMOVE_ON_FAIL: "75",
+      IMAGE_ACCOUNT_WAIT_MS: "45000",
+      IMAGE_MAX_POLL_ATTEMPTS: "90",
+      IMAGE_POLL_INTERVAL_MS: "2000",
       PUBLIC_PROXY_API_KEYS: " sk-public-1,sk-public-2 ,, "
     });
 
@@ -35,6 +38,9 @@ describe("loadConfig", () => {
     expect(config.registrationJobConcurrency).toBe(1);
     expect(config.registrationJobRemoveOnComplete).toBe(25);
     expect(config.registrationJobRemoveOnFail).toBe(75);
+    expect(config.imageAccountWaitMs).toBe(45000);
+    expect(config.imageMaxPollAttempts).toBe(90);
+    expect(config.imagePollIntervalMs).toBe(2000);
     expect(config.publicProxyApiKeys).toEqual(["sk-public-1", "sk-public-2"]);
     expect(config.mysql).toEqual({
       host: "127.0.0.1",
@@ -63,6 +69,9 @@ describe("loadConfig", () => {
     expect(config.registrationJobConcurrency).toBe(1);
     expect(config.registrationJobRemoveOnComplete).toBe(50);
     expect(config.registrationJobRemoveOnFail).toBe(100);
+    expect(config.imageAccountWaitMs).toBe(120000);
+    expect(config.imageMaxPollAttempts).toBe(30);
+    expect(config.imagePollIntervalMs).toBe(4000);
   });
 
   it("ignores legacy YYDS env values because mail config is dynamic", () => {

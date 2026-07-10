@@ -982,6 +982,178 @@ describe("server routes", () => {
     ]);
   });
 
+  it("persists running image tasks and completes them through the image task route", async () => {
+    const store = new InMemoryAccountStore();
+    await store.upsert({ uid: "u1", token: "t1", balanceRemaining: 200, balanceTotal: 200 });
+    let pollCount = 0;
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(store),
+      imageMaxPollAttempts: 1,
+      imagePollIntervalMs: 1,
+      fetchImpl: async (url) => {
+        const path = new URL(String(url)).pathname;
+        if (path === "/api/tasks/navos-gpt-image-t2i") {
+          return Response.json({ code: 200, data: { task_id: "img_async_1", status: "queued" } });
+        }
+        if (path === "/api/tasks/image/generations/img_async_1") {
+          pollCount += 1;
+          if (pollCount === 1) {
+            return Response.json({ code: 200, data: { status: "running" } });
+          }
+          return Response.json({ code: 200, data: { status: "succeeded", url: "https://cdn.test/async.png" } });
+        }
+        return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+      }
+    });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/images/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "high quality icon", n: 1, quality: "high", size: "1024x1024" }
+    });
+
+    expect(created.statusCode).toBe(202);
+    expect(created.json()).toMatchObject({ status: "running", task_id: "img_async_1", data: [] });
+    expect((await store.get("u1"))?.leaseUntil).toBeGreaterThan(Date.now());
+
+    const polled = await app.inject({
+      method: "GET",
+      url: "/api/images/generations/img_async_1",
+      headers: { authorization: "Bearer sk-test" }
+    });
+
+    expect(polled.statusCode).toBe(200);
+    expect(polled.json()).toMatchObject({
+      status: "succeeded",
+      task_id: "img_async_1",
+      data: [{ url: "https://cdn.test/async.png" }]
+    });
+    expect(await store.get("u1")).toMatchObject({ balanceRemaining: 100, leaseUntil: 0 });
+  });
+
+  it("returns a cached completed image task without polling upstream or consuming balance again", async () => {
+    const store = new InMemoryAccountStore();
+    await store.upsert({ uid: "u1", token: "t1", balanceRemaining: 300, balanceTotal: 300 });
+    let pollCount = 0;
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(store),
+      imageMaxPollAttempts: 1,
+      imagePollIntervalMs: 1,
+      fetchImpl: async (url) => {
+        const path = new URL(String(url)).pathname;
+        if (path === "/api/tasks/navos-gpt-image-t2i") {
+          return Response.json({ code: 200, data: { task_id: "img_cached_1", status: "queued" } });
+        }
+        if (path === "/api/tasks/image/generations/img_cached_1") {
+          pollCount += 1;
+          if (pollCount === 1) {
+            return Response.json({ code: 200, data: { status: "running" } });
+          }
+          if (pollCount === 2) {
+            return Response.json({ code: 200, data: { status: "succeeded", url: "https://cdn.test/cached.png" } });
+          }
+        }
+        return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+      }
+    });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/images/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "high quality icon", n: 1, quality: "high", size: "1024x1024" }
+    });
+    expect(created.statusCode).toBe(202);
+
+    const completed = await app.inject({
+      method: "GET",
+      url: "/api/images/generations/img_cached_1",
+      headers: { authorization: "Bearer sk-test" }
+    });
+    expect(completed.statusCode).toBe(200);
+
+    const cached = await app.inject({
+      method: "GET",
+      url: "/api/images/generations/img_cached_1",
+      headers: { authorization: "Bearer sk-test" }
+    });
+
+    expect(cached.statusCode).toBe(200);
+    expect(cached.json()).toMatchObject({
+      status: "succeeded",
+      task_id: "img_cached_1",
+      data: [{ url: "https://cdn.test/cached.png" }]
+    });
+    expect(pollCount).toBe(2);
+    expect(await store.get("u1")).toMatchObject({ balanceRemaining: 200, leaseUntil: 0 });
+  });
+
+  it("waits briefly for a busy image account instead of immediately failing concurrent image requests", async () => {
+    const store = new InMemoryAccountStore();
+    await store.upsert({ uid: "u1", token: "t1", balanceRemaining: 300, balanceTotal: 300 });
+    let taskSeq = 0;
+    let releaseFirstPoll!: () => void;
+    const firstPollMayFinish = new Promise<void>((resolve) => {
+      releaseFirstPoll = resolve;
+    });
+    let firstPollStarted = false;
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(store),
+      imageAccountWaitMs: 1000,
+      imagePollIntervalMs: 1,
+      fetchImpl: async (url) => {
+        const path = new URL(String(url)).pathname;
+        if (path === "/api/tasks/navos-gpt-image-t2i") {
+          taskSeq += 1;
+          return Response.json({ code: 200, data: { task_id: `img_concurrent_${taskSeq}`, status: "queued" } });
+        }
+        if (path === "/api/tasks/image/generations/img_concurrent_1") {
+          firstPollStarted = true;
+          await firstPollMayFinish;
+          return Response.json({ code: 200, data: { status: "succeeded", url: "https://cdn.test/first.png" } });
+        }
+        if (path === "/api/tasks/image/generations/img_concurrent_2") {
+          return Response.json({ code: 200, data: { status: "succeeded", url: "https://cdn.test/second.png" } });
+        }
+        return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+      }
+    });
+
+    const first = app.inject({
+      method: "POST",
+      url: "/api/images/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "first icon", n: 1, quality: "low", size: "1024x1024" }
+    });
+    await vi.waitFor(() => expect(firstPollStarted).toBe(true));
+    const second = app.inject({
+      method: "POST",
+      url: "/api/images/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "second icon", n: 1, quality: "low", size: "1024x1024" }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    releaseFirstPoll();
+
+    const [firstResponse, secondResponse] = await Promise.all([first, second]);
+
+    expect(firstResponse.statusCode).toBe(200);
+    expect(secondResponse.statusCode).toBe(200);
+    expect(firstResponse.json().data[0].url).toBe("https://cdn.test/first.png");
+    expect(secondResponse.json().data[0].url).toBe("https://cdn.test/second.png");
+    expect(await store.get("u1")).toMatchObject({ balanceRemaining: 100, leaseUntil: 0 });
+  });
+
   it("returns successful image outputs without COS archive metadata", async () => {
     const store = new InMemoryAccountStore();
     await store.upsert({ uid: "u1", token: "t1", balanceRemaining: 200, balanceTotal: 200 });
@@ -1882,6 +2054,45 @@ describe("server routes", () => {
       "Bearer auto-shared-1:auto-shared-token-1",
       "Bearer auto-shared-1:auto-shared-token-1"
     ]);
+  });
+
+  it("leases model accounts so concurrent chat requests spread across the active pool", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    for (const uid of ["u1", "u2", "u3", "u4"]) {
+      await accountService.importAccount({ uid, token: `token-${uid}`, balanceRemaining: 1000, balanceTotal: 1000 });
+    }
+    const usedUids: string[] = [];
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      fetchImpl: async (_url, init) => {
+        const authorization = String((init?.headers as Record<string, string>).authorization ?? "");
+        usedUids.push(authorization.replace(/^Bearer\s+/i, "").split(":")[0] ?? "");
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return Response.json({
+          id: "chatcmpl_1",
+          object: "chat.completion",
+          choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }]
+        });
+      }
+    });
+
+    const responses = await Promise.all(Array.from({ length: 8 }, (_, index) => app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: { authorization: "Bearer sk-test" },
+      payload: {
+        model: "gpt-5.5",
+        messages: [{ role: "user", content: `hello ${index}` }]
+      }
+    })));
+
+    expect(responses.map((response) => response.statusCode)).toEqual([200, 200, 200, 200, 200, 200, 200, 200]);
+    expect(usedUids.slice(0, 4).sort()).toEqual(["u1", "u2", "u3", "u4"]);
+    expect(new Set(usedUids.slice(4)).size).toBeGreaterThan(1);
   });
 
   it("does not repeatedly auto-register within one failing model request", async () => {

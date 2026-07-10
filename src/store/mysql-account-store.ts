@@ -1,4 +1,4 @@
-import mysql, { type Pool, type RowDataPacket } from "mysql2/promise";
+import mysql, { type Pool, type ResultSetHeader, type RowDataPacket } from "mysql2/promise";
 import type { AccountImportInput, AccountRecord, AccountStatus, AccountStore } from "./account-store.js";
 
 export interface MysqlConfig {
@@ -199,6 +199,23 @@ export class MysqlAccountStore implements AccountStore {
       return;
     }
     await this.pool.execute("UPDATE accounts SET lease_id = NULL, lease_until = 0 WHERE uid = :uid", { uid });
+  }
+
+  async consumeLease(uid: string, leaseId: string | undefined, cost: number, nowMs: number = Date.now()): Promise<boolean> {
+    const normalizedCost = Math.max(0, cost);
+    const [result] = await this.pool.execute<ResultSetHeader>(
+      `UPDATE accounts
+       SET status = CASE WHEN balance_remaining <= :cost THEN 'depleted' ELSE status END,
+           balance_remaining = GREATEST(0, balance_remaining - :cost),
+           last_balance_at = :nowMs,
+           last_used_at = :nowMs,
+           lease_id = NULL,
+           lease_until = 0
+       WHERE uid = :uid
+         AND (:leaseId IS NULL OR lease_id = :leaseId)`,
+      { uid, leaseId: leaseId ?? null, cost: normalizedCost, nowMs }
+    );
+    return result.affectedRows > 0;
   }
 
   async markUsed(uid: string, usedAtMs: number = Date.now()): Promise<void> {
