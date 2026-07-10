@@ -12,6 +12,7 @@ import { YydsMailConfigService } from "./services/yyds-mail-config-service.js";
 import { SecretBox } from "./security/secretbox.js";
 import { MysqlImageTaskStore } from "./store/image-task-store.js";
 import { MysqlAccountStore } from "./store/mysql-account-store.js";
+import { MysqlYydsDomainPoolStore } from "./store/yyds-domain-pool-store.js";
 import { MysqlYydsMailConfigStore } from "./store/yyds-mail-config-store.js";
 import { MysqlVideoTaskStore } from "./store/video-task-store.js";
 
@@ -25,10 +26,12 @@ const config = loadConfig();
 await MysqlAccountStore.createDatabaseIfMissing(config.mysql);
 const accountStore = new MysqlAccountStore(config.mysql);
 const yydsMailConfigStore = new MysqlYydsMailConfigStore(config.mysql);
+const yydsDomainPoolStore = new MysqlYydsDomainPoolStore(config.mysql);
 const imageTaskStore = new MysqlImageTaskStore(config.mysql);
 const videoTaskStore = new MysqlVideoTaskStore(config.mysql);
 await accountStore.ensureSchema();
 await yydsMailConfigStore.ensureSchema();
+await yydsDomainPoolStore.ensureSchema();
 await imageTaskStore.ensureSchema();
 await videoTaskStore.ensureSchema();
 
@@ -94,6 +97,7 @@ const app = createApp({
   accountService,
   yydsMailConfigSecret: config.masterApiKey,
   yydsMailConfigStore,
+  yydsDomainPoolStore,
   imageTaskStore,
   videoTaskStore,
   vipClient,

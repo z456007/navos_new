@@ -11,6 +11,7 @@ import { InMemoryAccountStore } from "../src/store/account-store.js";
 import { InMemoryYydsMailConfigStore } from "../src/store/yyds-mail-config-store.js";
 import { SecretBox } from "../src/security/secretbox.js";
 import { InMemoryVideoTaskStore } from "../src/store/video-task-store.js";
+import { InMemoryYydsDomainPoolStore } from "../src/store/yyds-domain-pool-store.js";
 
 async function startFakeUpstream(
   handler: (request: IncomingMessage, response: ServerResponse) => void | Promise<void>
@@ -46,6 +47,93 @@ function uidFromAuthorization(authorization: string | undefined): string {
 }
 
 describe("server routes", () => {
+  it("protects and returns YYDS domain pool state", async () => {
+    const domainStore = new InMemoryYydsDomainPoolStore();
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+      yydsDomainPoolStore: domainStore,
+      yydsDomainFetchImpl: async () => [
+        { domain: "healthy.test", isPublic: true, isVerified: true, isMxValid: true, dnsRecords: { status: "healthy", receivingReady: true } }
+      ],
+      fetchImpl: async () => Response.json({ ok: true })
+    });
+
+    expect((await app.inject({ method: "GET", url: "/api/mail/yyds/domains" })).statusCode).toBe(401);
+
+    const publicKeyRefresh = await app.inject({
+      method: "POST",
+      url: "/api/mail/yyds/domains/refresh",
+      headers: { authorization: "Bearer sk-public" }
+    });
+    expect(publicKeyRefresh.statusCode).toBe(401);
+
+    const refresh = await app.inject({ method: "POST", url: "/api/mail/yyds/domains/refresh", headers: { authorization: "Bearer sk-test" } });
+    expect(refresh.statusCode).toBe(200);
+    expect(refresh.json().eligible).toEqual([{ domain: "healthy.test" }]);
+
+    const listed = await app.inject({ method: "GET", url: "/api/mail/yyds/domains", headers: { authorization: "Bearer sk-test" } });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json().domains[0]).toMatchObject({ domain: "healthy.test", status: "active" });
+  });
+
+  it("roundtrips YYDS domain pool config through protected routes", async () => {
+    const domainStore = new InMemoryYydsDomainPoolStore();
+    const app = createApp({
+      masterApiKey: "sk-test",
+      publicProxyApiKeys: ["sk-public"],
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+      yydsDomainPoolStore: domainStore,
+      fetchImpl: async () => Response.json({ ok: true })
+    });
+
+    expect((await app.inject({
+      method: "PUT",
+      url: "/api/mail/yyds/domain-pool/config",
+      payload: { enabled: false }
+    })).statusCode).toBe(401);
+
+    expect((await app.inject({
+      method: "PUT",
+      url: "/api/mail/yyds/domain-pool/config",
+      headers: { authorization: "Bearer sk-public" },
+      payload: { enabled: false }
+    })).statusCode).toBe(401);
+
+    const saved = await app.inject({
+      method: "PUT",
+      url: "/api/mail/yyds/domain-pool/config",
+      headers: { authorization: "Bearer sk-test" },
+      payload: {
+        enabled: false,
+        mode: "whitelist",
+        whitelist: [" Example.COM ", "", "SECOND.test"],
+        blacklist: ["BLOCKED.TEST"],
+        refreshIntervalMinutes: 45
+      }
+    });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json()).toEqual({
+      enabled: false,
+      mode: "whitelist",
+      whitelist: ["example.com", "second.test"],
+      blacklist: ["blocked.test"],
+      refreshIntervalMinutes: 45
+    });
+
+    const listed = await app.inject({
+      method: "GET",
+      url: "/api/mail/yyds/domains",
+      headers: { authorization: "Bearer sk-test" }
+    });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json().config).toEqual(saved.json());
+  });
+
   it("does not serve the built-in admin page from the backend", async () => {
     const app = createApp({
       masterApiKey: "sk-test",

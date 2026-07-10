@@ -35,6 +35,7 @@ import {
 } from "../protocols/video.js";
 import { YydsMailClient, YydsMailError } from "../protocols/mail/yyds-mail.js";
 import { AccountService, IMAGE_ACCOUNT_COST } from "../services/account-service.js";
+import { YydsDomainPool, type YydsFetchedDomain } from "../services/yyds-domain-pool.js";
 import {
   YydsMailConfigDecryptError,
   YydsMailConfigService,
@@ -43,6 +44,7 @@ import {
 import { SecretBox } from "../security/secretbox.js";
 import { InMemoryAccountStore, type AccountRecord } from "../store/account-store.js";
 import { InMemoryImageTaskStore, type ImageTaskRecord, type ImageTaskStore } from "../store/image-task-store.js";
+import { InMemoryYydsDomainPoolStore, type YydsDomainPoolConfig, type YydsDomainPoolMode, type YydsDomainPoolStore } from "../store/yyds-domain-pool-store.js";
 import { InMemoryYydsMailConfigStore, type YydsMailConfigStore } from "../store/yyds-mail-config-store.js";
 import { InMemoryVideoTaskStore, type VideoTaskRecord, type VideoTaskStore } from "../store/video-task-store.js";
 import type { RegistrationService } from "../services/registration-service.js";
@@ -63,6 +65,8 @@ export interface CreateAppOptions {
   yydsMailBaseUrl?: string;
   yydsMailConfigSecret?: string;
   yydsMailConfigStore?: YydsMailConfigStore;
+  yydsDomainPoolStore?: YydsDomainPoolStore;
+  yydsDomainFetchImpl?: () => Promise<unknown[]>;
   imageTaskStore?: ImageTaskStore;
   videoTaskStore?: VideoTaskStore;
   fetchImpl?: FetchLike;
@@ -111,6 +115,7 @@ const MODEL_PROXY_RETRY_COOLDOWN_SECONDS = 30;
 const DEFAULT_IMAGE_ACCOUNT_WAIT_MS = 120_000;
 const DEFAULT_MODEL_ACCOUNT_WAIT_MS = 30_000;
 const ACCOUNT_WAIT_POLL_INTERVAL_MS = 100;
+const DEFAULT_YYDS_DOMAINS_URL = "https://maliapi.215.im/v1/domains";
 
 function headersFromRequest(request: FastifyRequest): HeaderBag {
   const headers: HeaderBag = {};
@@ -471,10 +476,62 @@ function normalizeSecretRoot(value: string): string {
   return value.length >= 32 ? value : createHash("sha256").update(value).digest("hex");
 }
 
+async function fetchPublicYydsDomains(fetchImpl: FetchLike = fetch): Promise<YydsFetchedDomain[]> {
+  const response = await fetchImpl(DEFAULT_YYDS_DOMAINS_URL);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch YYDS public domains: ${response.status} ${response.statusText}`.trim());
+  }
+
+  const body = await response.json() as unknown;
+  const domains = Array.isArray(body)
+    ? body
+    : isPlainRecordValue(body) && Array.isArray(body.data)
+      ? body.data
+      : [];
+  return domains.filter(isPlainRecordValue).map((item) => item as unknown as YydsFetchedDomain);
+}
+
+function normalizeDomainPoolConfigInput(
+  body: Record<string, unknown>,
+  current: YydsDomainPoolConfig
+): YydsDomainPoolConfig {
+  return {
+    enabled: typeof body.enabled === "boolean" ? body.enabled : current.enabled,
+    mode: parseYydsDomainPoolMode(body.mode) ?? current.mode,
+    whitelist: Array.isArray(body.whitelist) ? normalizeDomainStringList(body.whitelist) : current.whitelist,
+    blacklist: Array.isArray(body.blacklist) ? normalizeDomainStringList(body.blacklist) : current.blacklist,
+    refreshIntervalMinutes: parsePositiveInteger(body.refreshIntervalMinutes) ?? current.refreshIntervalMinutes
+  };
+}
+
+function parseYydsDomainPoolMode(value: unknown): YydsDomainPoolMode | undefined {
+  return value === "auto" || value === "whitelist" || value === "auto-plus-whitelist" ? value : undefined;
+}
+
+function normalizeDomainStringList(value: unknown[]): string[] {
+  return Array.from(new Set(
+    value
+      .filter((item): item is string => typeof item === "string")
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean)
+  ));
+}
+
+function parsePositiveInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
 export function createApp(options: CreateAppOptions): FastifyInstance {
   const app = Fastify({ logger: false, bodyLimit: JSON_BODY_LIMIT_BYTES });
   const accountService = options.accountService ?? new AccountService(new InMemoryAccountStore(options.defaultAccount));
   const yydsMailConfigStore = options.yydsMailConfigStore ?? new InMemoryYydsMailConfigStore();
+  const yydsDomainPoolStore = options.yydsDomainPoolStore ?? new InMemoryYydsDomainPoolStore();
+  const yydsDomainPool = new YydsDomainPool({
+    store: yydsDomainPoolStore,
+    fetchDomains: async () => (options.yydsDomainFetchImpl
+      ? (await options.yydsDomainFetchImpl()).filter(isPlainRecordValue).map((item) => item as unknown as YydsFetchedDomain)
+      : fetchPublicYydsDomains(options.fetchImpl))
+  });
   const yydsMailConfigService = new YydsMailConfigService(
     yydsMailConfigStore,
     new SecretBox(
@@ -1155,6 +1212,33 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     } catch (error) {
       await sendBadRequest(reply, error);
     }
+  });
+
+  app.get("/api/mail/yyds/domains", async (request, reply) => {
+    if (!requireLocalAuth(request, reply)) {
+      return;
+    }
+    await reply.send({
+      config: await yydsDomainPoolStore.getConfig(),
+      domains: await yydsDomainPool.listCandidates()
+    });
+  });
+
+  app.post("/api/mail/yyds/domains/refresh", async (request, reply) => {
+    if (!requireLocalAuth(request, reply)) {
+      return;
+    }
+    await reply.send(await yydsDomainPool.refresh());
+  });
+
+  app.put("/api/mail/yyds/domain-pool/config", async (request, reply) => {
+    if (!requireLocalAuth(request, reply)) {
+      return;
+    }
+    const current = await yydsDomainPoolStore.getConfig();
+    const next = normalizeDomainPoolConfigInput(bodyRecord(request), current);
+    await yydsDomainPoolStore.saveConfig(next);
+    await reply.send(await yydsDomainPoolStore.getConfig());
   });
 
   app.post("/api/accounts/:uid/enable", async (request, reply) => {
