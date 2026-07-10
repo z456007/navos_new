@@ -612,9 +612,102 @@ function buildAnthropicMessagesPassthroughBody(body: Record<string, unknown>, re
   out.model = normalizeClaudeModel(requestedModel);
   out.max_tokens = readNumber(body.max_tokens) ?? readNumber(body.max_completion_tokens) ?? 2048;
   const messages = Array.isArray(body.messages) ? body.messages : [];
-  out.messages = messages;
+  out.messages = normalizeAnthropicPassthroughMessages(messages);
   out.system = buildClaudeSystemPrompt(requestedModel, body, messages);
   return out;
+}
+
+function normalizeAnthropicPassthroughMessages(messages: unknown[]): unknown[] {
+  const out: unknown[] = [];
+  for (const message of messages) {
+    if (!message || typeof message !== "object" || Array.isArray(message)) {
+      out.push(message);
+      continue;
+    }
+    const record = message as Record<string, unknown>;
+    const normalized = normalizeAnthropicPassthroughContent(record.content);
+    out.push({ ...record, content: normalized.content });
+    if (normalized.liftedImages.length > 0) {
+      out.push({
+        role: readString(record.role) ?? "user",
+        content: [
+          {
+            type: "text",
+            text: "The previous tool result returned image content. Inspect the attached image when answering."
+          },
+          ...normalized.liftedImages
+        ]
+      });
+    }
+  }
+  return out;
+}
+
+function normalizeAnthropicPassthroughContent(content: unknown): { content: unknown; liftedImages: unknown[] } {
+  if (!Array.isArray(content)) {
+    return { content, liftedImages: [] };
+  }
+  const out: unknown[] = [];
+  const liftedImages: unknown[] = [];
+  for (const item of content) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      out.push(item);
+      continue;
+    }
+    const record = item as Record<string, unknown>;
+    const type = readString(record.type);
+    if (type === "tool_result" || type === "tool_use_result") {
+      const normalized = normalizeAnthropicToolResultContent(record.content);
+      out.push({ ...record, content: normalized.content });
+      liftedImages.push(...normalized.liftedImages);
+      continue;
+    }
+    const imageBlock = anthropicImageBlockFromContentPart(record);
+    out.push(imageBlock ?? item);
+  }
+  return { content: out, liftedImages };
+}
+
+function normalizeAnthropicToolResultContent(content: unknown): { content: unknown; liftedImages: unknown[] } {
+  if (!Array.isArray(content)) {
+    return { content, liftedImages: [] };
+  }
+
+  const keptContent: unknown[] = [];
+  const liftedImages: unknown[] = [];
+  for (const item of content) {
+    if (item && typeof item === "object" && !Array.isArray(item)) {
+      const imageBlock = anthropicImageBlockFromContentPart(item as Record<string, unknown>);
+      if (imageBlock) {
+        liftedImages.push(imageBlock);
+        continue;
+      }
+    }
+    keptContent.push(item);
+  }
+
+  return {
+    content: keptContent.length > 0
+      ? keptContent
+      : [{ type: "text", text: "(image content attached below)" }],
+    liftedImages
+  };
+}
+
+function anthropicImageBlockFromContentPart(record: Record<string, unknown>): Record<string, unknown> | undefined {
+  const type = readString(record.type);
+  if (type === "image" && record.source) {
+    return record;
+  }
+  const imageUrl = readImageUrl(record);
+  if (!imageUrl) {
+    return undefined;
+  }
+  const imageBlock = anthropicImageBlockFromUrl(imageUrl);
+  if (record.cache_control !== undefined) {
+    imageBlock.cache_control = record.cache_control;
+  }
+  return imageBlock;
 }
 
 function buildClaudeSystemPrompt(

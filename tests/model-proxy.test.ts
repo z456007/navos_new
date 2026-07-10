@@ -453,6 +453,85 @@ describe("model proxy", () => {
     }]);
   });
 
+  it("lifts native Claude Code tool_result images for Anthropic messages passthrough", async () => {
+    let capturedBody: Record<string, unknown> = {};
+    const client = new ProviderHttpClient("https://upstream.test", async (_url, init) => {
+      capturedBody = JSON.parse(String(init?.body));
+      return Response.json({
+        id: "msg_native_tool_result_vision",
+        type: "message",
+        role: "assistant",
+        model: "claude.opus-4.8",
+        content: [{ type: "text", text: "code screenshot" }]
+      });
+    });
+
+    await forwardModelRequest(client, {
+      method: "POST",
+      path: "/v1/messages",
+      body: {
+        model: "claude-opus-4-8",
+        messages: [
+          {
+            role: "assistant",
+            content: [{
+              type: "tool_use",
+              id: "toolu_read_image",
+              name: "Read",
+              input: { file_path: "screenshot.png" }
+            }]
+          },
+          {
+            role: "user",
+            content: [{
+              type: "tool_result",
+              tool_use_id: "toolu_read_image",
+              content: [
+                { type: "text", text: "Read image file screenshot.png" },
+                {
+                  type: "image",
+                  source: { type: "base64", media_type: "image/png", data: "Ymx1ZQ==" }
+                }
+              ]
+            }]
+          }
+        ],
+        max_tokens: 64
+      },
+      headers: { "x-api-key": "t" }
+    });
+
+    expect(capturedBody.messages).toEqual([
+      {
+        role: "assistant",
+        content: [{
+          type: "tool_use",
+          id: "toolu_read_image",
+          name: "Read",
+          input: { file_path: "screenshot.png" }
+        }]
+      },
+      {
+        role: "user",
+        content: [{
+          type: "tool_result",
+          tool_use_id: "toolu_read_image",
+          content: [{ type: "text", text: "Read image file screenshot.png" }]
+        }]
+      },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "The previous tool result returned image content. Inspect the attached image when answering." },
+          {
+            type: "image",
+            source: { type: "base64", media_type: "image/png", data: "Ymx1ZQ==" }
+          }
+        ]
+      }
+    ]);
+  });
+
   it("rejects unsupported proxy paths", async () => {
     const client = new ProviderHttpClient("https://upstream.test", async () => Response.json({}));
     await expect(forwardModelRequest(client, {
