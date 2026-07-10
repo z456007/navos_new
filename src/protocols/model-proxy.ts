@@ -160,7 +160,14 @@ async function forwardChatCompletion<T = unknown>(
   const model = readString(body.model) ?? "sonnet-4.6";
   const openAiModel = resolveOpenAiModel(model);
   if (openAiModel) {
-    return client.requestJson<T>("POST", "/chat/completions", buildOpenAiChatBody(body, openAiModel), request.headers);
+    const result = await client.requestJson("POST", "/responses", buildOpenAiResponsesBody(body, openAiModel), request.headers);
+    if (result.status < 200 || result.status >= 300) {
+      return result as ProviderResult<T>;
+    }
+    return {
+      ...result,
+      body: openAiResponseToChat(result.body, model) as T
+    };
   }
 
   const result = await client.requestJson("POST", "/v1/messages", buildAnthropicMessagesBody(body, model), {
@@ -197,6 +204,55 @@ function buildOpenAiChatBody(body: Record<string, unknown>, model: string): Reco
     out.reasoning_effort = "high";
   }
   return out;
+}
+
+function buildOpenAiResponsesBody(body: Record<string, unknown>, model: string): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  out.model = model;
+  out.input = body.input ?? responseInputFromMessages(Array.isArray(body.messages) ? body.messages : []);
+
+  const instructions = [
+    collectContent(body.instructions),
+    collectContent(body.system),
+    ...(Array.isArray(body.messages) ? body.messages : [])
+      .filter((message): message is Record<string, unknown> => Boolean(message) && typeof message === "object" && readString((message as Record<string, unknown>).role) === "system")
+      .map((message) => collectContent(message.content))
+  ].filter(Boolean);
+  if (instructions.length > 0) {
+    out.instructions = instructions.join("\n\n");
+  }
+
+  const maxTokens = readNumber(body.max_output_tokens)
+    ?? readNumber(body.max_completion_tokens)
+    ?? readNumber(body.max_tokens);
+  if (maxTokens !== undefined) {
+    out.max_output_tokens = Math.max(16, maxTokens);
+  }
+
+  for (const key of ["temperature", "top_p", "parallel_tool_calls", "reasoning", "text", "tool_choice", "tools"]) {
+    if (body[key] !== undefined) {
+      out[key] = body[key];
+    }
+  }
+  return out;
+}
+
+function responseInputFromMessages(messages: unknown[]): unknown {
+  const converted = messages
+    .filter((message): message is Record<string, unknown> => Boolean(message) && typeof message === "object")
+    .filter((message) => readString(message.role) !== "system")
+    .map((message) => ({
+      role: readString(message.role) === "assistant" ? "assistant" : "user",
+      content: normalizeResponseContent(message.content)
+    }));
+  return converted.length > 0 ? converted : "";
+}
+
+function normalizeResponseContent(value: unknown): unknown {
+  if (typeof value === "string") {
+    return value;
+  }
+  return collectContent(value);
 }
 
 function buildAnthropicMessagesBody(body: Record<string, unknown>, requestedModel: string): Record<string, unknown> {
@@ -340,6 +396,65 @@ function anthropicMessageToOpenAiChat(value: unknown, requestedModel: string): R
       total_tokens: inputTokens + outputTokens
     }
   };
+}
+
+function openAiResponseToChat(value: unknown, requestedModel: string): Record<string, unknown> {
+  const record = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const usage = record.usage && typeof record.usage === "object" ? record.usage as Record<string, unknown> : {};
+  const inputTokens = readNumber(usage.input_tokens) ?? 0;
+  const outputTokens = readNumber(usage.output_tokens) ?? 0;
+  const totalTokens = readNumber(usage.total_tokens) ?? inputTokens + outputTokens;
+  return {
+    id: readString(record.id) ?? `chatcmpl-${Date.now()}`,
+    object: "chat.completion",
+    created: readNumber(record.created_at) ?? Math.floor(Date.now() / 1000),
+    model: readString(record.model) ?? requestedModel,
+    choices: [{
+      index: 0,
+      message: {
+        role: "assistant",
+        content: outputTextFromOpenAiResponse(record.output)
+      },
+      finish_reason: mapOpenAiResponseStatus(readString(record.status))
+    }],
+    usage: {
+      prompt_tokens: inputTokens,
+      completion_tokens: outputTokens,
+      total_tokens: totalTokens
+    }
+  };
+}
+
+function outputTextFromOpenAiResponse(output: unknown): string {
+  if (!Array.isArray(output)) {
+    return collectContent(output);
+  }
+  return output.map((item) => {
+    if (!item || typeof item !== "object") {
+      return collectContent(item);
+    }
+    const record = item as Record<string, unknown>;
+    if (Array.isArray(record.content)) {
+      return record.content.map((content) => {
+        if (!content || typeof content !== "object") {
+          return collectContent(content);
+        }
+        const contentRecord = content as Record<string, unknown>;
+        return collectContent(contentRecord.text ?? contentRecord.content);
+      }).join("");
+    }
+    return collectContent(record.text ?? record.content);
+  }).join("");
+}
+
+function mapOpenAiResponseStatus(status: string | undefined): string {
+  if (status === "incomplete") {
+    return "length";
+  }
+  if (status === "failed" || status === "cancelled") {
+    return "error";
+  }
+  return "stop";
 }
 
 function toolCallsFromAnthropicContent(contentBlocks: unknown[]): Record<string, unknown> {

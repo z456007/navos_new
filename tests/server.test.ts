@@ -339,7 +339,7 @@ describe("server routes", () => {
     });
     expect(codex.statusCode).toBe(200);
     expect(forwarded[0]).toMatchObject({
-      path: "/chat/completions",
+      path: "/responses",
       body: { model: "openai.gpt-5.3-codex" }
     });
 

@@ -46,20 +46,30 @@ describe("model proxy", () => {
     });
   });
 
-  it("routes GPT chat completions through the backend OpenAI completions path", async () => {
+  it("routes GPT chat completions through the backend OpenAI responses path", async () => {
     let capturedUrl = "";
     let capturedBody: Record<string, unknown> = {};
     const client = new ProviderHttpClient("https://upstream.test", async (url, init) => {
       capturedUrl = String(url);
       capturedBody = JSON.parse(String(init?.body));
-      return Response.json({ id: "chatcmpl_1" });
+      return Response.json({
+        id: "resp_1",
+        model: "gpt-5.3-codex",
+        output: [{
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "OK" }]
+        }],
+        usage: { input_tokens: 10, output_tokens: 3, total_tokens: 13 }
+      });
     });
 
-    await forwardModelRequest(client, {
+    const result = await forwardModelRequest(client, {
       method: "POST",
       path: "/v1/chat/completions",
       body: {
         model: "gpt-5.5",
+        system: "Be terse.",
         messages: [{ role: "user", content: "Reply OK only." }],
         max_tokens: 8,
         stream: false
@@ -67,10 +77,18 @@ describe("model proxy", () => {
       headers: { authorization: "Bearer t" }
     });
 
-    expect(capturedUrl).toBe("https://upstream.test/chat/completions");
+    expect(capturedUrl).toBe("https://upstream.test/responses");
     expect(capturedBody.model).toBe("openai.gpt-5.5");
-    expect(capturedBody.max_completion_tokens).toBe(8);
+    expect(capturedBody.max_output_tokens).toBe(16);
+    expect(capturedBody.instructions).toBe("Be terse.");
+    expect(capturedBody.input).toEqual([{ role: "user", content: "Reply OK only." }]);
     expect(capturedBody).not.toHaveProperty("max_tokens");
+    expect(result.body).toMatchObject({
+      object: "chat.completion",
+      model: "gpt-5.3-codex",
+      choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 }
+    });
   });
 
   it("rejects unsupported proxy paths", async () => {
