@@ -1,10 +1,27 @@
 import { randomBytes } from "node:crypto";
 import type { FetchLike } from "../http.js";
 
+export type YydsFailureKind =
+  | "rate_limited"
+  | "quota_exhausted"
+  | "domain_rejected"
+  | "mailbox_create_failed"
+  | "message_poll_failed"
+  | "verification_timeout"
+  | "unknown";
+
+export interface CreateMailboxInput {
+  localPart?: string;
+  domain?: string;
+  subdomain?: string;
+}
+
 export interface YydsMailbox {
   address: string;
   id?: string;
   token?: string;
+  domain?: string;
+  subdomain?: string;
 }
 
 export interface YydsMailClientOptions {
@@ -22,12 +39,22 @@ export interface YydsMailboxAuth {
 export class YydsMailError extends Error {
   readonly status: number;
   readonly details: unknown;
+  readonly failureKind: YydsFailureKind;
+  readonly retryAfterSeconds?: number;
 
-  constructor(message: string, status: number, details: unknown) {
+  constructor(
+    message: string,
+    status: number,
+    details: unknown,
+    failureKind: YydsFailureKind = "unknown",
+    retryAfterSeconds?: number
+  ) {
     super(message);
     this.name = "YydsMailError";
     this.status = status;
     this.details = details;
+    this.failureKind = failureKind;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 
@@ -44,15 +71,29 @@ export class YydsMailClient {
     this.localPartFactory = options.localPartFactory ?? defaultLocalPart;
   }
 
-  async createMailbox(): Promise<YydsMailbox> {
+  async createMailbox(input: CreateMailboxInput = {}): Promise<YydsMailbox> {
     if (!this.apiKey) {
       throw new YydsMailError("YYDS Mail API key is not configured", 500, undefined);
     }
 
-    const data = await this.request<{ address?: unknown; id?: unknown; token?: unknown }>("/accounts", {
+    const body: Record<string, string> = { localPart: input.localPart ?? this.localPartFactory() };
+    if (input.domain) {
+      body.domain = input.domain;
+    }
+    if (input.subdomain) {
+      body.subdomain = input.subdomain;
+    }
+
+    const data = await this.request<{
+      address?: unknown;
+      id?: unknown;
+      token?: unknown;
+      domain?: unknown;
+      subdomain?: unknown;
+    }>("/accounts", {
       method: "POST",
       headers: this.headers({ json: true, apiKey: true }),
-      body: JSON.stringify({ localPart: this.localPartFactory() })
+      body: JSON.stringify(body)
     });
 
     if (typeof data.address !== "string" || !data.address) {
@@ -62,7 +103,9 @@ export class YydsMailClient {
     return {
       address: data.address,
       id: typeof data.id === "string" ? data.id : undefined,
-      token: typeof data.token === "string" ? data.token : undefined
+      token: typeof data.token === "string" ? data.token : undefined,
+      domain: typeof data.domain === "string" ? data.domain : input.domain,
+      subdomain: typeof data.subdomain === "string" ? data.subdomain : input.subdomain
     };
   }
 
@@ -127,7 +170,9 @@ export class YydsMailClient {
     const raw = await readBody(response);
     const parsed = parseJson(raw);
     if (!response.ok || parsedSuccessFalse(parsed)) {
-      throw new YydsMailError(errorMessage(parsed, raw), response.status, parsed ?? raw);
+      const retryAfterSeconds = parseRetryAfter(response.headers.get("retry-after"));
+      const kind = classifyYydsFailure(response.status, parsed, raw);
+      throw new YydsMailError(errorMessage(parsed, raw), response.status, parsed ?? raw, kind, retryAfterSeconds);
     }
     return unwrapData(parsed) as T;
   }
@@ -208,6 +253,32 @@ function errorMessage(parsed: unknown, raw: string): string {
     }
   }
   return `YYDS Mail request failed: ${raw.slice(0, 200)}`;
+}
+
+function parseRetryAfter(value: string | null): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function classifyYydsFailure(status: number, parsed: unknown, raw: string): YydsFailureKind {
+  const record = parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
+  const errorCode = typeof record.errorCode === "string" ? record.errorCode : "";
+  const message = [record.error, record.message, raw]
+    .filter((item): item is string => typeof item === "string")
+    .join(" ");
+  if (status === 429 && errorCode === "quota_exhausted") {
+    return "quota_exhausted";
+  }
+  if (status === 429 || /too many account creation requests|rate.?limit/i.test(message)) {
+    return "rate_limited";
+  }
+  if (/domain/i.test(message)) {
+    return "domain_rejected";
+  }
+  return "unknown";
 }
 
 function readString(value: unknown, keys: string[]): string | undefined {

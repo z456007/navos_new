@@ -34,6 +34,43 @@ describe("YydsMailClient", () => {
     expect(calls[0]?.init.body).toBe(JSON.stringify({ localPart: "navos-test" }));
   });
 
+  it("creates a mailbox with an explicit domain when provided", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const client = new YydsMailClient({
+      baseUrl: "https://mail.test/v1",
+      apiKey: "ac-test",
+      localPartFactory: () => "navos-test",
+      fetchImpl: async (url, init) => {
+        calls.push({ url: String(url), init: init ?? {} });
+        return Response.json({
+          success: true,
+          data: { address: "navos-test@healthy.test", id: "m1", token: "mail-token", domain: "healthy.test", subdomain: "" }
+        });
+      }
+    });
+
+    const mailbox = await client.createMailbox({ domain: "healthy.test" });
+
+    expect(mailbox).toMatchObject({ address: "navos-test@healthy.test", domain: "healthy.test" });
+    expect(calls[0]?.init.body).toBe(JSON.stringify({ localPart: "navos-test", domain: "healthy.test" }));
+  });
+
+  it("classifies quota exhausted responses separately from normal rate limits", async () => {
+    const quotaClient = new YydsMailClient({
+      baseUrl: "https://mail.test/v1",
+      apiKey: "ac-test",
+      fetchImpl: async () => Response.json(
+        { success: false, error: "quota exhausted", errorCode: "quota_exhausted" },
+        { status: 429, headers: { "Retry-After": "28800" } }
+      )
+    });
+    await expect(quotaClient.createMailbox()).rejects.toMatchObject({
+      status: 429,
+      failureKind: "quota_exhausted",
+      retryAfterSeconds: 28800
+    });
+  });
+
   it("lists and reads messages with mailbox bearer token and address query", async () => {
     const urls: string[] = [];
     const client = new YydsMailClient({
