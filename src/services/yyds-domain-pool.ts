@@ -6,8 +6,9 @@ import {
   type YydsDomainPoolMode,
   type YydsDomainPoolStore
 } from "../store/yyds-domain-pool-store.js";
+import type { YydsFailureKind } from "../protocols/mail/yyds-mail.js";
 
-export type YydsFailureKind = "verification_timeout" | "rate_limited" | "quota_exhausted" | "other";
+export type { YydsFailureKind } from "../protocols/mail/yyds-mail.js";
 
 export interface YydsDomainCandidate {
   domain: string;

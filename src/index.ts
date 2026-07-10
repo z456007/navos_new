@@ -8,7 +8,7 @@ import { BullmqRegistrationQueue } from "./services/bullmq-registration-queue.js
 import { RegistrationJobService } from "./services/registration-job-service.js";
 import { RegistrationService } from "./services/registration-service.js";
 import { createRegistrationWorker } from "./services/registration-worker.js";
-import { normalizeYydsDomainPoolConfig } from "./services/yyds-domain-pool.js";
+import { normalizeYydsDomainPoolConfig, YydsDomainPool } from "./services/yyds-domain-pool.js";
 import { YydsMailConfigService } from "./services/yyds-mail-config-service.js";
 import { SecretBox } from "./security/secretbox.js";
 import { MysqlImageTaskStore } from "./store/image-task-store.js";
@@ -44,6 +44,12 @@ if (config.defaultAccount) {
 }
 
 const accountService = new AccountService(accountStore);
+const yydsDomainPool = new YydsDomainPool({
+  store: yydsDomainPoolStore,
+  // Runtime registration only picks from persisted/admin-refreshed candidates.
+  // Avoid refreshing with an empty source here, which would clear auto candidates.
+  fetchDomains: async () => []
+});
 const yydsMailConfigService = new YydsMailConfigService(
   yydsMailConfigStore,
   new SecretBox(
@@ -68,7 +74,9 @@ const registrationService = new RegistrationService({
       : undefined;
   },
   vipClient,
-  accountService
+  accountService,
+  domainPicker: async () => config.yydsDomainPool.enabled ? await yydsDomainPool.pickDomain() : undefined,
+  domainRecorder: yydsDomainPool
 });
 
 const registrationQueue = new BullmqRegistrationQueue({

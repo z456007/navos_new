@@ -1,12 +1,28 @@
-import { YydsMailError, type YydsMailClient, type YydsMailbox } from "../protocols/mail/yyds-mail.js";
+import {
+  YydsMailError,
+  type YydsFailureKind,
+  type YydsMailClient,
+  type YydsMailbox
+} from "../protocols/mail/yyds-mail.js";
 import type { VipBalance, VipClient } from "../protocols/vip-client.js";
 import type { AccountService } from "./account-service.js";
+
+export interface RegistrationDomainPick {
+  domain: string;
+}
+
+export interface RegistrationDomainRecorder {
+  recordSuccess(domain: string): Promise<void>;
+  recordFailure(domain: string, kind: YydsFailureKind, error: string): Promise<void>;
+}
 
 export interface RegistrationServiceOptions {
   yydsClient?: YydsMailClient;
   yydsClientProvider?: () => Promise<YydsMailClient | undefined> | YydsMailClient | undefined;
   vipClient: VipClient;
   accountService: AccountService;
+  domainPicker?: () => Promise<RegistrationDomainPick | undefined> | RegistrationDomainPick | undefined;
+  domainRecorder?: RegistrationDomainRecorder;
   /** Max poll attempts for verification code. Default 20. */
   maxPollAttempts?: number;
   /** Poll interval in milliseconds. Default 4000. */
@@ -28,6 +44,10 @@ export interface RegistrationResult {
   balance?: number;
   certCredits?: number;
   error?: string;
+  domain?: string;
+  failureKind?: YydsFailureKind;
+  elapsedMs?: number;
+  retryCount?: number;
 }
 
 export interface FillResult {
@@ -145,6 +165,8 @@ export class RegistrationService {
   private readonly yydsClientProvider?: () => Promise<YydsMailClient | undefined> | YydsMailClient | undefined;
   private readonly vipClient: VipClient;
   private readonly accountService: AccountService;
+  private readonly domainPicker?: () => Promise<RegistrationDomainPick | undefined> | RegistrationDomainPick | undefined;
+  private readonly domainRecorder?: RegistrationDomainRecorder;
   private readonly maxPollAttempts: number;
   private readonly pollIntervalMs: number;
   private readonly maxMailboxCreateAttempts: number;
@@ -158,6 +180,8 @@ export class RegistrationService {
     this.yydsClientProvider = options.yydsClientProvider;
     this.vipClient = options.vipClient;
     this.accountService = options.accountService;
+    this.domainPicker = options.domainPicker;
+    this.domainRecorder = options.domainRecorder;
     this.maxPollAttempts = options.maxPollAttempts ?? 20;
     this.pollIntervalMs = options.pollIntervalMs ?? 4000;
     this.maxMailboxCreateAttempts = Math.max(1, options.maxMailboxCreateAttempts ?? 5);
@@ -167,11 +191,21 @@ export class RegistrationService {
 
   /** Full registration pipeline for a single account. */
   async registerOne(): Promise<RegistrationResult> {
+    const startedAt = Date.now();
+    let pickedDomain: string | undefined;
+    let resultDomain: string | undefined;
+    let email: string | undefined;
+    let retryCount: number | undefined;
+
     try {
       // 1. Create temp mailbox via YYDS
-      const mailbox = await this.createMailboxWithRetry();
-      const email = mailbox.address;
+      pickedDomain = (await this.domainPicker?.())?.domain;
+      const mailboxResult = await this.createMailboxWithRetry(pickedDomain);
+      const mailbox = mailboxResult.mailbox;
+      retryCount = mailboxResult.retryCount;
+      email = mailbox.address;
       const mailboxToken = mailbox.token;
+      resultDomain = mailbox.domain ?? pickedDomain ?? domainFromEmail(email);
 
       // 2. Send verification code via VIP API
       await this.vipClient.sendEmailCode(email);
@@ -179,7 +213,17 @@ export class RegistrationService {
       // 3. Poll YYDS mailbox for verification code
       const code = await this.pollVerificationCode(email, mailboxToken);
       if (!code) {
-        return { success: false, email, error: "verification code not received" };
+        const error = "verification code not received";
+        await this.recordDomainFailureBestEffort(resultDomain, "verification_timeout", error);
+        return {
+          success: false,
+          email,
+          error,
+          domain: resultDomain,
+          failureKind: "verification_timeout",
+          elapsedMs: Date.now() - startedAt,
+          retryCount
+        };
       }
 
       // 4. Login/register via VIP API
@@ -217,6 +261,8 @@ export class RegistrationService {
         status: "active"
       });
 
+      await this.recordDomainSuccessBestEffort(resultDomain);
+
       return {
         success: true,
         uid,
@@ -224,12 +270,24 @@ export class RegistrationService {
         email,
         mailboxToken,
         balance: balanceRemaining,
-        certCredits
+        certCredits,
+        domain: resultDomain,
+        elapsedMs: Date.now() - startedAt,
+        retryCount
       };
     } catch (error) {
+      retryCount ??= mailboxCreateAttempts(error);
+      const message = error instanceof Error ? error.message : "registration failed";
+      const failureKind: YydsFailureKind = error instanceof YydsMailError ? error.failureKind : "unknown";
+      const domain = resultDomain ?? pickedDomain ?? domainFromEmail(email);
+      await this.recordDomainFailureBestEffort(domain, failureKind, message);
       return {
         success: false,
-        error: error instanceof Error ? error.message : "registration failed"
+        error: message,
+        domain,
+        failureKind,
+        elapsedMs: Date.now() - startedAt,
+        retryCount
       };
     }
   }
@@ -323,23 +381,29 @@ export class RegistrationService {
     }
   }
 
-  private async createMailboxWithRetry(): Promise<YydsMailbox> {
+  private async createMailboxWithRetry(domain?: string): Promise<{ mailbox: YydsMailbox; retryCount: number }> {
     let lastError: unknown;
     for (let attempt = 1; attempt <= this.maxMailboxCreateAttempts; attempt++) {
       try {
-        return await this.createMailboxInThrottledSlot();
+        return {
+          mailbox: await this.createMailboxInThrottledSlot(domain),
+          retryCount: attempt
+        };
       } catch (error) {
         lastError = error;
         if (!isMailboxRateLimitError(error) || attempt >= this.maxMailboxCreateAttempts) {
-          throw error;
+          throw withMailboxCreateAttempts(error, attempt);
         }
         await sleep(this.mailboxRetryDelayMs * attempt);
       }
     }
-    throw lastError instanceof Error ? lastError : new Error("YYDS mailbox creation failed");
+    throw withMailboxCreateAttempts(
+      lastError instanceof Error ? lastError : new Error("YYDS mailbox creation failed"),
+      this.maxMailboxCreateAttempts
+    );
   }
 
-  private async createMailboxInThrottledSlot(): Promise<YydsMailbox> {
+  private async createMailboxInThrottledSlot(domain?: string): Promise<YydsMailbox> {
     const previousGate = this.mailboxCreateGate;
     let releaseGate!: () => void;
     this.mailboxCreateGate = new Promise<void>((resolve) => {
@@ -356,9 +420,35 @@ export class RegistrationService {
         await sleep(waitMs);
       }
       this.lastMailboxCreateStartedAt = Date.now();
-      return await (await this.resolveYydsClient()).createMailbox();
+      return await (await this.resolveYydsClient()).createMailbox(domain ? { domain } : undefined);
     } finally {
       releaseGate();
+    }
+  }
+
+  private async recordDomainSuccessBestEffort(domain: string | undefined): Promise<void> {
+    if (!domain || !this.domainRecorder) {
+      return;
+    }
+    try {
+      await this.domainRecorder.recordSuccess(domain);
+    } catch {
+      // Domain health recording is best effort and should not fail registration.
+    }
+  }
+
+  private async recordDomainFailureBestEffort(
+    domain: string | undefined,
+    kind: YydsFailureKind,
+    error: string
+  ): Promise<void> {
+    if (!domain || !this.domainRecorder) {
+      return;
+    }
+    try {
+      await this.domainRecorder.recordFailure(domain, kind, error);
+    } catch {
+      // Domain health recording is best effort and should not mask registration failure.
     }
   }
 
@@ -377,10 +467,37 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function domainFromEmail(email: string | undefined): string | undefined {
+  const domain = email?.split("@").at(-1);
+  return domain && domain !== email ? domain : undefined;
+}
+
 function isMailboxRateLimitError(error: unknown): boolean {
   if (error instanceof YydsMailError && error.status === 429) {
     return true;
   }
   return error instanceof Error
     && /too many account creation requests|rate.?limit|429/i.test(error.message);
+}
+
+function withMailboxCreateAttempts(error: unknown, attempts: number): unknown {
+  if (error && typeof error === "object") {
+    try {
+      Object.defineProperty(error, "mailboxCreateAttempts", {
+        value: attempts,
+        configurable: true
+      });
+    } catch {
+      // Fall through and throw the original error unchanged if it cannot be annotated.
+    }
+  }
+  return error;
+}
+
+function mailboxCreateAttempts(error: unknown): number | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  const attempts = (error as { mailboxCreateAttempts?: unknown }).mailboxCreateAttempts;
+  return typeof attempts === "number" && Number.isFinite(attempts) ? attempts : undefined;
 }
