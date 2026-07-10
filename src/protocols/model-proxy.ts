@@ -80,6 +80,7 @@ export const LOCAL_MODEL_IDS = [
   ...Object.keys(OPENAI_FAMILY_MODELS),
   ...Object.keys(OPENAI_FAMILY_ALIASES),
   "gpt-image-2",
+  "navos/doubao-seedance-2-0-260128",
   "doubao-seedance-2-0-260128"
 ];
 

@@ -253,6 +253,28 @@ describe("server routes", () => {
     });
   });
 
+  it("serves the local model catalog for the master key without a provider account", async () => {
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(new InMemoryAccountStore()),
+      fetchImpl: async () => Response.json({ error: { message: "models should not require upstream" } }, { status: 500 })
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/models",
+      headers: { authorization: "Bearer sk-test" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const ids = response.json().data.map((item: { id: string }) => item.id);
+    expect(ids).toContain("gpt-image-2");
+    expect(ids).toContain("navos/doubao-seedance-2-0-260128");
+    expect(ids).toContain("doubao-seedance-2-0-260128");
+  });
+
   it("lets public proxy keys access only the public model catalog and not admin routes", async () => {
     const app = createApp({
       masterApiKey: "sk-master",

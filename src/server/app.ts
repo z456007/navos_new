@@ -623,17 +623,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       await reply.send(publicModelCatalog());
       return;
     }
-    const auth = await providerAuth(reply);
-    if (!auth) {
-      return;
-    }
-    const result = await forwardModelRequest(client, { method: "GET", path: "/v1/models", headers: auth.headers });
-    if (result.status === 404) {
-      await reply.send(localModelCatalog());
-      return;
-    }
-    await depleteProviderAccountIfNeeded(auth.account.uid, result);
-    await sendProviderResult(reply, result);
+    await reply.send(localModelCatalog());
   });
 
   app.post("/v1/chat/completions", async (request, reply) => {
