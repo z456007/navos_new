@@ -7,11 +7,10 @@ import type {
 } from "./registration-job-types.js";
 
 const QUEUE_NAME = "registration";
-const MIN_FILL_TARGET = 1;
-const MAX_FILL_TARGET = 500;
-const MIN_FILL_CONCURRENCY = 1;
-const MAX_FILL_CONCURRENCY = 20;
-const SAFE_FILL_BATCH_CONCURRENCY = 2;
+const MIN_BULK_COUNT = 1;
+const MAX_BULK_COUNT = 500;
+const MIN_BULK_CONCURRENCY = 1;
+const MAX_BULK_CONCURRENCY = 20;
 
 export interface RegistrationWorkerOptions {
   redisUrl: string;
@@ -29,6 +28,21 @@ export interface RegistrationProcessorOptions {
 
 type RegistrationWorkerJob = Pick<Job<RegistrationJobPayload>, "id" | "data" | "updateProgress">;
 type ProgressWithLogs = RegistrationJobProgress & { logs: RegistrationJobLog[] };
+type BulkRegistrationJobPayload = Extract<RegistrationJobPayload, { mode: "fill" | "create" }>;
+
+interface BulkRegistrationJobResult {
+  mode: "fill" | "create";
+  target?: number;
+  count?: number;
+  concurrency: number;
+  activeBefore: number;
+  planned: number;
+  started: number;
+  completed: number;
+  failed: number;
+  skipped: number;
+  results: RegistrationResult[];
+}
 
 export async function processRegistrationJob(
   job: RegistrationWorkerJob,
@@ -49,11 +63,9 @@ export async function processRegistrationJob(
       return await processSingleRegistration(progress, registrationService);
     }
 
-    if (data.mode === "fill") {
-      return await processFillRegistration(jobId, data, progress, registrationService, options);
+    if (data.mode === "fill" || data.mode === "create") {
+      return await processBulkRegistration(jobId, data, progress, registrationService, options);
     }
-
-    throw new Error("create registration jobs are not supported by the worker yet");
   } finally {
     await clearCancelRequestBestEffort(jobId, options);
   }
@@ -98,29 +110,42 @@ async function processSingleRegistration(
   return result;
 }
 
-async function processFillRegistration(
+async function processBulkRegistration(
   jobId: string,
-  data: Extract<RegistrationJobPayload, { mode: "fill" }>,
+  data: BulkRegistrationJobPayload,
   progress: ReturnType<typeof createProgressTracker>,
   registrationService: RegistrationService,
   options: RegistrationProcessorOptions
 ): Promise<unknown> {
-  validateFillRegistrationPayload(data);
+  validateBulkRegistrationPayload(data);
 
   const stats = await registrationService.getStats();
-  const total = Math.max(0, data.target - stats.activeCount);
-  const results: RegistrationResult[] = [];
+  const planned = data.mode === "fill" ? Math.max(0, data.target - stats.activeCount) : data.count;
   let started = 0;
   let completed = 0;
   let failed = 0;
+  const skipped = planned === 0 ? 1 : 0;
+  const results: RegistrationResult[] = [];
 
-  await progress.update(started, completed, failed, total, "info", "fill registration started");
+  await progress.update(
+    started,
+    completed,
+    failed,
+    planned,
+    "info",
+    `${data.mode} registration started`,
+    skipped === 1 ? skipped : undefined
+  );
+
+  if (planned === 0) {
+    return createBulkRegistrationJobResult(data, stats.activeCount, planned, started, completed, failed, skipped, results);
+  }
 
   if (await isCancellationRequestedForId(jobId, options)) {
-    await progress.update(started, completed, failed, total, "warn", "fill registration canceled");
+    await progress.update(started, completed, failed, planned, "warn", `${data.mode} registration canceled`);
     return {
       canceled: true,
-      target: data.target,
+      ...bulkRequestFields(data),
       started,
       completed,
       failed,
@@ -128,12 +153,12 @@ async function processFillRegistration(
     };
   }
 
-  while (started < total) {
+  while (started < planned) {
     if (await isCancellationRequestedForId(jobId, options)) {
-      await progress.update(started, completed, failed, total, "warn", "fill registration canceled");
+      await progress.update(started, completed, failed, planned, "warn", `${data.mode} registration canceled`);
       return {
         canceled: true,
-        target: data.target,
+        ...bulkRequestFields(data),
         started,
         completed,
         failed,
@@ -141,9 +166,9 @@ async function processFillRegistration(
       };
     }
 
-    const batchSize = Math.min(data.concurrency, SAFE_FILL_BATCH_CONCURRENCY, total - started);
+    const batchSize = Math.min(data.concurrency, planned - started);
     started += batchSize;
-    await progress.update(started, completed, failed, total, "info", "fill registration batch started");
+    await progress.update(started, completed, failed, planned, "info", `${data.mode} registration batch started`);
 
     const batch = Array.from({ length: batchSize }, () => registerOneSafely(registrationService));
     const batchResults = await Promise.all(batch);
@@ -151,28 +176,53 @@ async function processFillRegistration(
     completed = results.filter((result) => result.success).length;
     failed = results.length - completed;
 
-    await progress.update(started, completed, failed, total, "info", "fill registration batch completed");
+    await progress.update(started, completed, failed, planned, "info", `${data.mode} registration batch completed`);
   }
 
+  return createBulkRegistrationJobResult(data, stats.activeCount, planned, started, completed, failed, skipped, results);
+}
+
+function createBulkRegistrationJobResult(
+  data: BulkRegistrationJobPayload,
+  activeBefore: number,
+  planned: number,
+  started: number,
+  completed: number,
+  failed: number,
+  skipped: number,
+  results: RegistrationResult[]
+): BulkRegistrationJobResult {
   return {
-    target: data.target,
+    mode: data.mode,
+    ...bulkRequestFields(data),
+    concurrency: data.concurrency,
+    activeBefore,
+    planned,
     started,
     completed,
     failed,
+    skipped,
     results
   };
 }
 
-function validateFillRegistrationPayload(data: Extract<RegistrationJobPayload, { mode: "fill" }>): void {
-  if (!Number.isSafeInteger(data.target) || data.target < MIN_FILL_TARGET || data.target > MAX_FILL_TARGET) {
+function bulkRequestFields(data: BulkRegistrationJobPayload): { target: number } | { count: number } {
+  return data.mode === "fill" ? { target: data.target } : { count: data.count };
+}
+
+function validateBulkRegistrationPayload(data: BulkRegistrationJobPayload): void {
+  if (data.mode === "fill" && (!Number.isSafeInteger(data.target) || data.target < MIN_BULK_COUNT || data.target > MAX_BULK_COUNT)) {
     throw new Error("fill registration target must be an integer from 1 to 500");
+  }
+  if (data.mode === "create" && (!Number.isSafeInteger(data.count) || data.count < MIN_BULK_COUNT || data.count > MAX_BULK_COUNT)) {
+    throw new Error("create registration count must be an integer from 1 to 500");
   }
   if (
     !Number.isSafeInteger(data.concurrency)
-    || data.concurrency < MIN_FILL_CONCURRENCY
-    || data.concurrency > MAX_FILL_CONCURRENCY
+    || data.concurrency < MIN_BULK_CONCURRENCY
+    || data.concurrency > MAX_BULK_CONCURRENCY
   ) {
-    throw new Error("fill registration concurrency must be an integer from 1 to 20");
+    throw new Error("bulk registration concurrency must be an integer from 1 to 20");
   }
 }
 
@@ -191,19 +241,21 @@ function createProgressTracker(job: RegistrationWorkerJob): {
     failed: number,
     total: number,
     level: RegistrationJobLog["level"],
-    message: string
+    message: string,
+    skipped?: number
   ) => Promise<void>;
 } {
   const logs: RegistrationJobLog[] = [];
 
   return {
-    async update(started, completed, failed, total, level, message) {
+    async update(started, completed, failed, total, level, message, skipped) {
       logs.push({ at: Date.now(), level, message });
       const nextProgress: ProgressWithLogs = {
         started,
         completed,
         failed,
         total,
+        ...(skipped === undefined ? {} : { skipped }),
         logs: [...logs]
       };
       await job.updateProgress(nextProgress);

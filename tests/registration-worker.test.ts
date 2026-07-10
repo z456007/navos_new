@@ -224,7 +224,7 @@ describe("processRegistrationJob", () => {
     });
   });
 
-  it("throttles a large fill concurrency to avoid YYDS account creation rate limits", async () => {
+  it("uses requested fill concurrency without an extra worker cap", async () => {
     const attempts = [
       deferredResult(success(1)),
       deferredResult(success(2)),
@@ -253,14 +253,10 @@ describe("processRegistrationJob", () => {
 
     const processing = processRegistrationJob(job, registrationService);
 
-    await vi.waitFor(() => expect(registrationService.registerOne).toHaveBeenCalledTimes(2));
-    attempts[0].resolve();
-    attempts[1].resolve();
-    await vi.waitFor(() => expect(registrationService.registerOne).toHaveBeenCalledTimes(4));
-    attempts[2].resolve();
-    attempts[3].resolve();
     await vi.waitFor(() => expect(registrationService.registerOne).toHaveBeenCalledTimes(5));
-    attempts[4].resolve();
+    for (const attempt of attempts) {
+      attempt.resolve();
+    }
 
     await expect(processing).resolves.toMatchObject({
       target: 5,
@@ -268,7 +264,7 @@ describe("processRegistrationJob", () => {
       completed: 5,
       failed: 0
     });
-    expect(maxActive).toBeLessThanOrEqual(2);
+    expect(maxActive).toBe(5);
   });
 
   it("updates fill progress after a batch starts before registrations resolve", async () => {
@@ -529,7 +525,7 @@ describe("processRegistrationJob", () => {
     await expect(
       processRegistrationJob(job, registrationService, { clearCancelRequest })
     ).rejects.toThrow(
-      "fill registration concurrency must be an integer from 1 to 20"
+      "bulk registration concurrency must be an integer from 1 to 20"
     );
 
     expect(clearCancelRequest).toHaveBeenCalledWith("job-1");
@@ -537,16 +533,38 @@ describe("processRegistrationJob", () => {
     expect(registrationService.registerOne).not.toHaveBeenCalled();
   });
 
-  it("rejects create jobs before worker support without entering fill processing", async () => {
+  it.each([
+    ["NaN count", { mode: "create", count: Number.NaN, concurrency: 1 }, /create registration count/],
+    ["fractional count", { mode: "create", count: 1.5, concurrency: 1 }, /create registration count/],
+    [
+      "infinite count",
+      { mode: "create", count: Number.POSITIVE_INFINITY, concurrency: 1 },
+      /create registration count/
+    ],
+    ["zero count", { mode: "create", count: 0, concurrency: 1 }, /create registration count/],
+    ["too-high count", { mode: "create", count: 501, concurrency: 1 }, /create registration count/],
+    ["NaN concurrency", { mode: "create", count: 2, concurrency: Number.NaN }, /bulk registration concurrency/],
+    ["fractional concurrency", { mode: "create", count: 2, concurrency: 1.5 }, /bulk registration concurrency/],
+    [
+      "infinite concurrency",
+      { mode: "create", count: 2, concurrency: Number.POSITIVE_INFINITY },
+      /bulk registration concurrency/
+    ],
+    ["zero concurrency", { mode: "create", count: 2, concurrency: 0 }, /bulk registration concurrency/],
+    ["too-high concurrency", { mode: "create", count: 2, concurrency: 21 }, /bulk registration concurrency/]
+  ])("rejects malformed create payload before stats/progress/registering: %s", async (_caseName, payload, message) => {
     const registrationService = makeRegistrationService({
       getStats: vi.fn(async () => stats({ activeCount: 0 }))
     });
     const clearCancelRequest = vi.fn(async () => undefined);
-    const job = makeJob({ mode: "create", count: 2, concurrency: 1 });
+    const job = makeJob(payload as RegistrationJobPayload);
+    job.updateProgress = vi.fn(async () => {
+      throw new Error("progress should not start for malformed create payload");
+    });
 
     await expect(
       processRegistrationJob(job, registrationService, { clearCancelRequest })
-    ).rejects.toThrow("create registration jobs are not supported by the worker yet");
+    ).rejects.toThrow(message);
 
     expect(clearCancelRequest).toHaveBeenCalledWith("job-1");
     expect(registrationService.getStats).not.toHaveBeenCalled();
@@ -579,6 +597,67 @@ describe("processRegistrationJob", () => {
       failed: 0,
       total: 2
     });
+  });
+
+  it("reports fill planned attempts as target minus active count", async () => {
+    const registrationService = makeRegistrationService({
+      getStats: vi.fn(async () => stats({ activeCount: 97 })),
+      registerOne: vi.fn(async () => success(1))
+    });
+    const job = makeJob({ mode: "fill", target: 100, concurrency: 6 });
+
+    const result = await processRegistrationJob(job, registrationService);
+
+    expect(result).toMatchObject({
+      mode: "fill",
+      target: 100,
+      activeBefore: 97,
+      planned: 3,
+      started: 3,
+      completed: 3,
+      failed: 0
+    });
+    expect(registrationService.registerOne).toHaveBeenCalledTimes(3);
+  });
+
+  it("create mode registers requested count regardless of active count", async () => {
+    const registrationService = makeRegistrationService({
+      getStats: vi.fn(async () => stats({ activeCount: 100 })),
+      registerOne: vi.fn(async () => success(1))
+    });
+    const job = makeJob({ mode: "create", count: 4, concurrency: 6 });
+
+    const result = await processRegistrationJob(job, registrationService);
+
+    expect(result).toMatchObject({
+      mode: "create",
+      count: 4,
+      activeBefore: 100,
+      planned: 4,
+      started: 4,
+      completed: 4,
+      failed: 0
+    });
+    expect(registrationService.registerOne).toHaveBeenCalledTimes(4);
+  });
+
+  it("fill mode skips work when active count already satisfies target", async () => {
+    const registrationService = makeRegistrationService({
+      getStats: vi.fn(async () => stats({ activeCount: 101 })),
+      registerOne: vi.fn(async () => success(1))
+    });
+    const job = makeJob({ mode: "fill", target: 100, concurrency: 6 });
+
+    const result = await processRegistrationJob(job, registrationService);
+
+    expect(result).toMatchObject({
+      mode: "fill",
+      target: 100,
+      activeBefore: 101,
+      planned: 0,
+      skipped: 1
+    });
+    expect(registrationService.registerOne).not.toHaveBeenCalled();
   });
 
   it("cancels before start without registering", async () => {
