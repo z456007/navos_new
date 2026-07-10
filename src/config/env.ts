@@ -114,7 +114,14 @@ function parseBool(value: string | undefined, fallback: boolean): boolean {
   if (!value) {
     return fallback;
   }
-  return value.trim().toLowerCase() !== "false";
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "false" || normalized === "0" || normalized === "no" || normalized === "off") {
+    return false;
+  }
+  if (normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on") {
+    return true;
+  }
+  return fallback;
 }
 
 function parseCsv(value: string | undefined): string[] {
@@ -125,7 +132,7 @@ function parseCsv(value: string | undefined): string[] {
 }
 
 function parseDomainPoolMode(value: string | undefined): YydsDomainPoolMode {
-  const normalized = value?.trim();
+  const normalized = value?.trim().toLowerCase();
   if (normalized === "auto" || normalized === "whitelist" || normalized === "auto-plus-whitelist") {
     return normalized;
   }

@@ -57,7 +57,7 @@ interface YydsDomainPoolConfigRow extends RowDataPacket {
 
 interface YydsDomainHealthRow extends RowDataPacket {
   domain: string;
-  status: YydsDomainHealthStatus;
+  status: string;
   success_count: number;
   failure_count: number;
   verification_timeout_count: number;
@@ -241,18 +241,32 @@ export function normalizeDomain(domain: string): string {
 }
 
 function cloneConfig(config: YydsDomainPoolConfig): YydsDomainPoolConfig {
+  const refreshIntervalMinutes = Number(config.refreshIntervalMinutes);
   return {
     ...config,
+    mode: parseMode(config.mode),
     whitelist: config.whitelist.map(normalizeDomain).filter(Boolean),
-    blacklist: config.blacklist.map(normalizeDomain).filter(Boolean)
+    blacklist: config.blacklist.map(normalizeDomain).filter(Boolean),
+    refreshIntervalMinutes: Number.isInteger(refreshIntervalMinutes) && refreshIntervalMinutes > 0
+      ? refreshIntervalMinutes
+      : DEFAULT_CONFIG.refreshIntervalMinutes
   };
 }
 
 function cloneHealth(record: YydsDomainHealthRecord): YydsDomainHealthRecord {
-  return {
+  const domain = normalizeDomain(record.domain);
+  if (!domain) {
+    throw new Error("YYDS domain health domain must not be empty");
+  }
+  const cloned: YydsDomainHealthRecord = {
     ...record,
-    domain: normalizeDomain(record.domain)
+    domain,
+    status: parseStatus(record.status)
   };
+  if (cloned.lastError === undefined) {
+    delete cloned.lastError;
+  }
+  return cloned;
 }
 
 function configFromRow(row: YydsDomainPoolConfigRow): YydsDomainPoolConfig {
@@ -268,7 +282,7 @@ function configFromRow(row: YydsDomainPoolConfigRow): YydsDomainPoolConfig {
 function healthFromRow(row: YydsDomainHealthRow): YydsDomainHealthRecord {
   return cloneHealth({
     domain: row.domain,
-    status: row.status,
+    status: row.status as YydsDomainHealthStatus,
     successCount: Number(row.success_count),
     failureCount: Number(row.failure_count),
     verificationTimeoutCount: Number(row.verification_timeout_count),
@@ -288,6 +302,13 @@ function parseMode(value: string): YydsDomainPoolMode {
     return value;
   }
   return DEFAULT_CONFIG.mode;
+}
+
+function parseStatus(value: string): YydsDomainHealthStatus {
+  if (value === "active" || value === "cooldown" || value === "disabled") {
+    return value;
+  }
+  return "active";
 }
 
 function parseJsonList(value: unknown): string[] {

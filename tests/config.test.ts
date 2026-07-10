@@ -84,7 +84,11 @@ describe("loadConfig", () => {
     expect(config.registrationMaxInFlight).toBe(6);
     expect(config.registrationMailboxCreateConcurrency).toBe(2);
     expect(config.registrationMailboxCreatePerSecond).toBe(2);
+    expect(config.registrationVipSendConcurrency).toBe(6);
     expect(config.registrationPollConcurrency).toBe(30);
+    expect(config.registrationLoginConcurrency).toBe(6);
+    expect(config.registrationCertConcurrency).toBe(4);
+    expect(config.registrationVerificationTimeoutMs).toBe(90000);
     expect(config.yydsDomainPool).toMatchObject({
       enabled: true,
       mode: "auto-plus-whitelist",
@@ -102,9 +106,13 @@ describe("loadConfig", () => {
       REGISTRATION_MAX_IN_FLIGHT: "200",
       REGISTRATION_MAILBOX_CREATE_CONCURRENCY: "50",
       REGISTRATION_MAILBOX_CREATE_PER_SECOND: "30",
+      REGISTRATION_VIP_SEND_CONCURRENCY: "80",
       REGISTRATION_POLL_CONCURRENCY: "200",
-      YYDS_DOMAIN_POOL_ENABLED: "false",
-      YYDS_DOMAIN_POOL_MODE: "whitelist",
+      REGISTRATION_LOGIN_CONCURRENCY: "40",
+      REGISTRATION_CERT_CONCURRENCY: "60",
+      REGISTRATION_VERIFICATION_TIMEOUT_MS: "0",
+      YYDS_DOMAIN_POOL_ENABLED: "0",
+      YYDS_DOMAIN_POOL_MODE: " WhItEList ",
       YYDS_DOMAIN_WHITELIST: " Example.COM, Boost.Test ,, ",
       YYDS_DOMAIN_BLACKLIST: " BLOCKED.Test "
     });
@@ -112,7 +120,11 @@ describe("loadConfig", () => {
     expect(config.registrationMaxInFlight).toBe(20);
     expect(config.registrationMailboxCreateConcurrency).toBe(5);
     expect(config.registrationMailboxCreatePerSecond).toBe(10);
+    expect(config.registrationVipSendConcurrency).toBe(20);
     expect(config.registrationPollConcurrency).toBe(100);
+    expect(config.registrationLoginConcurrency).toBe(20);
+    expect(config.registrationCertConcurrency).toBe(20);
+    expect(config.registrationVerificationTimeoutMs).toBe(90000);
     expect(config.yydsDomainPool).toMatchObject({
       enabled: false,
       mode: "whitelist",
