@@ -54,7 +54,8 @@ export async function processRegistrationJob(
   const data = job.data;
 
   try {
-    if (await isCancellationRequested(job, jobId, options)) {
+    const preStartCanceled = await isCancellationRequested(job, jobId, options);
+    if (preStartCanceled && data.mode === "single") {
       await progress.update(0, 0, 0, 0, "warn", "registration job canceled before start");
       return { canceled: true };
     }
@@ -64,7 +65,7 @@ export async function processRegistrationJob(
     }
 
     if (data.mode === "fill" || data.mode === "create") {
-      return await processBulkRegistration(jobId, data, progress, registrationService, options);
+      return await processBulkRegistration(jobId, data, progress, registrationService, options, preStartCanceled);
     }
 
     throw new Error("unsupported registration job mode");
@@ -117,7 +118,8 @@ async function processBulkRegistration(
   data: BulkRegistrationJobPayload,
   progress: ReturnType<typeof createProgressTracker>,
   registrationService: RegistrationService,
-  options: RegistrationProcessorOptions
+  options: RegistrationProcessorOptions,
+  preStartCanceled = false
 ): Promise<unknown> {
   validateBulkRegistrationPayload(data);
 
@@ -139,15 +141,50 @@ async function processBulkRegistration(
     skipped === 1 ? skipped : undefined
   );
 
+  if (preStartCanceled) {
+    await progress.update(
+      started,
+      completed,
+      failed,
+      planned,
+      "warn",
+      `${data.mode} registration canceled`,
+      skipped === 1 ? skipped : undefined
+    );
+    return createCanceledBulkRegistrationJobResult(
+      data,
+      stats.activeCount,
+      planned,
+      started,
+      completed,
+      failed,
+      skipped,
+      results
+    );
+  }
+
   if (planned === 0) {
     return createBulkRegistrationJobResult(data, stats.activeCount, planned, started, completed, failed, skipped, results);
   }
 
   if (await isCancellationRequestedForId(jobId, options)) {
     await progress.update(started, completed, failed, planned, "warn", `${data.mode} registration canceled`);
-    return {
-      canceled: true,
-      ...createBulkRegistrationJobResult(
+    return createCanceledBulkRegistrationJobResult(
+      data,
+      stats.activeCount,
+      planned,
+      started,
+      completed,
+      failed,
+      skipped,
+      results
+    );
+  }
+
+  while (started < planned) {
+    if (await isCancellationRequestedForId(jobId, options)) {
+      await progress.update(started, completed, failed, planned, "warn", `${data.mode} registration canceled`);
+      return createCanceledBulkRegistrationJobResult(
         data,
         stats.activeCount,
         planned,
@@ -156,26 +193,7 @@ async function processBulkRegistration(
         failed,
         skipped,
         results
-      )
-    };
-  }
-
-  while (started < planned) {
-    if (await isCancellationRequestedForId(jobId, options)) {
-      await progress.update(started, completed, failed, planned, "warn", `${data.mode} registration canceled`);
-      return {
-        canceled: true,
-        ...createBulkRegistrationJobResult(
-          data,
-          stats.activeCount,
-          planned,
-          started,
-          completed,
-          failed,
-          skipped,
-          results
-        )
-      };
+      );
     }
 
     const batchSize = Math.min(data.concurrency, planned - started);
@@ -192,6 +210,22 @@ async function processBulkRegistration(
   }
 
   return createBulkRegistrationJobResult(data, stats.activeCount, planned, started, completed, failed, skipped, results);
+}
+
+function createCanceledBulkRegistrationJobResult(
+  data: BulkRegistrationJobPayload,
+  activeBefore: number,
+  planned: number,
+  started: number,
+  completed: number,
+  failed: number,
+  skipped: number,
+  results: RegistrationResult[]
+): BulkRegistrationJobResult & { canceled: true } {
+  return {
+    canceled: true,
+    ...createBulkRegistrationJobResult(data, activeBefore, planned, started, completed, failed, skipped, results)
+  };
 }
 
 function createBulkRegistrationJobResult(

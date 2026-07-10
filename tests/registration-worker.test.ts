@@ -665,26 +665,105 @@ describe("processRegistrationJob", () => {
     expect(registrationService.registerOne).not.toHaveBeenCalled();
   });
 
-  it("cancels before start without registering", async () => {
-    const registrationService = makeRegistrationService();
+  it("cancels fill before start with normalized bulk result without registering", async () => {
+    const registrationService = makeRegistrationService({
+      getStats: vi.fn(async () => stats({ activeCount: 1 }))
+    });
     const isCancelRequested = vi.fn(async () => true);
     const clearCancelRequest = vi.fn(async () => undefined);
     const job = makeJob({ mode: "fill", target: 3, concurrency: 2 }, 42);
 
     await expect(
       processRegistrationJob(job, registrationService, { isCancelRequested, clearCancelRequest })
-    ).resolves.toEqual({ canceled: true });
+    ).resolves.toEqual({
+      canceled: true,
+      mode: "fill",
+      target: 3,
+      concurrency: 2,
+      activeBefore: 1,
+      planned: 2,
+      started: 0,
+      completed: 0,
+      failed: 0,
+      skipped: 0,
+      results: []
+    });
 
     expect(isCancelRequested).toHaveBeenCalledWith("42");
     expect(clearCancelRequest).toHaveBeenCalledWith("42");
+    expect(registrationService.getStats).toHaveBeenCalledTimes(1);
+    expect(registrationService.registerOne).not.toHaveBeenCalled();
+    expect(lastProgress(job)).toMatchObject({
+      started: 0,
+      completed: 0,
+      failed: 0,
+      total: 2
+    });
+    expect(lastProgress(job).logs.at(-1)).toMatchObject({
+      level: "warn",
+      message: expect.stringContaining("canceled")
+    });
+  });
+
+  it("cancels create before start with normalized bulk result without registering", async () => {
+    const registrationService = makeRegistrationService({
+      getStats: vi.fn(async () => stats({ activeCount: 7 }))
+    });
+    const isCancelRequested = vi.fn(async () => true);
+    const clearCancelRequest = vi.fn(async () => undefined);
+    const job = makeJob({ mode: "create", count: 5, concurrency: 4 }, "create-1");
+
+    await expect(
+      processRegistrationJob(job, registrationService, { isCancelRequested, clearCancelRequest })
+    ).resolves.toEqual({
+      canceled: true,
+      mode: "create",
+      count: 5,
+      concurrency: 4,
+      activeBefore: 7,
+      planned: 5,
+      started: 0,
+      completed: 0,
+      failed: 0,
+      skipped: 0,
+      results: []
+    });
+
+    expect(isCancelRequested).toHaveBeenCalledWith("create-1");
+    expect(clearCancelRequest).toHaveBeenCalledWith("create-1");
+    expect(registrationService.getStats).toHaveBeenCalledTimes(1);
+    expect(registrationService.registerOne).not.toHaveBeenCalled();
+    expect(lastProgress(job)).toMatchObject({
+      started: 0,
+      completed: 0,
+      failed: 0,
+      total: 5
+    });
+    expect(lastProgress(job).logs.at(-1)).toMatchObject({
+      level: "warn",
+      message: expect.stringContaining("canceled")
+    });
+  });
+
+  it("keeps single cancellation before start as a generic canceled result", async () => {
+    const registrationService = makeRegistrationService();
+    const isCancelRequested = vi.fn(async () => true);
+    const clearCancelRequest = vi.fn(async () => undefined);
+    const job = makeJob({ mode: "single" }, "single-1");
+
+    await expect(
+      processRegistrationJob(job, registrationService, { isCancelRequested, clearCancelRequest })
+    ).resolves.toEqual({ canceled: true });
+
+    expect(isCancelRequested).toHaveBeenCalledWith("single-1");
+    expect(clearCancelRequest).toHaveBeenCalledWith("single-1");
     expect(registrationService.getStats).not.toHaveBeenCalled();
     expect(registrationService.registerOne).not.toHaveBeenCalled();
     expect(lastProgress(job)).toMatchObject({
       started: 0,
       completed: 0,
       failed: 0,
-      total: 0,
-      logs: [expect.objectContaining({ level: "warn" })]
+      total: 0
     });
   });
 
