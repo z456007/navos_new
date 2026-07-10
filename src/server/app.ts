@@ -562,6 +562,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       ? fetchInjectedYydsDomains(options.yydsDomainFetchImpl)
       : fetchPublicYydsDomains(options.fetchImpl))
   });
+  let yydsDomainPoolRefreshInflight: Promise<Awaited<ReturnType<YydsDomainPool["refresh"]>>> | undefined;
   const yydsMailConfigService = new YydsMailConfigService(
     yydsMailConfigStore,
     new SecretBox(
@@ -966,6 +967,16 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     });
   }
 
+  async function refreshYydsDomainPool(): Promise<Awaited<ReturnType<YydsDomainPool["refresh"]>>> {
+    if (!yydsDomainPoolRefreshInflight) {
+      yydsDomainPoolRefreshInflight = yydsDomainPool.refresh()
+        .finally(() => {
+          yydsDomainPoolRefreshInflight = undefined;
+        });
+    }
+    return yydsDomainPoolRefreshInflight;
+  }
+
   async function sendRegistrationQueueUnavailable(
     reply: FastifyReply,
     message = "Registration queue is unavailable"
@@ -1272,7 +1283,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       return;
     }
     try {
-      await reply.send(await yydsDomainPool.refresh());
+      await reply.send(await refreshYydsDomainPool());
     } catch (error) {
       if (error instanceof YydsDomainFetchError || error instanceof YydsDomainPoolSourceValidationError) {
         await reply.status(502).send({

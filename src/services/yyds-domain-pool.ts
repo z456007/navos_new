@@ -258,17 +258,16 @@ export class YydsDomainPool {
     const domains = new Set<string>();
 
     if (config.mode === "auto" || config.mode === "auto-plus-whitelist") {
+      for (const record of healthByDomain.values()) {
+        if (isFreshPersistedAutoHealth(record, config, this.now())) {
+          domains.add(record.domain);
+        }
+      }
       if (this.hasAutoRefreshSnapshot) {
         for (const domain of this.autoEligibleDomains) {
           const record = healthByDomain.get(domain);
           if (record && isFreshPersistedAutoHealth(record, config, this.now())) {
             domains.add(domain);
-          }
-        }
-      } else {
-        for (const record of healthByDomain.values()) {
-          if (isFreshPersistedAutoHealth(record, config, this.now())) {
-            domains.add(record.domain);
           }
         }
       }

@@ -206,6 +206,53 @@ describe("server routes", () => {
     expect(response.body).not.toContain("database password");
   });
 
+  it("coalesces concurrent YYDS domain pool refresh requests", async () => {
+    const domainStore = new InMemoryYydsDomainPoolStore();
+    let fetchCalls = 0;
+    let releaseFetch!: () => void;
+    const fetchGate = new Promise<void>((resolve) => {
+      releaseFetch = resolve;
+    });
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+      yydsDomainPoolStore: domainStore,
+      yydsDomainFetchImpl: async () => {
+        fetchCalls += 1;
+        await fetchGate;
+        return [
+          { domain: "coalesced.test", isPublic: true, isVerified: true, isMxValid: true, dnsRecords: { status: "healthy", receivingReady: true } }
+        ];
+      },
+      fetchImpl: async () => Response.json({ ok: true })
+    });
+
+    const first = app.inject({
+      method: "POST",
+      url: "/api/mail/yyds/domains/refresh",
+      headers: { authorization: "Bearer sk-test" }
+    });
+    const second = app.inject({
+      method: "POST",
+      url: "/api/mail/yyds/domains/refresh",
+      headers: { authorization: "Bearer sk-test" }
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const callsDuringInflight = fetchCalls;
+    releaseFetch();
+    const [firstResponse, secondResponse] = await Promise.all([first, second]);
+
+    expect(callsDuringInflight).toBe(1);
+    expect(fetchCalls).toBe(1);
+    expect(firstResponse.statusCode).toBe(200);
+    expect(secondResponse.statusCode).toBe(200);
+    expect(firstResponse.json()).toEqual({ eligible: [{ domain: "coalesced.test" }] });
+    expect(secondResponse.json()).toEqual({ eligible: [{ domain: "coalesced.test" }] });
+  });
+
   it("sanitizes YYDS domain pool list store failures", async () => {
     const domainStore = new InMemoryYydsDomainPoolStore();
     vi.spyOn(domainStore, "getConfig").mockRejectedValue(new Error("database password leaked in stack trace"));
