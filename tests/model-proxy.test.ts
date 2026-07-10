@@ -46,7 +46,7 @@ describe("model proxy", () => {
     });
   });
 
-  it("routes GPT chat completions through the backend OpenAI responses path", async () => {
+  it("routes Codex chat completions through the backend OpenAI responses path", async () => {
     let capturedUrl = "";
     let capturedBody: Record<string, unknown> = {};
     const client = new ProviderHttpClient("https://upstream.test", async (url, init) => {
@@ -68,7 +68,7 @@ describe("model proxy", () => {
       method: "POST",
       path: "/v1/chat/completions",
       body: {
-        model: "gpt-5.5",
+        model: "codex",
         system: "Be terse.",
         messages: [{ role: "user", content: "Reply OK only." }],
         max_tokens: 8,
@@ -78,7 +78,7 @@ describe("model proxy", () => {
     });
 
     expect(capturedUrl).toBe("https://upstream.test/responses");
-    expect(capturedBody.model).toBe("openai.gpt-5.5");
+    expect(capturedBody.model).toBe("openai.gpt-5.3-codex");
     expect(capturedBody.max_output_tokens).toBe(16);
     expect(capturedBody.instructions).toBe("Be terse.");
     expect(capturedBody.input).toEqual([{ role: "user", content: "Reply OK only." }]);
@@ -88,6 +88,43 @@ describe("model proxy", () => {
       model: "gpt-5.3-codex",
       choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }],
       usage: { prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 }
+    });
+  });
+
+  it("routes GPT-5.5 chat completions through the backend OpenAI chat path", async () => {
+    let capturedUrl = "";
+    let capturedBody: Record<string, unknown> = {};
+    const client = new ProviderHttpClient("https://upstream.test", async (url, init) => {
+      capturedUrl = String(url);
+      capturedBody = JSON.parse(String(init?.body));
+      return Response.json({
+        id: "chatcmpl_1",
+        object: "chat.completion",
+        model: "gpt-5.5",
+        choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }]
+      });
+    });
+
+    const result = await forwardModelRequest(client, {
+      method: "POST",
+      path: "/v1/chat/completions",
+      body: {
+        model: "gpt-5.5",
+        messages: [{ role: "user", content: "Reply OK only." }],
+        max_tokens: 16,
+        stream: false
+      },
+      headers: { authorization: "Bearer t" }
+    });
+
+    expect(capturedUrl).toBe("https://upstream.test/chat/completions");
+    expect(capturedBody.model).toBe("openai.gpt-5.5");
+    expect(capturedBody.max_completion_tokens).toBe(16);
+    expect(capturedBody).not.toHaveProperty("max_tokens");
+    expect(result.body).toMatchObject({
+      object: "chat.completion",
+      model: "gpt-5.5",
+      choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }]
     });
   });
 

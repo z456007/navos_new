@@ -293,16 +293,19 @@ describe("server routes", () => {
     expect(models.statusCode).toBe(200);
     const ids = models.json().data.map((item: { id: string }) => item.id);
     expect(ids).toEqual([
-      "claude.opus-4.8",
-      "claude.sonnet-4.6",
-      "claude.sonnet-4.5",
-      "claude.haiku-4.5",
+      "claude-opus-4-6",
+      "claude-opus-4-7",
+      "claude-opus-4-8",
+      "claude-sonnet-4-6",
+      "claude-sonnet-4-5",
+      "claude-haiku-4-5",
       "codex",
+      "gpt-5.5",
       "gpt-5.3-codex",
       "gpt-5.2-codex",
       "gpt-image-2"
     ]);
-    expect(ids).not.toContain("gpt-5.5");
+    expect(ids).not.toContain("claude.opus-4.8");
     expect(ids).not.toContain("qwen.qwen3.6-plus");
 
     const admin = await app.inject({
@@ -313,7 +316,7 @@ describe("server routes", () => {
     expect(admin.statusCode).toBe(401);
   });
 
-  it("proxies public chat only for claude and codex models", async () => {
+  it("proxies only public chat models", async () => {
     const forwarded: Array<{ path: string; body: Record<string, unknown> }> = [];
     const app = createApp({
       masterApiKey: "sk-master",
@@ -343,15 +346,27 @@ describe("server routes", () => {
       body: { model: "openai.gpt-5.3-codex" }
     });
 
+    const gpt55 = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: { authorization: "Bearer sk-public" },
+      payload: { model: "gpt-5.5", messages: [{ role: "user", content: "hi" }], max_tokens: 16 }
+    });
+    expect(gpt55.statusCode).toBe(200);
+    expect(forwarded[1]).toMatchObject({
+      path: "/chat/completions",
+      body: { model: "openai.gpt-5.5" }
+    });
+
     const blocked = await app.inject({
       method: "POST",
       url: "/v1/chat/completions",
       headers: { authorization: "Bearer sk-public" },
-      payload: { model: "gpt-5.5", messages: [{ role: "user", content: "hi" }] }
+      payload: { model: "gpt-5.4", messages: [{ role: "user", content: "hi" }] }
     });
     expect(blocked.statusCode).toBe(400);
     expect(blocked.json()).toMatchObject({ error: { type: "model_not_allowed" } });
-    expect(forwarded).toHaveLength(1);
+    expect(forwarded).toHaveLength(2);
   });
 
   it("normalizes public Claude aliases before allow checks and forwarding", async () => {
@@ -390,12 +405,12 @@ describe("server routes", () => {
       method: "POST",
       url: "/v1/messages",
       headers: { authorization: "Bearer sk-public" },
-      payload: { model: "claude-opus-4-8", messages: [{ role: "user", content: "hi" }], max_tokens: 8 }
+      payload: { model: "claude-opus-4-7", messages: [{ role: "user", content: "hi" }], max_tokens: 8 }
     });
     expect(messages.statusCode).toBe(200);
     expect(forwarded[1]).toMatchObject({
       path: "/v1/messages",
-      body: { model: "claude.opus-4.8" }
+      body: { model: "claude.opus-4.7" }
     });
   });
 

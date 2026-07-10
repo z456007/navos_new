@@ -7,6 +7,8 @@ import { ProviderHttpClient } from "../protocols/http.js";
 import { buildImageGenerationPayload, createImageGeneration } from "../protocols/image.js";
 import {
   forwardModelRequest,
+  isPublicProxyChatModelAllowed,
+  isPublicProxyMessagesModelAllowed,
   LOCAL_MODEL_IDS,
   normalizePublicProxyModelId,
   PUBLIC_PROXY_MODEL_IDS
@@ -178,30 +180,11 @@ function normalizePublicProxyBody(body: Record<string, unknown>): Record<string,
 }
 
 function isPublicChatModelAllowed(model: string | undefined): boolean {
-  if (!model) {
-    return false;
-  }
-  return [
-    "claude.opus-4.8",
-    "claude.sonnet-4.6",
-    "claude.sonnet-4.5",
-    "claude.haiku-4.5",
-    "codex",
-    "gpt-5.3-codex",
-    "gpt-5.2-codex"
-  ].includes(model);
+  return isPublicProxyChatModelAllowed(model);
 }
 
 function isPublicMessagesModelAllowed(model: string | undefined): boolean {
-  if (!model) {
-    return false;
-  }
-  return [
-    "claude.opus-4.8",
-    "claude.sonnet-4.6",
-    "claude.sonnet-4.5",
-    "claude.haiku-4.5"
-  ].includes(model);
+  return isPublicProxyMessagesModelAllowed(model);
 }
 
 function isPublicImageModelAllowed(model: string | undefined): boolean {

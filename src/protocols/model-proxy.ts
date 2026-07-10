@@ -65,19 +65,57 @@ const OPENAI_FAMILY_ALIASES: Record<string, string> = {
 };
 
 export const PUBLIC_PROXY_MODEL_IDS = [
-  "claude.opus-4.8",
-  "claude.sonnet-4.6",
-  "claude.sonnet-4.5",
-  "claude.haiku-4.5",
+  "claude-opus-4-6",
+  "claude-opus-4-7",
+  "claude-opus-4-8",
+  "claude-sonnet-4-6",
+  "claude-sonnet-4-5",
+  "claude-haiku-4-5",
   "codex",
+  "gpt-5.5",
   "gpt-5.3-codex",
   "gpt-5.2-codex",
   "gpt-image-2"
 ];
 
-const PUBLIC_PROXY_MODEL_ID_SET = new Set(PUBLIC_PROXY_MODEL_IDS);
+const PUBLIC_PROXY_CLAUDE_MODEL_IDS = [
+  "claude.opus-4.6",
+  "claude.opus-4.7",
+  "claude.opus-4.8",
+  "claude.sonnet-4.6",
+  "claude.sonnet-4.5",
+  "claude.haiku-4.5"
+];
+
+const PUBLIC_PROXY_CHAT_MODEL_ID_SET = new Set([
+  ...PUBLIC_PROXY_CLAUDE_MODEL_IDS,
+  "codex",
+  "gpt-5.5",
+  "gpt-5.3-codex",
+  "gpt-5.2-codex"
+]);
+
+const PUBLIC_PROXY_MESSAGES_MODEL_ID_SET = new Set(PUBLIC_PROXY_CLAUDE_MODEL_IDS);
+
+const PUBLIC_PROXY_OPENAI_MODEL_ALIASES: Record<string, string> = {
+  "openai.gpt-5.5": "gpt-5.5",
+  "openai.gpt-5.3-codex": "gpt-5.3-codex",
+  "openai.gpt-5.2-codex": "gpt-5.2-codex"
+};
 
 const PUBLIC_PROXY_MODEL_ALIASES: Record<string, string> = {
+  "claude-opus-4-6": "claude.opus-4.6",
+  "claude-opus-4.6": "claude.opus-4.6",
+  "opus-4-6": "claude.opus-4.6",
+  "opus-4.6": "claude.opus-4.6",
+  "ospu-4-6": "claude.opus-4.6",
+  "ospu-4.6": "claude.opus-4.6",
+  "claude-opus-4-7": "claude.opus-4.7",
+  "claude-opus-4.7": "claude.opus-4.7",
+  "opus-4-7": "claude.opus-4.7",
+  "opus-4.7": "claude.opus-4.7",
+  "ospu-4-7": "claude.opus-4.7",
+  "ospu-4.7": "claude.opus-4.7",
   "claude-opus-4-8": "claude.opus-4.8",
   "claude-opus-4.8": "claude.opus-4.8",
   "opus-4-8": "claude.opus-4.8",
@@ -107,29 +145,39 @@ export const LOCAL_MODEL_IDS = [
   "doubao-seedance-2-0-260128"
 ];
 
+export function isPublicProxyChatModelAllowed(model: string | undefined): boolean {
+  return Boolean(model && PUBLIC_PROXY_CHAT_MODEL_ID_SET.has(model));
+}
+
+export function isPublicProxyMessagesModelAllowed(model: string | undefined): boolean {
+  return Boolean(model && PUBLIC_PROXY_MESSAGES_MODEL_ID_SET.has(model));
+}
+
 export function normalizePublicProxyModelId(model: string | undefined): string | undefined {
   const raw = model?.trim();
   if (!raw) {
     return undefined;
   }
-  if (PUBLIC_PROXY_MODEL_ID_SET.has(raw)) {
-    return raw;
-  }
 
   const name = raw.split("/").at(-1)?.trim() ?? raw;
-  if (PUBLIC_PROXY_MODEL_ID_SET.has(name)) {
-    return name;
-  }
-
   const lowerName = name.toLowerCase();
   const alias = PUBLIC_PROXY_MODEL_ALIASES[lowerName];
   if (alias) {
     return alias;
   }
 
+  const openAiAlias = PUBLIC_PROXY_OPENAI_MODEL_ALIASES[lowerName];
+  if (openAiAlias) {
+    return openAiAlias;
+  }
+
   const normalizedClaude = normalizeClaudeModel(lowerName);
-  if (PUBLIC_PROXY_MODEL_ID_SET.has(normalizedClaude)) {
+  if (PUBLIC_PROXY_MESSAGES_MODEL_ID_SET.has(normalizedClaude)) {
     return normalizedClaude;
+  }
+
+  if (PUBLIC_PROXY_CHAT_MODEL_ID_SET.has(lowerName) || lowerName === "gpt-image-2") {
+    return lowerName;
   }
 
   return resolvePublicClaudeFamilyAlias(lowerName) ?? raw;
@@ -160,6 +208,9 @@ async function forwardChatCompletion<T = unknown>(
   const model = readString(body.model) ?? "sonnet-4.6";
   const openAiModel = resolveOpenAiModel(model);
   if (openAiModel) {
+    if (!usesOpenAiResponsesPath(openAiModel)) {
+      return client.requestJson<T>("POST", "/chat/completions", buildOpenAiChatBody(body, openAiModel), request.headers);
+    }
     const result = await client.requestJson("POST", "/responses", buildOpenAiResponsesBody(body, openAiModel), request.headers);
     if (result.status < 200 || result.status >= 300) {
       return result as ProviderResult<T>;
@@ -185,6 +236,25 @@ async function forwardChatCompletion<T = unknown>(
 
 function normalizeProxyBody(path: string, body: unknown): unknown {
   return path && body !== undefined ? body : {};
+}
+
+function buildOpenAiChatBody(body: Record<string, unknown>, model: string): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(body)) {
+    if (key !== "model" && key !== "max_tokens" && key !== "stream") {
+      out[key] = value;
+    }
+  }
+  out.model = model;
+  out.messages = Array.isArray(body.messages) ? body.messages : [];
+  const maxTokens = readNumber(body.max_tokens) ?? readNumber(body.max_completion_tokens);
+  if (maxTokens !== undefined) {
+    out.max_completion_tokens = maxTokens;
+  }
+  if (out.reasoning_effort === "max") {
+    out.reasoning_effort = "high";
+  }
+  return out;
 }
 
 function buildOpenAiResponsesBody(body: Record<string, unknown>, model: string): Record<string, unknown> {
@@ -311,6 +381,10 @@ function resolvePublicClaudeFamilyAlias(model: string): string | undefined {
     return "claude.haiku-4.5";
   }
   return undefined;
+}
+
+function usesOpenAiResponsesPath(model: string): boolean {
+  return model === "openai.gpt-5.4-pro" || model.includes("codex");
 }
 
 function resolveOpenAiModel(model: string): string | undefined {
