@@ -86,7 +86,12 @@ export class YydsDomainPool {
     }
 
     const blacklist = new Set(config.blacklist.map(normalizeDomain));
-    const healthByDomain = new Map((await this.store.listHealth()).map((record) => [record.domain, record]));
+    const healthByDomain = new Map(
+      (await this.store.listHealth()).map((record) => {
+        const domain = normalizeDomain(record.domain);
+        return [domain, { ...record, domain }] as const;
+      })
+    );
     const domains = new Set<string>();
 
     if (config.mode === "auto" || config.mode === "auto-plus-whitelist") {
