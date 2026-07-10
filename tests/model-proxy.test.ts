@@ -405,6 +405,54 @@ describe("model proxy", () => {
     }]);
   });
 
+  it("preserves Claude Code tool_result image parts when routing chat requests to Anthropic", async () => {
+    let capturedBody: Record<string, unknown> = {};
+    const client = new ProviderHttpClient("https://upstream.test", async (_url, init) => {
+      capturedBody = JSON.parse(String(init?.body));
+      return Response.json({
+        id: "msg_tool_result_vision",
+        model: "claude.sonnet-4.6",
+        content: [{ type: "text", text: "the image is blue" }]
+      });
+    });
+
+    await forwardModelRequest(client, {
+      method: "POST",
+      path: "/v1/chat/completions",
+      body: {
+        model: "claude-sonnet-4-6",
+        messages: [{
+          role: "user",
+          content: [{
+            type: "tool_result",
+            tool_use_id: "toolu_read_image",
+            content: [
+              { type: "text", text: "Read image file screenshot.png" },
+              { type: "image_url", image_url: { url: "data:image/png;base64,Ymx1ZQ==" } }
+            ]
+          }]
+        }],
+        max_tokens: 16
+      },
+      headers: { authorization: "Bearer t" }
+    });
+
+    expect(capturedBody.messages).toEqual([{
+      role: "user",
+      content: [{
+        type: "tool_result",
+        tool_use_id: "toolu_read_image",
+        content: [
+          { type: "text", text: "Read image file screenshot.png" },
+          {
+            type: "image",
+            source: { type: "base64", media_type: "image/png", data: "Ymx1ZQ==" }
+          }
+        ]
+      }]
+    }]);
+  });
+
   it("rejects unsupported proxy paths", async () => {
     const client = new ProviderHttpClient("https://upstream.test", async () => Response.json({}));
     await expect(forwardModelRequest(client, {

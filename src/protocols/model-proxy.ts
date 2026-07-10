@@ -1326,7 +1326,16 @@ function openAiContentPartsToAnthropic(value: unknown[]): unknown[] {
         return text ? { type: "text", text } : undefined;
       }
       const record = item as Record<string, unknown>;
-      if (readString(record.type) === "image" && record.source) {
+      const type = readString(record.type);
+      if (type === "tool_result" || type === "tool_use_result") {
+        return {
+          ...record,
+          content: Array.isArray(record.content)
+            ? openAiContentPartsToAnthropic(record.content)
+            : record.content
+        };
+      }
+      if (type === "image" && record.source) {
         return record;
       }
       const imageUrl = readImageUrl(record);
