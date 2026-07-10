@@ -1483,6 +1483,198 @@ describe("server routes", () => {
     expect((await store.get("u1"))?.rateLimitedUntil).toBe(0);
   });
 
+  it("retries model requests on the next account when upstream is temporarily unavailable", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    await accountService.importAccount({ uid: "u1", token: "t1" });
+    await accountService.importAccount({ uid: "u2", token: "t2" });
+    const usedUids: string[] = [];
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      fetchImpl: async (_url, init) => {
+        const authorization = String((init?.headers as Record<string, string>).authorization ?? "");
+        const uid = authorization.replace(/^Bearer\s+/, "").split(":")[0];
+        usedUids.push(uid);
+        if (uid === "u1") {
+          return Response.json(
+            { error: { message: "Service temporarily unavailable" } },
+            { status: 503 }
+          );
+        }
+        return Response.json({
+          id: "chatcmpl_1",
+          object: "chat.completion",
+          choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }]
+        });
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: { authorization: "Bearer sk-test" },
+      payload: {
+        model: "gpt-5.5",
+        messages: [{ role: "user", content: "hello" }]
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(usedUids).toEqual(["u1", "u2"]);
+    expect((await store.get("u1"))?.rateLimitedUntil).toBeGreaterThan(Date.now());
+    expect((await store.get("u2"))?.status).toBe("active");
+  });
+
+  it("cools down model access failures and retries with the next account", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    await accountService.importAccount({ uid: "u1", token: "t1" });
+    await accountService.importAccount({ uid: "u2", token: "t2" });
+    const usedUids: string[] = [];
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      fetchImpl: async (_url, init) => {
+        const authorization = String((init?.headers as Record<string, string>).authorization ?? "");
+        const uid = authorization.replace(/^Bearer\s+/, "").split(":")[0];
+        usedUids.push(uid);
+        if (uid === "u1") {
+          return Response.json(
+            { error: { message: "This account does not have access to this model" } },
+            { status: 403 }
+          );
+        }
+        return Response.json({
+          id: "chatcmpl_1",
+          object: "chat.completion",
+          choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }]
+        });
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: { authorization: "Bearer sk-test" },
+      payload: {
+        model: "gpt-5.5",
+        messages: [{ role: "user", content: "hello" }]
+      }
+    });
+
+    const firstAccount = await store.get("u1");
+    expect(response.statusCode).toBe(200);
+    expect(usedUids).toEqual(["u1", "u2"]);
+    expect(firstAccount?.status).toBe("active");
+    expect(firstAccount?.rateLimitedUntil).toBeGreaterThan(Date.now());
+  });
+
+  it("depletes exhausted model accounts and retries with the next account", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    await accountService.importAccount({ uid: "u1", token: "t1" });
+    await accountService.importAccount({ uid: "u2", token: "t2" });
+    const usedUids: string[] = [];
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      fetchImpl: async (_url, init) => {
+        const authorization = String((init?.headers as Record<string, string>).authorization ?? "");
+        const uid = authorization.replace(/^Bearer\s+/, "").split(":")[0];
+        usedUids.push(uid);
+        if (uid === "u1") {
+          return Response.json(
+            { error: { message: "insufficient_balance" } },
+            { status: 402 }
+          );
+        }
+        return Response.json({
+          id: "chatcmpl_1",
+          object: "chat.completion",
+          choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }]
+        });
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: { authorization: "Bearer sk-test" },
+      payload: {
+        model: "gpt-5.5",
+        messages: [{ role: "user", content: "hello" }]
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(usedUids).toEqual(["u1", "u2"]);
+    expect((await store.get("u1"))?.status).toBe("depleted");
+    expect((await store.get("u2"))?.status).toBe("active");
+  });
+
+  it("auto-registers a model account when the pool has no available account", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    const registrationService = {
+      registerOne: vi.fn(async () => {
+        await accountService.importAccount({
+          uid: "auto-model-1",
+          token: "auto-token-1",
+          mailboxAddr: "auto-model-1@mail.test",
+          mailboxToken: "mail-token",
+          balanceRemaining: 1000,
+          balanceTotal: 1000,
+          status: "active"
+        });
+        return {
+          success: true,
+          uid: "auto-model-1",
+          token: "auto-token-1",
+          email: "auto-model-1@mail.test",
+          mailboxToken: "mail-token",
+          balance: 1000
+        };
+      })
+    };
+    const usedHeaders: string[] = [];
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      registrationService: registrationService as never,
+      fetchImpl: async (_url, init) => {
+        usedHeaders.push(String((init?.headers as Record<string, string>).authorization ?? ""));
+        return Response.json({
+          id: "chatcmpl_1",
+          object: "chat.completion",
+          choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }]
+        });
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: { authorization: "Bearer sk-test" },
+      payload: {
+        model: "gpt-5.5",
+        messages: [{ role: "user", content: "hello" }]
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(registrationService.registerOne).toHaveBeenCalledOnce();
+    expect(usedHeaders).toEqual(["Bearer auto-model-1:auto-token-1"]);
+  });
+
   it("depletes a leased video account when upstream reports insufficient balance", async () => {
     const store = new InMemoryAccountStore();
     const accountService = new AccountService(store);

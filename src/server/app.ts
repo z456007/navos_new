@@ -88,6 +88,8 @@ const CORS_ALLOW_METHODS = "GET,POST,PUT,PATCH,DELETE,OPTIONS";
 const CORS_DEFAULT_ALLOW_HEADERS = "authorization,content-type,x-api-key";
 const CORS_MAX_AGE_SECONDS = "86400";
 const JSON_BODY_LIMIT_BYTES = 64 * 1024 * 1024;
+const MODEL_PROXY_MAX_ATTEMPTS = 5;
+const MODEL_PROXY_RETRY_COOLDOWN_SECONDS = 30;
 
 function headersFromRequest(request: FastifyRequest): HeaderBag {
   const headers: HeaderBag = {};
@@ -150,6 +152,12 @@ function copyProviderResponseHeaders(reply: FastifyReply, headers: Headers): voi
   });
 }
 
+function providerResultBodyText(result: ProviderResult): string {
+  return typeof result.body === "string"
+    ? result.body
+    : JSON.stringify(result.body) ?? "";
+}
+
 function providerResultIndicatesQuotaExhausted(result: ProviderResult): boolean {
   if (result.status === 402) {
     return true;
@@ -160,13 +168,46 @@ function providerResultIndicatesQuotaExhausted(result: ProviderResult): boolean 
   return /insufficient_balance|积分不足|余额不足/.test(bodyText);
 }
 
+function providerResultIndicatesTemporaryFailure(result: ProviderResult): boolean {
+  const bodyText = providerResultBodyText(result);
+  if (result.status === 403 && /access|permission|forbidden|model|not available/i.test(bodyText)) {
+    return true;
+  }
+  if ([408, 409, 425, 429].includes(result.status) || result.status >= 500) {
+    return true;
+  }
+  return /temporar|rate.?limit|too many|timeout|timed out|overload|upstream/i.test(bodyText);
+}
+
+function providerResultIndicatesInvalidAccount(result: ProviderResult): boolean {
+  const bodyText = providerResultBodyText(result);
+  if (result.status === 403) {
+    return /banned|disabled|invalid.*token|credential/i.test(bodyText);
+  }
+  if (result.status !== 401) {
+    return false;
+  }
+  return /invalid|unauthorized|token|credential|account|banned|disabled/i.test(bodyText);
+}
+
+function providerExceptionResult(error: unknown): ProviderResult {
+  return {
+    status: 502,
+    body: {
+      error: {
+        message: error instanceof Error ? error.message : "Upstream request failed",
+        type: "upstream_error"
+      }
+    },
+    headers: new Headers()
+  };
+}
+
 function imageResultIsRetryable(result: ProviderResult): boolean {
   if (result.status < 500) {
     return false;
   }
-  const bodyText = typeof result.body === "string"
-    ? result.body
-    : JSON.stringify(result.body);
+  const bodyText = providerResultBodyText(result);
   return /Image task failed|创建图片任务失败|upstream|server_error|temporar/i.test(bodyText);
 }
 
@@ -304,6 +345,94 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     if (providerResultIndicatesQuotaExhausted(result)) {
       await accountService.depleteAccount(uid);
     }
+  }
+
+  async function registerProviderAccountIfPossible(): Promise<boolean> {
+    const registrationService = options.registrationService;
+    if (!registrationService) {
+      return false;
+    }
+
+    const registrationResult = await registrationService.registerOne();
+    if (!registrationResult.success) {
+      return false;
+    }
+
+    if (registrationResult.uid && registrationResult.token) {
+      const savedAccount = await accountService.getProviderAccount(registrationResult.uid);
+      if (!savedAccount) {
+        await accountService.importAccount({
+          uid: registrationResult.uid,
+          token: registrationResult.token,
+          mailboxAddr: registrationResult.email,
+          mailboxToken: registrationResult.mailboxToken,
+          balanceRemaining: registrationResult.balance,
+          balanceTotal: registrationResult.balance,
+          status: "active"
+        });
+      }
+    }
+
+    return true;
+  }
+
+  async function providerAuthOrRegister(): Promise<ProviderAuthContext | undefined> {
+    let account = await accountService.pickAccount();
+    if (!account && await registerProviderAccountIfPossible()) {
+      account = await accountService.pickAccount();
+    }
+    if (!account) {
+      return undefined;
+    }
+    return {
+      account,
+      headers: buildProviderAuthHeaders(account, options.providerAuthMode)
+    };
+  }
+
+  async function forwardModelRequestWithAccountRotation(
+    path: "/v1/chat/completions" | "/v1/responses" | "/v1/messages",
+    body: Record<string, unknown>
+  ): Promise<ProviderResult> {
+    let lastResult: ProviderResult | undefined;
+
+    for (let attempt = 0; attempt < MODEL_PROXY_MAX_ATTEMPTS; attempt += 1) {
+      const auth = await providerAuthOrRegister();
+      if (!auth) {
+        break;
+      }
+
+      const result = await forwardModelRequest(client, {
+        method: "POST",
+        path,
+        body,
+        headers: auth.headers
+      }).catch(providerExceptionResult);
+      lastResult = result;
+
+      if (providerResultIndicatesQuotaExhausted(result)) {
+        await accountService.depleteAccount(auth.account.uid);
+        continue;
+      }
+
+      if (providerResultIndicatesInvalidAccount(result)) {
+        await accountService.disableAccount(auth.account.uid);
+        continue;
+      }
+
+      if (providerResultIndicatesTemporaryFailure(result)) {
+        await accountService.cooldownAccount(auth.account.uid, MODEL_PROXY_RETRY_COOLDOWN_SECONDS);
+        continue;
+      }
+
+      return result;
+    }
+
+    return lastResult ?? {
+      status: 503,
+      body: { error: { message: "No provider account configured", type: "account_unavailable" } },
+      headers: new Headers()
+    };
   }
 
   async function leaseVideoAccountOrRegister(leaseId: string, reply: FastifyReply): Promise<AccountRecord | undefined> {
@@ -656,17 +785,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       await sendModelNotAllowed(reply, "Only public Claude and Codex models are allowed on this endpoint");
       return;
     }
-    const auth = await providerAuth(reply);
-    if (!auth) {
-      return;
-    }
-    const result = await forwardModelRequest(client, {
-      method: "POST",
-      path: "/v1/chat/completions",
-      body,
-      headers: auth.headers
-    });
-    await depleteProviderAccountIfNeeded(auth.account.uid, result);
+    const result = await forwardModelRequestWithAccountRotation("/v1/chat/completions", body);
     await sendProviderResult(reply, result);
   });
 
@@ -681,17 +800,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       await sendModelNotAllowed(reply, "Only public Codex and GPT Responses models are allowed on this endpoint");
       return;
     }
-    const auth = await providerAuth(reply);
-    if (!auth) {
-      return;
-    }
-    const result = await forwardModelRequest(client, {
-      method: "POST",
-      path: "/v1/responses",
-      body,
-      headers: auth.headers
-    });
-    await depleteProviderAccountIfNeeded(auth.account.uid, result);
+    const result = await forwardModelRequestWithAccountRotation("/v1/responses", body);
     await sendProviderResult(reply, result);
   });
 
@@ -706,17 +815,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       await sendModelNotAllowed(reply, "Only public Claude models are allowed on this endpoint");
       return;
     }
-    const auth = await providerAuth(reply);
-    if (!auth) {
-      return;
-    }
-    const result = await forwardModelRequest(client, {
-      method: "POST",
-      path: "/v1/messages",
-      body,
-      headers: auth.headers
-    });
-    await depleteProviderAccountIfNeeded(auth.account.uid, result);
+    const result = await forwardModelRequestWithAccountRotation("/v1/messages", body);
     await sendProviderResult(reply, result);
   });
 
