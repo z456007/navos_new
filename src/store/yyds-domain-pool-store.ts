@@ -46,6 +46,7 @@ const DEFAULT_CONFIG: YydsDomainPoolConfig = {
   blacklist: [],
   refreshIntervalMinutes: 30
 };
+const DEFAULT_HEALTH_WEIGHT = 10;
 
 interface YydsDomainPoolConfigRow extends RowDataPacket {
   enabled: 0 | 1;
@@ -261,7 +262,17 @@ function cloneHealth(record: YydsDomainHealthRecord): YydsDomainHealthRecord {
   const cloned: YydsDomainHealthRecord = {
     ...record,
     domain,
-    status: parseStatus(record.status)
+    status: parseStatus(record.status),
+    successCount: parseNonNegativeInteger(record.successCount, 0),
+    failureCount: parseNonNegativeInteger(record.failureCount, 0),
+    verificationTimeoutCount: parseNonNegativeInteger(record.verificationTimeoutCount, 0),
+    mailboxRateLimitCount: parseNonNegativeInteger(record.mailboxRateLimitCount, 0),
+    quotaExhaustedCount: parseNonNegativeInteger(record.quotaExhaustedCount, 0),
+    lastSuccessAt: parseNonNegativeInteger(record.lastSuccessAt, 0),
+    lastFailureAt: parseNonNegativeInteger(record.lastFailureAt, 0),
+    cooldownUntil: parseNonNegativeInteger(record.cooldownUntil, 0),
+    weight: parsePositiveInteger(record.weight, DEFAULT_HEALTH_WEIGHT),
+    lastCheckedAt: parseNonNegativeInteger(record.lastCheckedAt, 0)
   };
   if (cloned.lastError === undefined) {
     delete cloned.lastError;
@@ -309,6 +320,14 @@ function parseStatus(value: string): YydsDomainHealthStatus {
     return value;
   }
   return "active";
+}
+
+function parseNonNegativeInteger(value: number, fallback: number): number {
+  return Number.isFinite(value) && Number.isInteger(value) && value >= 0 ? value : fallback;
+}
+
+function parsePositiveInteger(value: number, fallback: number): number {
+  return Number.isFinite(value) && Number.isInteger(value) && value >= 1 ? value : fallback;
 }
 
 function parseJsonList(value: unknown): string[] {

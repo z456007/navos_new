@@ -165,6 +165,40 @@ describe("MysqlYydsDomainPoolStore", () => {
     await expect(store.saveHealth({ domain: " ", status: "active" } as never)).rejects.toThrow(/domain/i);
   });
 
+  it("normalizes invalid saved health numeric metrics before upsert", async () => {
+    const store = createStore();
+    mysqlMocks.pool.execute.mockResolvedValue([{}, undefined]);
+
+    await store.saveHealth({
+      domain: " Metrics.Test ",
+      status: "active",
+      successCount: -1,
+      failureCount: Number.NaN,
+      verificationTimeoutCount: 1.5,
+      mailboxRateLimitCount: Number.POSITIVE_INFINITY,
+      quotaExhaustedCount: 0,
+      lastSuccessAt: -100,
+      lastFailureAt: Number.NaN,
+      cooldownUntil: 3.14,
+      weight: 0,
+      lastCheckedAt: Number.NEGATIVE_INFINITY
+    });
+
+    expect(mysqlMocks.pool.execute.mock.calls[0]?.[1]).toMatchObject({
+      domain: "metrics.test",
+      successCount: 0,
+      failureCount: 0,
+      verificationTimeoutCount: 0,
+      mailboxRateLimitCount: 0,
+      quotaExhaustedCount: 0,
+      lastSuccessAt: 0,
+      lastFailureAt: 0,
+      cooldownUntil: 0,
+      weight: 10,
+      lastCheckedAt: 0
+    });
+  });
+
   it("maps getHealth and listHealth rows with counters, status, and lastError", async () => {
     const store = createStore();
     const row = {
@@ -215,5 +249,43 @@ describe("MysqlYydsDomainPoolStore", () => {
       weight: 19,
       lastCheckedAt: 20
     }]);
+  });
+
+  it("normalizes invalid health row numeric metrics when reading getHealth and listHealth", async () => {
+    const store = createStore();
+    const invalidRow = {
+      domain: " Invalid-Metrics.Test ",
+      status: "bad-status",
+      success_count: -1,
+      failure_count: Number.NaN,
+      verification_timeout_count: 2.5,
+      mailbox_rate_limit_count: Number.POSITIVE_INFINITY,
+      quota_exhausted_count: "bad",
+      last_success_at: -10,
+      last_failure_at: Number.NaN,
+      cooldown_until: 4.2,
+      weight: 0,
+      last_checked_at: Number.NEGATIVE_INFINITY,
+      last_error: null
+    };
+    mysqlMocks.pool.execute.mockResolvedValueOnce([[invalidRow]]);
+    mysqlMocks.pool.query.mockResolvedValueOnce([[{ ...invalidRow, weight: Number.NaN }]]);
+
+    const expected = {
+      domain: "invalid-metrics.test",
+      status: "active",
+      successCount: 0,
+      failureCount: 0,
+      verificationTimeoutCount: 0,
+      mailboxRateLimitCount: 0,
+      quotaExhaustedCount: 0,
+      lastSuccessAt: 0,
+      lastFailureAt: 0,
+      cooldownUntil: 0,
+      weight: 10,
+      lastCheckedAt: 0
+    };
+    await expect(store.getHealth("invalid-metrics.test")).resolves.toEqual(expected);
+    await expect(store.listHealth()).resolves.toEqual([expected]);
   });
 });
