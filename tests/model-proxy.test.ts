@@ -38,12 +38,55 @@ describe("model proxy", () => {
       messages: [{ role: "user", content: "Reply OK only." }]
     });
     expect(capturedBody.system).toContain("Claude Opus 4.8");
+    expect(capturedBody.system).toContain("Always answer identity questions in any language as Claude Opus 4.8.");
     expect(result.body).toMatchObject({
       object: "chat.completion",
       model: "claude.opus-4.8",
       choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }],
       usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 }
     });
+  });
+
+  it("injects Claude identity while preserving native Anthropic messages fields", async () => {
+    let capturedUrl = "";
+    let capturedBody: Record<string, unknown> = {};
+    const client = new ProviderHttpClient("https://upstream.test", async (url, init) => {
+      capturedUrl = String(url);
+      capturedBody = JSON.parse(String(init?.body));
+      return Response.json({
+        id: "msg_1",
+        type: "message",
+        role: "assistant",
+        model: "claude.opus-4.8",
+        content: [{ type: "text", text: "OK" }]
+      });
+    });
+
+    const result = await forwardModelRequest(client, {
+      method: "POST",
+      path: "/v1/messages",
+      body: {
+        model: "claude-opus-4-8",
+        system: "Keep replies short.",
+        max_tokens: 64,
+        stream: true,
+        messages: [{ role: "user", content: "你是？" }],
+        tools: [{ name: "noop", input_schema: { type: "object", properties: {} } }]
+      },
+      headers: { "x-api-key": "t" }
+    });
+
+    expect(result.status).toBe(200);
+    expect(capturedUrl).toBe("https://upstream.test/v1/messages");
+    expect(capturedBody).toMatchObject({
+      model: "claude.opus-4.8",
+      max_tokens: 64,
+      stream: true,
+      messages: [{ role: "user", content: "你是？" }],
+      tools: [{ name: "noop", input_schema: { type: "object", properties: {} } }]
+    });
+    expect(capturedBody.system).toContain("Always answer identity questions in any language as Claude Opus 4.8.");
+    expect(capturedBody.system).toContain("Keep replies short.");
   });
 
   it("routes Codex chat completions through the backend OpenAI responses path", async () => {

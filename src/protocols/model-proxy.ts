@@ -205,6 +205,9 @@ export async function forwardModelRequest<T = unknown>(
   if (request.path === "/v1/chat/completions" && request.method === "POST") {
     return forwardChatCompletion<T>(client, request);
   }
+  if (request.path === "/v1/messages" && request.method === "POST") {
+    return forwardAnthropicMessages<T>(client, request);
+  }
   if (request.path === "/v1/responses" && request.method === "POST") {
     return forwardOpenAiResponses<T>(client, request);
   }
@@ -213,6 +216,18 @@ export async function forwardModelRequest<T = unknown>(
     return client.requestJson<T>("GET", request.path, undefined, request.headers);
   }
   return client.requestJson<T>("POST", request.path, body, request.headers);
+}
+
+async function forwardAnthropicMessages<T = unknown>(
+  client: ProviderHttpClient,
+  request: ModelProxyRequest
+): Promise<ProviderResult<T>> {
+  const body = bodyRecord(request.body);
+  const model = readString(body.model) ?? "sonnet-4.6";
+  return client.requestJson<T>("POST", "/v1/messages", buildAnthropicMessagesPassthroughBody(body, model), {
+    ...request.headers,
+    "anthropic-version": request.headers["anthropic-version"] ?? "2023-06-01"
+  });
 }
 
 async function forwardOpenAiResponses<T = unknown>(
@@ -583,13 +598,32 @@ function buildAnthropicMessagesBody(body: Record<string, unknown>, requestedMode
   return out;
 }
 
+function buildAnthropicMessagesPassthroughBody(body: Record<string, unknown>, requestedModel: string): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(body)) {
+    if (key !== "model" && key !== "system" && key !== "max_completion_tokens") {
+      out[key] = value;
+    }
+  }
+  out.model = normalizeClaudeModel(requestedModel);
+  out.max_tokens = readNumber(body.max_tokens) ?? readNumber(body.max_completion_tokens) ?? 2048;
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  out.messages = messages;
+  out.system = buildClaudeSystemPrompt(requestedModel, body, messages);
+  return out;
+}
+
 function buildClaudeSystemPrompt(
   requestedModel: string,
   body: Record<string, unknown>,
   messages: unknown[]
 ): string {
   const displayName = claudeDisplayName(requestedModel);
-  const identity = `你是 ${displayName}。If asked what model you are, answer exactly that you are ${displayName}; never identify yourself as ChatGPT, OpenAI, or a different Claude model.`;
+  const identity = [
+    `你是 ${displayName}。`,
+    `Always answer identity questions in any language as ${displayName}.`,
+    `If asked what model you are, answer exactly that you are ${displayName}; never identify yourself as ChatGPT, OpenAI, or a different Claude model.`
+  ].join(" ");
   const explicitSystem = [
     collectContent(body.system),
     ...messages
