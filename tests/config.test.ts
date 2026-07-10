@@ -98,6 +98,21 @@ describe("loadConfig", () => {
     });
   });
 
+  it("rejects invalid YYDS domain pool enabled booleans", () => {
+    const baseEnv = {
+      MASTER_API_KEY: "sk-test",
+      PROVIDER_BASE_URL: "https://upstream.test",
+      VIP_HMAC_SECRET: "test-secret-32-chars-long-key!!"
+    };
+
+    for (const invalidValue of ["flase", "maybe"]) {
+      expect(() => loadConfig({
+        ...baseEnv,
+        YYDS_DOMAIN_POOL_ENABLED: invalidValue
+      })).toThrow(/YYDS_DOMAIN_POOL_ENABLED/);
+    }
+  });
+
   it("caps registration scheduler values and normalizes YYDS domain CSV lists", () => {
     const config = loadConfig({
       MASTER_API_KEY: "sk-test",

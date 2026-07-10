@@ -25,7 +25,7 @@ vi.mock("mysql2/promise", () => ({
   createPool: mysqlMocks.createPool
 }));
 
-import { MysqlYydsDomainPoolStore } from "../src/store/yyds-domain-pool-store.js";
+import { InMemoryYydsDomainPoolStore, MysqlYydsDomainPoolStore } from "../src/store/yyds-domain-pool-store.js";
 
 const mysqlConfig = {
   host: "127.0.0.1",
@@ -34,6 +34,61 @@ const mysqlConfig = {
   password: "secret",
   database: "navos_test"
 };
+
+describe("InMemoryYydsDomainPoolStore", () => {
+  it("preserves existing health telemetry when replacing auto snapshot metadata", async () => {
+    const store = new InMemoryYydsDomainPoolStore();
+    await store.saveHealth({
+      domain: " Merge.Test ",
+      status: "cooldown",
+      successCount: 4,
+      failureCount: 7,
+      verificationTimeoutCount: 2,
+      mailboxRateLimitCount: 3,
+      quotaExhaustedCount: 1,
+      lastSuccessAt: 11,
+      lastFailureAt: 22,
+      cooldownUntil: 333,
+      weight: 40,
+      lastCheckedAt: 100,
+      lastAutoCheckedAt: 50,
+      lastError: "verification timeout"
+    });
+
+    await store.replaceAutoSnapshot([{
+      domain: "merge.test",
+      status: "active",
+      successCount: 0,
+      failureCount: 0,
+      verificationTimeoutCount: 0,
+      mailboxRateLimitCount: 0,
+      quotaExhaustedCount: 0,
+      lastSuccessAt: 0,
+      lastFailureAt: 0,
+      cooldownUntil: 0,
+      weight: 100,
+      lastCheckedAt: 200,
+      lastAutoCheckedAt: 200
+    }]);
+
+    await expect(store.getHealth("merge.test")).resolves.toEqual({
+      domain: "merge.test",
+      status: "cooldown",
+      successCount: 4,
+      failureCount: 7,
+      verificationTimeoutCount: 2,
+      mailboxRateLimitCount: 3,
+      quotaExhaustedCount: 1,
+      lastSuccessAt: 11,
+      lastFailureAt: 22,
+      cooldownUntil: 333,
+      weight: 100,
+      lastCheckedAt: 200,
+      lastAutoCheckedAt: 200,
+      lastError: "verification timeout"
+    });
+  });
+});
 
 describe("MysqlYydsDomainPoolStore", () => {
   beforeEach(() => {
@@ -296,7 +351,15 @@ describe("MysqlYydsDomainPoolStore", () => {
     expect(mysqlMocks.connection.execute.mock.calls[0]?.[0]).toContain("last_auto_checked_at = 0");
     expect(mysqlMocks.connection.execute.mock.calls[0]?.[0]).toContain("domain NOT IN");
     expect(mysqlMocks.connection.execute.mock.calls[0]?.[1]).toEqual(["new.test"]);
-    expect(mysqlMocks.connection.execute.mock.calls[1]?.[0]).toContain("ON DUPLICATE KEY UPDATE");
+    const upsertSql = String(mysqlMocks.connection.execute.mock.calls[1]?.[0]);
+    expect(upsertSql).toContain("ON DUPLICATE KEY UPDATE");
+    expect(upsertSql).not.toContain("status = VALUES(status)");
+    expect(upsertSql).not.toContain("success_count = VALUES(success_count)");
+    expect(upsertSql).not.toContain("failure_count = VALUES(failure_count)");
+    expect(upsertSql).not.toContain("verification_timeout_count = VALUES(verification_timeout_count)");
+    expect(upsertSql).not.toContain("mailbox_rate_limit_count = VALUES(mailbox_rate_limit_count)");
+    expect(upsertSql).not.toContain("quota_exhausted_count = VALUES(quota_exhausted_count)");
+    expect(upsertSql).not.toContain("last_error = VALUES(last_error)");
     expect(mysqlMocks.connection.execute.mock.calls[1]?.[1]).toMatchObject({
       domain: "new.test",
       lastCheckedAt: 10,

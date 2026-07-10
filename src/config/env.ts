@@ -111,7 +111,7 @@ function parseCappedPositiveInt(value: string | undefined, fallback: number, max
   return Math.min(parsePositiveInt(value, fallback), max);
 }
 
-function parseBool(value: string | undefined, fallback: boolean): boolean {
+function parseStrictBool(value: string | undefined, fallback: boolean, name: string): boolean {
   if (!value) {
     return fallback;
   }
@@ -122,7 +122,7 @@ function parseBool(value: string | undefined, fallback: boolean): boolean {
   if (normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on") {
     return true;
   }
-  return fallback;
+  throw new Error(`Invalid ${name}: ${value}`);
 }
 
 function parseCsv(value: string | undefined): string[] {
@@ -197,7 +197,7 @@ export function loadConfig(env: EnvInput = process.env): AppConfig {
     imageMaxPollAttempts: parsePositiveInt(env.IMAGE_MAX_POLL_ATTEMPTS, 30),
     imagePollIntervalMs: parsePositiveInt(env.IMAGE_POLL_INTERVAL_MS, 4_000),
     yydsDomainPool: normalizeYydsDomainPoolConfig({
-      enabled: parseBool(env.YYDS_DOMAIN_POOL_ENABLED, true),
+      enabled: parseStrictBool(env.YYDS_DOMAIN_POOL_ENABLED, true, "YYDS_DOMAIN_POOL_ENABLED"),
       mode: parseDomainPoolMode(env.YYDS_DOMAIN_POOL_MODE),
       whitelist: parseCsv(env.YYDS_DOMAIN_WHITELIST).map((item) => item.toLowerCase()),
       blacklist: parseCsv(env.YYDS_DOMAIN_BLACKLIST).map((item) => item.toLowerCase()),

@@ -336,30 +336,6 @@ export class YydsDomainPool {
     });
   }
 
-  private async clearRemovedAutoSources(currentAutoDomains: Set<string>): Promise<void> {
-    for (const record of await this.store.listHealth()) {
-      const domain = normalizeDomain(record.domain);
-      if (!domain || currentAutoDomains.has(domain) || record.lastAutoCheckedAt <= 0) {
-        continue;
-      }
-      await this.store.saveHealth({
-        ...record,
-        domain,
-        lastAutoCheckedAt: 0
-      });
-    }
-  }
-
-  private async ensureHealth(domain: string, now: number, weight: number): Promise<YydsDomainHealthRecord> {
-    const normalized = normalizeDomain(domain);
-    const existing = await this.findHealthByNormalizedDomain(normalized);
-    const record = existing
-      ? { ...existing, weight: Math.max(existing.weight, weight), lastCheckedAt: now, lastAutoCheckedAt: now }
-      : { ...defaultHealth(normalized, now, weight), lastAutoCheckedAt: now };
-    await this.store.saveHealth(record);
-    return record;
-  }
-
   private async getOrCreateHealth(domain: string, now: number): Promise<YydsDomainHealthRecord> {
     const normalized = normalizeDomain(domain);
     return (await this.findHealthByNormalizedDomain(normalized)) ?? defaultHealth(normalized, now, DEFAULT_WEIGHT);

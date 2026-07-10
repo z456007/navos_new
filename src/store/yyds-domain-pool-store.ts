@@ -122,7 +122,10 @@ export class InMemoryYydsDomainPoolStore implements YydsDomainPoolStore {
       }
     }
     for (const record of normalizedRecords) {
-      nextHealth.set(record.domain, cloneHealth(record));
+      const existing = nextHealth.get(record.domain);
+      nextHealth.set(record.domain, existing
+        ? mergeAutoSnapshotHealth(existing, record)
+        : cloneHealth(record));
     }
 
     this.health.clear();
@@ -283,7 +286,7 @@ export class MysqlYydsDomainPoolStore implements YydsDomainPoolStore {
         );
       }
       for (const record of normalizedRecords) {
-        await this.saveHealthWithExecutor(connection, record);
+        await this.saveAutoSnapshotHealthWithExecutor(connection, record);
       }
       await connection.commit();
     } catch (error) {
@@ -323,6 +326,40 @@ export class MysqlYydsDomainPoolStore implements YydsDomainPoolStore {
         last_checked_at = VALUES(last_checked_at),
         last_auto_checked_at = VALUES(last_auto_checked_at),
         last_error = VALUES(last_error)`,
+      {
+        domain: normalized.domain,
+        status: normalized.status,
+        successCount: normalized.successCount,
+        failureCount: normalized.failureCount,
+        verificationTimeoutCount: normalized.verificationTimeoutCount,
+        mailboxRateLimitCount: normalized.mailboxRateLimitCount,
+        quotaExhaustedCount: normalized.quotaExhaustedCount,
+        lastSuccessAt: normalized.lastSuccessAt,
+        lastFailureAt: normalized.lastFailureAt,
+        cooldownUntil: normalized.cooldownUntil,
+        weight: normalized.weight,
+        lastCheckedAt: normalized.lastCheckedAt,
+        lastAutoCheckedAt: normalized.lastAutoCheckedAt,
+        lastError: normalized.lastError ?? null
+      }
+    );
+  }
+
+  private async saveAutoSnapshotHealthWithExecutor(executor: Pick<PoolConnection, "execute">, record: YydsDomainHealthRecord): Promise<void> {
+    const normalized = cloneHealth(record);
+    await executor.execute(
+      `INSERT INTO yyds_domain_health
+        (domain, status, success_count, failure_count, verification_timeout_count, mailbox_rate_limit_count,
+         quota_exhausted_count, last_success_at, last_failure_at, cooldown_until, weight, last_checked_at,
+         last_auto_checked_at, last_error)
+       VALUES
+        (:domain, :status, :successCount, :failureCount, :verificationTimeoutCount, :mailboxRateLimitCount,
+         :quotaExhaustedCount, :lastSuccessAt, :lastFailureAt, :cooldownUntil, :weight, :lastCheckedAt,
+         :lastAutoCheckedAt, :lastError)
+       ON DUPLICATE KEY UPDATE
+        weight = GREATEST(weight, VALUES(weight)),
+        last_checked_at = GREATEST(last_checked_at, VALUES(last_checked_at)),
+        last_auto_checked_at = VALUES(last_auto_checked_at)`,
       {
         domain: normalized.domain,
         status: normalized.status,
@@ -453,6 +490,19 @@ function parseJsonList(value: unknown): string[] {
     }
   }
   return [];
+}
+
+function mergeAutoSnapshotHealth(
+  existing: YydsDomainHealthRecord,
+  snapshot: YydsDomainHealthRecord
+): YydsDomainHealthRecord {
+  return cloneHealth({
+    ...existing,
+    domain: snapshot.domain,
+    weight: Math.max(existing.weight, snapshot.weight),
+    lastCheckedAt: Math.max(existing.lastCheckedAt, snapshot.lastCheckedAt),
+    lastAutoCheckedAt: snapshot.lastAutoCheckedAt
+  });
 }
 
 function isDuplicateColumnError(error: unknown): boolean {
