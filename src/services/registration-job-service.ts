@@ -36,6 +36,7 @@ export class RegistrationJobValidationError extends Error {
 export interface RegistrationJobServiceOptions {
   defaultTarget: number;
   defaultConcurrency: number;
+  maxConcurrency?: number;
 }
 
 export interface RegistrationJobServicePort {
@@ -75,23 +76,38 @@ export class RegistrationJobService implements RegistrationJobServicePort {
   private normalizePayload(input: RegistrationJobCreateInput): RegistrationJobPayload {
     const rawInput = this.validateInputObject(input);
     const mode = rawInput.mode;
-    if (mode !== "single" && mode !== "fill") {
-      throw new RegistrationJobValidationError('mode must be either "single" or "fill"');
+    if (mode !== "single" && mode !== "fill" && mode !== "create") {
+      throw new RegistrationJobValidationError('mode must be one of "single", "fill", or "create"');
     }
 
     if (mode === "single") {
       return { mode: "single" };
     }
 
-    const target = rawInput.target === undefined ? this.options.defaultTarget : rawInput.target;
     const concurrency = rawInput.concurrency === undefined ? this.options.defaultConcurrency : rawInput.concurrency;
-    if (typeof target !== "number" || !Number.isInteger(target) || target < 1 || target > 500) {
-      throw new RegistrationJobValidationError("target must be an integer from 1 to 500");
+    const maxConcurrency = this.options.maxConcurrency ?? 20;
+    if (
+      typeof concurrency !== "number" ||
+      !Number.isInteger(concurrency) ||
+      concurrency < 1 ||
+      concurrency > maxConcurrency
+    ) {
+      throw new RegistrationJobValidationError(`concurrency must be an integer from 1 to ${maxConcurrency}`);
     }
-    if (typeof concurrency !== "number" || !Number.isInteger(concurrency) || concurrency < 1 || concurrency > 20) {
-      throw new RegistrationJobValidationError("concurrency must be an integer from 1 to 20");
+
+    if (mode === "fill") {
+      const target = rawInput.target === undefined ? this.options.defaultTarget : rawInput.target;
+      if (typeof target !== "number" || !Number.isInteger(target) || target < 1 || target > 500) {
+        throw new RegistrationJobValidationError("target must be an integer from 1 to 500");
+      }
+      return { mode: "fill", target, concurrency };
     }
-    return { mode: "fill", target, concurrency };
+
+    const count = rawInput.count;
+    if (typeof count !== "number" || !Number.isInteger(count) || count < 1 || count > 500) {
+      throw new RegistrationJobValidationError("count must be an integer from 1 to 500");
+    }
+    return { mode: "create", count, concurrency };
   }
 
   private validateInputObject(input: RegistrationJobCreateInput): Record<string, unknown> {

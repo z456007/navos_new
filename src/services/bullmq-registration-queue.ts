@@ -220,6 +220,10 @@ export class BullmqRegistrationQueue implements RegistrationQueuePort {
       snapshot.target = job.data.target;
       snapshot.concurrency = job.data.concurrency;
     }
+    if (job.data.mode === "create") {
+      snapshot.count = job.data.count;
+      snapshot.concurrency = job.data.concurrency;
+    }
     if (job.returnvalue !== undefined && job.returnvalue !== null) {
       snapshot.results = job.returnvalue;
     }
@@ -268,12 +272,16 @@ function normalizeProgress(progress: unknown): RegistrationJobProgress {
   if (!isRecord(progress)) {
     return { started: 0, completed: 0, failed: 0, total: 0 };
   }
-  return {
+  const normalized: RegistrationJobProgress = {
     started: finiteNumber(progress.started),
     completed: finiteNumber(progress.completed),
     failed: finiteNumber(progress.failed),
     total: finiteNumber(progress.total)
   };
+  if (typeof progress.skipped === "number" && Number.isFinite(progress.skipped)) {
+    normalized.skipped = progress.skipped;
+  }
+  return normalized;
 }
 
 function normalizeLogs(progress: unknown): RegistrationJobLog[] {

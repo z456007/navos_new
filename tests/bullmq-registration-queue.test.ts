@@ -183,6 +183,27 @@ describe("BullmqRegistrationQueue", () => {
     expect(queue.getJobs).toHaveBeenCalledWith(["waiting", "active", "completed", "failed", "delayed"], 0, 49, false);
   });
 
+  it("get() exposes create job count and concurrency in snapshots", async () => {
+    const { adapter, queue } = buildQueue();
+    queue.getJob.mockResolvedValue(makeJob({
+      id: "job-create",
+      data: { mode: "create", count: 12, concurrency: 6 },
+      progress: { started: 3, completed: 2, failed: 0, total: 12 },
+      timestamp: 1111,
+      getState: vi.fn(async () => "active")
+    }));
+
+    await expect(adapter.get("job-create")).resolves.toMatchObject({
+      id: "job-create",
+      mode: "create",
+      state: "running",
+      count: 12,
+      concurrency: 6,
+      progress: { started: 3, completed: 2, failed: 0, total: 12 },
+      createdAt: 1111
+    });
+  });
+
   it("list() globally caps jobs by most recent timestamp and avoids BullMQ log reads", async () => {
     const { adapter, queue } = buildQueue();
     const progressLog = { at: 5400, level: "warn" as const, message: "waiting for account" };
