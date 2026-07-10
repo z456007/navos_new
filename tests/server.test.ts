@@ -111,7 +111,7 @@ describe("server routes", () => {
       payload: {
         enabled: false,
         mode: "whitelist",
-        whitelist: [" Example.COM ", "", "SECOND.test"],
+        whitelist: [" Example.COM ", "SECOND.test"],
         blacklist: ["BLOCKED.TEST"],
         refreshIntervalMinutes: 45
       }
@@ -365,7 +365,8 @@ describe("server routes", () => {
       { whitelist: ["example.com", 123] },
       { blacklist: ["blocked.test", false] },
       { enabled: "false" },
-      { refreshIntervalMinute: 30 }
+      { refreshIntervalMinute: 30 },
+      { whitelist: [" "] }
     ]) {
       const response = await app.inject({
         method: "PUT",
@@ -385,6 +386,39 @@ describe("server routes", () => {
       });
       expect(response.statusCode).toBe(400);
     }
+  });
+
+  it("rejects unsafe YYDS domain pool config values without saving", async () => {
+    const domainStore = new InMemoryYydsDomainPoolStore();
+    const saveConfig = vi.spyOn(domainStore, "saveConfig");
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" })),
+      yydsDomainPoolStore: domainStore,
+      fetchImpl: async () => Response.json({ ok: true })
+    });
+
+    for (const payload of [
+      { whitelist: ["http://example.com"] },
+      { whitelist: ["bad domain.test"] },
+      { whitelist: [`${"a".repeat(64)}.test`] },
+      { whitelist: ["example.com/path"] },
+      { blacklist: ["bad\u0000domain.test"] },
+      { whitelist: Array.from({ length: 501 }, (_, index) => `d${index}.example.com`) },
+      { refreshIntervalMinutes: 1441 }
+    ]) {
+      const response = await app.inject({
+        method: "PUT",
+        url: "/api/mail/yyds/domain-pool/config",
+        headers: { authorization: "Bearer sk-test" },
+        payload
+      });
+      expect(response.statusCode).toBe(400);
+    }
+
+    expect(saveConfig).not.toHaveBeenCalled();
   });
 
   it("allows partial YYDS domain pool config updates without changing other fields", async () => {

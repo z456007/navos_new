@@ -73,8 +73,10 @@ export class YydsDomainPool {
       .filter((domain) => domain && !blacklist.has(domain));
 
     const uniqueDomains = Array.from(new Set(eligibleDomains));
+    const uniqueDomainSet = new Set(uniqueDomains);
     this.autoEligibleDomains = new Set(uniqueDomains);
     this.hasAutoRefreshSnapshot = true;
+    await this.clearRemovedAutoSources(uniqueDomainSet);
     for (const domain of uniqueDomains) {
       await this.ensureHealth(domain, this.now(), config.whitelist.includes(domain) ? WHITELIST_WEIGHT : DEFAULT_WEIGHT);
     }
@@ -171,6 +173,20 @@ export class YydsDomainPool {
       lastCheckedAt: now,
       lastError: error
     });
+  }
+
+  private async clearRemovedAutoSources(currentAutoDomains: Set<string>): Promise<void> {
+    for (const record of await this.store.listHealth()) {
+      const domain = normalizeDomain(record.domain);
+      if (!domain || currentAutoDomains.has(domain) || record.lastAutoCheckedAt <= 0) {
+        continue;
+      }
+      await this.store.saveHealth({
+        ...record,
+        domain,
+        lastAutoCheckedAt: 0
+      });
+    }
   }
 
   private async ensureHealth(domain: string, now: number, weight: number): Promise<YydsDomainHealthRecord> {

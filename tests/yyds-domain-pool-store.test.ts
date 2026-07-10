@@ -40,6 +40,7 @@ describe("MysqlYydsDomainPoolStore", () => {
   it("creates a named-placeholder mysql pool and ensures domain pool schema tables", async () => {
     const store = createStore();
     mysqlMocks.pool.query.mockResolvedValue([[], undefined]);
+    mysqlMocks.pool.execute.mockResolvedValue([[]]);
 
     await store.ensureSchema();
 
@@ -53,7 +54,23 @@ describe("MysqlYydsDomainPoolStore", () => {
     expect(mysqlMocks.pool.query.mock.calls[0]?.[0]).toContain("CREATE TABLE IF NOT EXISTS yyds_domain_pool_config");
     expect(mysqlMocks.pool.query.mock.calls[1]?.[0]).toContain("CREATE TABLE IF NOT EXISTS yyds_domain_health");
     expect(mysqlMocks.pool.query.mock.calls[1]?.[0]).toContain("last_auto_checked_at");
-    expect(mysqlMocks.pool.query.mock.calls[2]?.[0]).toContain("ADD COLUMN IF NOT EXISTS last_auto_checked_at");
+    expect(mysqlMocks.pool.execute.mock.calls[0]?.[0]).toContain("INFORMATION_SCHEMA.COLUMNS");
+    expect(mysqlMocks.pool.execute.mock.calls[0]?.[1]).toEqual({ column: "last_auto_checked_at" });
+    expect(mysqlMocks.pool.query.mock.calls[2]?.[0]).toContain("ADD COLUMN last_auto_checked_at");
+    expect(mysqlMocks.pool.query.mock.calls[2]?.[0]).not.toContain("IF NOT EXISTS");
+  });
+
+  it("does not alter yyds domain health when last_auto_checked_at already exists", async () => {
+    const store = createStore();
+    mysqlMocks.pool.query.mockResolvedValue([[], undefined]);
+    mysqlMocks.pool.execute.mockResolvedValue([[{ COLUMN_NAME: "last_auto_checked_at" }]]);
+
+    await store.ensureSchema();
+
+    expect(mysqlMocks.pool.execute.mock.calls[0]?.[0]).toContain("INFORMATION_SCHEMA.COLUMNS");
+    expect(mysqlMocks.pool.execute.mock.calls[0]?.[1]).toEqual({ column: "last_auto_checked_at" });
+    expect(mysqlMocks.pool.query).toHaveBeenCalledTimes(2);
+    expect(mysqlMocks.pool.query.mock.calls.some((call) => String(call[0]).includes("ALTER TABLE"))).toBe(false);
   });
 
   it("returns default config when no config row exists", async () => {

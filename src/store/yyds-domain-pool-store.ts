@@ -153,10 +153,22 @@ export class MysqlYydsDomainPoolStore implements YydsDomainPoolStore {
         last_error TEXT NULL
       )
     `);
-    await this.pool.query(`
-      ALTER TABLE yyds_domain_health
-        ADD COLUMN IF NOT EXISTS last_auto_checked_at BIGINT NOT NULL DEFAULT 0
-    `);
+    await this.addColumnIfMissing(
+      "last_auto_checked_at",
+      "ALTER TABLE yyds_domain_health ADD COLUMN last_auto_checked_at BIGINT NOT NULL DEFAULT 0"
+    );
+  }
+
+  private async addColumnIfMissing(column: string, ddl: string): Promise<void> {
+    const [rows] = await this.pool.execute<RowDataPacket[]>(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'yyds_domain_health' AND COLUMN_NAME = :column
+       LIMIT 1`,
+      { column }
+    );
+    if (rows.length === 0) {
+      await this.pool.query(ddl);
+    }
   }
 
   async getConfig(): Promise<YydsDomainPoolConfig> {

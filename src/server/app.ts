@@ -117,6 +117,8 @@ const DEFAULT_MODEL_ACCOUNT_WAIT_MS = 30_000;
 const ACCOUNT_WAIT_POLL_INTERVAL_MS = 100;
 const DEFAULT_YYDS_DOMAINS_URL = "https://maliapi.215.im/v1/domains";
 const YYDS_DOMAIN_FETCH_TIMEOUT_MS = 10_000;
+const YYDS_DOMAIN_POOL_MAX_LIST_SIZE = 500;
+const YYDS_DOMAIN_POOL_MAX_REFRESH_INTERVAL_MINUTES = 1440;
 
 function headersFromRequest(request: FastifyRequest): HeaderBag {
   const headers: HeaderBag = {};
@@ -572,8 +574,16 @@ function assertDomainPoolConfigInput(body: unknown): asserts body is Record<stri
   if ("mode" in body && parseYydsDomainPoolMode(body.mode) === undefined) {
     throw new DomainPoolConfigValidationError("mode must be auto, whitelist, or auto-plus-whitelist");
   }
-  if ("refreshIntervalMinutes" in body && parsePositiveInteger(body.refreshIntervalMinutes) === undefined) {
-    throw new DomainPoolConfigValidationError("refreshIntervalMinutes must be a positive integer");
+  if ("refreshIntervalMinutes" in body) {
+    const refreshIntervalMinutes = parsePositiveInteger(body.refreshIntervalMinutes);
+    if (
+      refreshIntervalMinutes === undefined
+      || refreshIntervalMinutes > YYDS_DOMAIN_POOL_MAX_REFRESH_INTERVAL_MINUTES
+    ) {
+      throw new DomainPoolConfigValidationError(
+        `refreshIntervalMinutes must be a positive integer no greater than ${YYDS_DOMAIN_POOL_MAX_REFRESH_INTERVAL_MINUTES}`
+      );
+    }
   }
   for (const key of ["whitelist", "blacklist"] as const) {
     if (!(key in body)) {
@@ -582,6 +592,14 @@ function assertDomainPoolConfigInput(body: unknown): asserts body is Record<stri
     const value = body[key];
     if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
       throw new DomainPoolConfigValidationError(`${key} must be a string array`);
+    }
+    if (value.length > YYDS_DOMAIN_POOL_MAX_LIST_SIZE) {
+      throw new DomainPoolConfigValidationError(`${key} must contain no more than ${YYDS_DOMAIN_POOL_MAX_LIST_SIZE} domains`);
+    }
+    for (const domain of value) {
+      if (!isValidDomainPoolDomain(domain)) {
+        throw new DomainPoolConfigValidationError(`${key} contains an invalid domain`);
+      }
     }
   }
 }
@@ -596,6 +614,22 @@ function normalizeDomainStringList(value: unknown[]): string[] {
       .filter((item): item is string => typeof item === "string")
       .map((item) => item.trim().toLowerCase())
       .filter(Boolean)
+  ));
+}
+
+function isValidDomainPoolDomain(value: string): boolean {
+  const domain = value.trim().toLowerCase();
+  if (!domain || domain.length > 253 || domain.includes("..")) {
+    return false;
+  }
+  const labels = domain.split(".");
+  if (labels.length < 2) {
+    return false;
+  }
+  return labels.every((label) => (
+    label.length >= 1
+    && label.length <= 63
+    && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label)
   ));
 }
 

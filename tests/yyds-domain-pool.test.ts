@@ -80,6 +80,34 @@ describe("YydsDomainPool", () => {
     expect((await pool.pickDomain())?.domain).toBe("normal.test");
   });
 
+  it("clears removed persisted auto sources so new pool instances do not revive them", async () => {
+    const store = new InMemoryYydsDomainPoolStore();
+    const fetchDomains = vi
+      .fn()
+      .mockResolvedValueOnce([domain("stale.test")])
+      .mockResolvedValueOnce([domain("normal.test")]);
+    const firstPool = new YydsDomainPool({
+      store,
+      fetchDomains,
+      now: () => 1000
+    });
+
+    await firstPool.refresh();
+    expect((await firstPool.listCandidates()).map((item) => item.domain)).toEqual(["stale.test"]);
+
+    await firstPool.refresh();
+    expect((await firstPool.listCandidates()).map((item) => item.domain)).toEqual(["normal.test"]);
+
+    const secondPool = new YydsDomainPool({
+      store,
+      fetchDomains: vi.fn(async () => []),
+      now: () => 1001
+    });
+
+    expect((await secondPool.listCandidates()).map((item) => item.domain)).toEqual(["normal.test"]);
+    expect((await secondPool.pickDomain())?.domain).toBe("normal.test");
+  });
+
   it("lists recently refreshed persisted auto domains in a new pool instance", async () => {
     const store = new InMemoryYydsDomainPoolStore();
     const firstPool = new YydsDomainPool({
