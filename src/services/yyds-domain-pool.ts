@@ -48,6 +48,7 @@ export class YydsDomainPool {
   private readonly store: YydsDomainPoolStore;
   private readonly fetchDomains: () => Promise<YydsFetchedDomain[]>;
   private readonly now: () => number;
+  private autoEligibleDomains = new Set<string>();
 
   constructor(options: YydsDomainPoolOptions) {
     this.store = options.store;
@@ -69,6 +70,7 @@ export class YydsDomainPool {
       .filter((domain) => domain && !blacklist.has(domain));
 
     const uniqueDomains = Array.from(new Set(eligibleDomains));
+    this.autoEligibleDomains = new Set(uniqueDomains);
     for (const domain of uniqueDomains) {
       await this.ensureHealth(domain, this.now(), config.whitelist.includes(domain) ? WHITELIST_WEIGHT : DEFAULT_WEIGHT);
     }
@@ -87,7 +89,7 @@ export class YydsDomainPool {
     const domains = new Set<string>();
 
     if (config.mode === "auto" || config.mode === "auto-plus-whitelist") {
-      for (const domain of healthByDomain.keys()) {
+      for (const domain of this.autoEligibleDomains) {
         domains.add(domain);
       }
     }
@@ -119,12 +121,13 @@ export class YydsDomainPool {
   async recordSuccess(domain: string): Promise<void> {
     const now = this.now();
     const record = await this.getOrCreateHealth(domain, now);
+    const disabled = record.status === "disabled";
     await this.store.saveHealth({
       ...record,
-      status: "active",
+      status: disabled ? "disabled" : "active",
       successCount: record.successCount + 1,
       lastSuccessAt: now,
-      cooldownUntil: 0,
+      cooldownUntil: disabled ? record.cooldownUntil : 0,
       weight: Math.max(DEFAULT_WEIGHT, record.weight + 1),
       lastCheckedAt: now,
       lastError: undefined

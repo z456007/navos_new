@@ -56,4 +56,64 @@ describe("YydsDomainPool", () => {
     expect(candidates.find((item) => item.domain === "boost.test")?.status).toBe("cooldown");
     expect((await pool.pickDomain())?.domain).toBe("normal.test");
   });
+
+  it("excludes stale auto domains after refresh no longer reports them healthy", async () => {
+    const fetchDomains = vi
+      .fn()
+      .mockResolvedValueOnce([domain("stale.test")])
+      .mockResolvedValueOnce([
+        domain("stale.test", { dnsRecords: { status: "degraded", receivingReady: true } }),
+        domain("normal.test")
+      ]);
+    const pool = new YydsDomainPool({
+      store: new InMemoryYydsDomainPoolStore(),
+      fetchDomains,
+      now: () => 1000
+    });
+
+    await pool.refresh();
+    expect((await pool.pickDomain())?.domain).toBe("stale.test");
+
+    await pool.recordSuccess("stale.test");
+    await pool.refresh();
+
+    expect((await pool.pickDomain())?.domain).toBe("normal.test");
+  });
+
+  it("keeps disabled domains disabled after recordSuccess and does not pick them", async () => {
+    const store = new InMemoryYydsDomainPoolStore();
+    await store.saveConfig({
+      enabled: true,
+      mode: "auto-plus-whitelist",
+      whitelist: ["disabled.test"],
+      blacklist: [],
+      refreshIntervalMinutes: 30
+    });
+    await store.saveHealth({
+      domain: "disabled.test",
+      status: "disabled",
+      successCount: 0,
+      failureCount: 0,
+      verificationTimeoutCount: 0,
+      mailboxRateLimitCount: 0,
+      quotaExhaustedCount: 0,
+      lastSuccessAt: 0,
+      lastFailureAt: 0,
+      cooldownUntil: 1234,
+      weight: 200,
+      lastCheckedAt: 1000
+    });
+    const pool = new YydsDomainPool({
+      store,
+      fetchDomains: vi.fn(async () => [domain("normal.test")]),
+      now: () => 2000
+    });
+
+    await pool.refresh();
+    await pool.recordSuccess("disabled.test");
+
+    const disabled = (await pool.listCandidates()).find((item) => item.domain === "disabled.test");
+    expect(disabled?.status).toBe("disabled");
+    expect((await pool.pickDomain())?.domain).toBe("normal.test");
+  });
 });
