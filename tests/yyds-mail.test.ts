@@ -168,6 +168,38 @@ describe("YydsMailClient", () => {
     });
   });
 
+  it("does not classify rate-limit text from structured JSON without error fields as rate_limited failureKind", async () => {
+    const client = new YydsMailClient({
+      baseUrl: "https://mail.test/v1",
+      apiKey: "ac-test",
+      fetchImpl: async () => Response.json(
+        { success: false, domain: "rate-limit.test" },
+        { status: 500 }
+      )
+    });
+
+    await expect(client.createMailbox()).rejects.toMatchObject({
+      status: 500,
+      failureKind: "mailbox_create_failed"
+    });
+  });
+
+  it("does not classify invalid-domain text from structured JSON without error fields as domain_rejected failureKind", async () => {
+    const client = new YydsMailClient({
+      baseUrl: "https://mail.test/v1",
+      apiKey: "ac-test",
+      fetchImpl: async () => Response.json(
+        { success: false, domain: "invalid-domain.test" },
+        { status: 500 }
+      )
+    });
+
+    await expect(client.createMailbox()).rejects.toMatchObject({
+      status: 500,
+      failureKind: "mailbox_create_failed"
+    });
+  });
+
   it("classifies raw non-JSON rate limit text as rate_limited failureKind", async () => {
     const client = new YydsMailClient({
       baseUrl: "https://mail.test/v1",

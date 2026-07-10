@@ -278,7 +278,8 @@ function classifyYydsFailure(
   raw: string,
   fallbackKind: YydsFailureKind = "unknown"
 ): YydsFailureKind {
-  const record = parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
+  const isStructuredJson = Boolean(parsed && typeof parsed === "object" && !Array.isArray(parsed));
+  const record = isStructuredJson ? parsed as Record<string, unknown> : {};
   const errorCode = typeof record.errorCode === "string" ? record.errorCode : "";
   const code = typeof record.code === "string" ? record.code : "";
   const type = typeof record.type === "string" ? record.type : "";
@@ -288,7 +289,7 @@ function classifyYydsFailure(
   const structuredClassifierText = [errorCode, code, type, message]
     .filter((item) => item.length > 0)
     .join(" ");
-  const classifierText = structuredClassifierText || raw;
+  const classifierText = isStructuredJson ? structuredClassifierText : raw;
   if (status === 429 && errorCode === "quota_exhausted") {
     return "quota_exhausted";
   }
