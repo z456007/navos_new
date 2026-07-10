@@ -147,6 +147,37 @@ describe("YydsDomainPool", () => {
     expect(await secondPool.pickDomain()).toBeUndefined();
   });
 
+  it("expires same-process auto snapshot domains after the refresh interval", async () => {
+    let now = 1000;
+    const pool = new YydsDomainPool({
+      store: new InMemoryYydsDomainPoolStore(),
+      fetchDomains: vi.fn(async () => [domain("stale.test")]),
+      now: () => now
+    });
+
+    await pool.refresh();
+    expect((await pool.listCandidates()).map((item) => item.domain)).toEqual(["stale.test"]);
+
+    now += 30 * 60 * 1000 + 1;
+
+    expect(await pool.listCandidates()).toEqual([]);
+    expect(await pool.pickDomain()).toBeUndefined();
+  });
+
+  it("does not expose phantom auto candidates when refresh persistence fails", async () => {
+    const store = new InMemoryYydsDomainPoolStore();
+    vi.spyOn(store, "saveHealth").mockRejectedValue(new Error("database write failed"));
+    const pool = new YydsDomainPool({
+      store,
+      fetchDomains: vi.fn(async () => [domain("phantom.test")]),
+      now: () => 1000
+    });
+
+    await expect(pool.refresh()).rejects.toThrow(/database write failed/);
+    expect(await pool.listCandidates()).toEqual([]);
+    expect(await pool.pickDomain()).toBeUndefined();
+  });
+
   it("does not treat manually updated whitelist health as a persisted auto source", async () => {
     const store = new InMemoryYydsDomainPoolStore();
     await store.saveConfig({

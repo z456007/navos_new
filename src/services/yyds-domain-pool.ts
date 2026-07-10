@@ -220,12 +220,12 @@ export class YydsDomainPool {
       );
     }
     const uniqueDomainSet = new Set(uniqueDomains);
-    this.autoEligibleDomains = new Set(uniqueDomains);
-    this.hasAutoRefreshSnapshot = true;
     await this.clearRemovedAutoSources(uniqueDomainSet);
     for (const domain of uniqueDomains) {
       await this.ensureHealth(domain, this.now(), config.whitelist.includes(domain) ? WHITELIST_WEIGHT : DEFAULT_WEIGHT);
     }
+    this.autoEligibleDomains = uniqueDomainSet;
+    this.hasAutoRefreshSnapshot = true;
 
     return { eligible: uniqueDomains.map((domain) => ({ domain })) };
   }
@@ -248,7 +248,10 @@ export class YydsDomainPool {
     if (config.mode === "auto" || config.mode === "auto-plus-whitelist") {
       if (this.hasAutoRefreshSnapshot) {
         for (const domain of this.autoEligibleDomains) {
-          domains.add(domain);
+          const record = healthByDomain.get(domain);
+          if (record && isFreshPersistedAutoHealth(record, config, this.now())) {
+            domains.add(domain);
+          }
         }
       } else {
         for (const record of healthByDomain.values()) {
