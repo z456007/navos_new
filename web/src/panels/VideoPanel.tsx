@@ -12,7 +12,6 @@ import {
   type VideoReferenceValue
 } from "../lib/video-payload";
 import {
-  archiveTone,
   normalizeVideoTask,
   readVideoString,
   videoDurationLimit,
@@ -44,7 +43,7 @@ export function VideoPanel({ apiKey }: { apiKey: string }) {
   const [videoFiles, setVideoFiles] = useState<UploadFile[]>([]);
   const [audioFiles, setAudioFiles] = useState<UploadFile[]>([]);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const previewUrl = task?.cosUrl ?? task?.videoUrl;
+  const previewUrl = task?.videoUrl;
   const durationLimit = videoDurationLimit(form.resolution);
   const imageRefCount = Math.min(9, countUrlLines(referenceUrls.images) + imageFiles.length);
   const videoRefCount = Math.min(3, countUrlLines(referenceUrls.videos) + videoFiles.length);
@@ -382,10 +381,6 @@ export function VideoPanel({ apiKey }: { apiKey: string }) {
             <div>
               <span>状态</span>
               <strong className={`task-status ${task?.status ?? "unknown"}`}>{task?.status ?? "idle"}</strong>
-            </div>
-            <div>
-              <span>归档</span>
-              <strong className={`archive-status ${archiveTone(task?.archiveStatus)}`}>{task?.archiveStatus ?? "-"}</strong>
             </div>
           </div>
 

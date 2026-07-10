@@ -1,4 +1,4 @@
-:root {
+﻿:root {
   color-scheme: light;
   --ink: #182230;
   --muted: #697586;
@@ -403,7 +403,7 @@ a.button {
 .import-grid,
 .form-row,
 .probe-grid,
-.cos-form {
+\.config-form {
   display: grid;
   gap: 12px;
   padding: 14px;
@@ -1371,7 +1371,7 @@ a.button {
   padding: 5px 9px;
 }
 
-.cos-enabled {
+\.config-enabled {
   justify-self: start;
 }
 
@@ -1622,3 +1622,4 @@ a.button {
     width: 100%;
   }
 }
+
