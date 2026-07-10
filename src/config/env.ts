@@ -30,6 +30,7 @@ export interface MysqlEnvConfig {
 
 type EnvInput = Record<string, string | undefined>;
 const YYDS_SAFE_REGISTRATION_CONCURRENCY = 2;
+const SMALL_SERVER_REGISTRATION_JOB_CONCURRENCY = 1;
 
 function requireEnv(env: EnvInput, name: string): string {
   const value = env[name]?.trim();
@@ -129,7 +130,10 @@ export function loadConfig(env: EnvInput = process.env): AppConfig {
     ),
     redisUrl: env.REDIS_URL?.trim() || "redis://127.0.0.1:6379",
     queuePrefix: env.QUEUE_PREFIX?.trim() || "navos",
-    registrationJobConcurrency: parsePositiveInt(env.REGISTRATION_JOB_CONCURRENCY, 2),
+    registrationJobConcurrency: Math.min(
+      parsePositiveInt(env.REGISTRATION_JOB_CONCURRENCY, SMALL_SERVER_REGISTRATION_JOB_CONCURRENCY),
+      SMALL_SERVER_REGISTRATION_JOB_CONCURRENCY
+    ),
     registrationJobRemoveOnComplete: parsePositiveInt(env.REGISTRATION_JOB_REMOVE_ON_COMPLETE, 50),
     registrationJobRemoveOnFail: parsePositiveInt(env.REGISTRATION_JOB_REMOVE_ON_FAIL, 100)
   };

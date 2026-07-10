@@ -1675,6 +1675,119 @@ describe("server routes", () => {
     expect(usedHeaders).toEqual(["Bearer auto-model-1:auto-token-1"]);
   });
 
+  it("shares one auto-registration across concurrent model requests", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    let finishRegistration!: () => void;
+    const registrationStarted = new Promise<void>((resolve) => {
+      finishRegistration = resolve;
+    });
+    const registrationService = {
+      registerOne: vi.fn(async () => {
+        await registrationStarted;
+        await accountService.importAccount({
+          uid: "auto-shared-1",
+          token: "auto-shared-token-1",
+          balanceRemaining: 1000,
+          balanceTotal: 1000,
+          status: "active"
+        });
+        return {
+          success: true,
+          uid: "auto-shared-1",
+          token: "auto-shared-token-1",
+          balance: 1000
+        };
+      })
+    };
+    const usedHeaders: string[] = [];
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      registrationService: registrationService as never,
+      fetchImpl: async (_url, init) => {
+        usedHeaders.push(String((init?.headers as Record<string, string>).authorization ?? ""));
+        return Response.json({
+          id: "chatcmpl_1",
+          object: "chat.completion",
+          choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }]
+        });
+      }
+    });
+
+    const requests = Array.from({ length: 4 }, () => app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: { authorization: "Bearer sk-test" },
+      payload: {
+        model: "gpt-5.5",
+        messages: [{ role: "user", content: "hello" }]
+      }
+    }));
+
+    await vi.waitFor(() => expect(registrationService.registerOne).toHaveBeenCalledOnce());
+    finishRegistration();
+    const responses = await Promise.all(requests);
+
+    expect(responses.map((response) => response.statusCode)).toEqual([200, 200, 200, 200]);
+    expect(registrationService.registerOne).toHaveBeenCalledOnce();
+    expect(usedHeaders).toEqual([
+      "Bearer auto-shared-1:auto-shared-token-1",
+      "Bearer auto-shared-1:auto-shared-token-1",
+      "Bearer auto-shared-1:auto-shared-token-1",
+      "Bearer auto-shared-1:auto-shared-token-1"
+    ]);
+  });
+
+  it("does not repeatedly auto-register within one failing model request", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    const registrationService = {
+      registerOne: vi.fn(async () => {
+        const uid = `auto-fail-${registrationService.registerOne.mock.calls.length}`;
+        await accountService.importAccount({
+          uid,
+          token: "auto-token",
+          balanceRemaining: 1000,
+          balanceTotal: 1000,
+          status: "active"
+        });
+        return {
+          success: true,
+          uid,
+          token: "auto-token",
+          balance: 1000
+        };
+      })
+    };
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      registrationService: registrationService as never,
+      fetchImpl: async () => Response.json(
+        { error: { message: "Service temporarily unavailable" } },
+        { status: 503 }
+      )
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: { authorization: "Bearer sk-test" },
+      payload: {
+        model: "gpt-5.5",
+        messages: [{ role: "user", content: "hello" }]
+      }
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(registrationService.registerOne).toHaveBeenCalledOnce();
+  });
+
   it("depletes a leased video account when upstream reports insufficient balance", async () => {
     const store = new InMemoryAccountStore();
     const accountService = new AccountService(store);

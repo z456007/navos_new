@@ -32,7 +32,7 @@ describe("loadConfig", () => {
     expect(config.registrationConcurrency).toBe(2);
     expect(config.redisUrl).toBe("redis://127.0.0.1:6380");
     expect(config.queuePrefix).toBe("navos-test");
-    expect(config.registrationJobConcurrency).toBe(3);
+    expect(config.registrationJobConcurrency).toBe(1);
     expect(config.registrationJobRemoveOnComplete).toBe(25);
     expect(config.registrationJobRemoveOnFail).toBe(75);
     expect(config.publicProxyApiKeys).toEqual(["sk-public-1", "sk-public-2"]);
@@ -60,7 +60,7 @@ describe("loadConfig", () => {
 
     expect(config.redisUrl).toBe("redis://127.0.0.1:6379");
     expect(config.queuePrefix).toBe("navos");
-    expect(config.registrationJobConcurrency).toBe(2);
+    expect(config.registrationJobConcurrency).toBe(1);
     expect(config.registrationJobRemoveOnComplete).toBe(50);
     expect(config.registrationJobRemoveOnFail).toBe(100);
   });
@@ -87,5 +87,16 @@ describe("loadConfig", () => {
     });
 
     expect(config.registrationConcurrency).toBe(2);
+  });
+
+  it("caps registration worker concurrency to one job on small servers", () => {
+    const config = loadConfig({
+      MASTER_API_KEY: "sk-test",
+      PROVIDER_BASE_URL: "https://upstream.test",
+      VIP_HMAC_SECRET: "test-secret-32-chars-long-key!!",
+      REGISTRATION_JOB_CONCURRENCY: "8"
+    });
+
+    expect(config.registrationJobConcurrency).toBe(1);
   });
 });

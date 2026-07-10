@@ -284,6 +284,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
   const archiveVideo = options.archiveVideo ?? ((input: { taskId: string; sourceUrl: string; config: EnabledCosConfig }) =>
     archiveVideoToCos({ ...input, fetchImpl: options.fetchImpl }));
   const client = new ProviderHttpClient(options.providerBaseUrl, options.fetchImpl);
+  let providerRegistrationAttempt: Promise<boolean> | undefined;
 
   app.addHook("onRequest", async (request, reply) => {
     applyCorsHeaders(request, reply);
@@ -331,6 +332,10 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       void reply.status(503).send({ error: { message: "No provider account configured", type: "account_unavailable" } });
       return undefined;
     }
+    return authContextForAccount(account);
+  }
+
+  function authContextForAccount(account: AccountRecord): ProviderAuthContext {
     return {
       account,
       headers: buildProviderAuthHeaders(account, options.providerAuthMode)
@@ -348,46 +353,60 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
   }
 
   async function registerProviderAccountIfPossible(): Promise<boolean> {
+    if (providerRegistrationAttempt) {
+      return providerRegistrationAttempt;
+    }
+
     const registrationService = options.registrationService;
     if (!registrationService) {
       return false;
     }
 
-    const registrationResult = await registrationService.registerOne();
-    if (!registrationResult.success) {
-      return false;
-    }
-
-    if (registrationResult.uid && registrationResult.token) {
-      const savedAccount = await accountService.getProviderAccount(registrationResult.uid);
-      if (!savedAccount) {
-        await accountService.importAccount({
-          uid: registrationResult.uid,
-          token: registrationResult.token,
-          mailboxAddr: registrationResult.email,
-          mailboxToken: registrationResult.mailboxToken,
-          balanceRemaining: registrationResult.balance,
-          balanceTotal: registrationResult.balance,
-          status: "active"
-        });
+    providerRegistrationAttempt = (async () => {
+      const registrationResult = await registrationService.registerOne();
+      if (!registrationResult.success) {
+        return false;
       }
-    }
 
-    return true;
+      if (registrationResult.uid && registrationResult.token) {
+        const savedAccount = await accountService.getProviderAccount(registrationResult.uid);
+        if (!savedAccount) {
+          await accountService.importAccount({
+            uid: registrationResult.uid,
+            token: registrationResult.token,
+            mailboxAddr: registrationResult.email,
+            mailboxToken: registrationResult.mailboxToken,
+            balanceRemaining: registrationResult.balance,
+            balanceTotal: registrationResult.balance,
+            status: "active"
+          });
+        }
+      }
+
+      return true;
+    })().finally(() => {
+      providerRegistrationAttempt = undefined;
+    });
+
+    return providerRegistrationAttempt;
   }
 
-  async function providerAuthOrRegister(): Promise<ProviderAuthContext | undefined> {
+  async function providerAuthOrRegister(allowRegister: boolean): Promise<{
+    auth?: ProviderAuthContext;
+    registered: boolean;
+  }> {
     let account = await accountService.pickAccount();
-    if (!account && await registerProviderAccountIfPossible()) {
+    let registered = false;
+    if (!account && allowRegister) {
+      registered = await registerProviderAccountIfPossible();
+    }
+    if (!account && registered) {
       account = await accountService.pickAccount();
     }
     if (!account) {
-      return undefined;
+      return { registered };
     }
-    return {
-      account,
-      headers: buildProviderAuthHeaders(account, options.providerAuthMode)
-    };
+    return { auth: authContextForAccount(account), registered };
   }
 
   async function forwardModelRequestWithAccountRotation(
@@ -395,9 +414,14 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     body: Record<string, unknown>
   ): Promise<ProviderResult> {
     let lastResult: ProviderResult | undefined;
+    let registeredDuringRequest = false;
 
     for (let attempt = 0; attempt < MODEL_PROXY_MAX_ATTEMPTS; attempt += 1) {
-      const auth = await providerAuthOrRegister();
+      const nextAuth = await providerAuthOrRegister(!registeredDuringRequest);
+      if (nextAuth.registered) {
+        registeredDuringRequest = true;
+      }
+      const auth = nextAuth.auth;
       if (!auth) {
         break;
       }
