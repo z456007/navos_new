@@ -35,6 +35,7 @@ import {
   type NormalizedVideoTask
 } from "../protocols/video.js";
 import { YydsMailClient, YydsMailError } from "../protocols/mail/yyds-mail.js";
+import { reconcileDepletedAccountBalances } from "../services/account-balance-reconciler.js";
 import { AccountService, IMAGE_ACCOUNT_COST } from "../services/account-service.js";
 import {
   assertYydsDomainPoolConfigInput,
@@ -162,6 +163,12 @@ function bodyRecord(request: FastifyRequest): Record<string, unknown> {
   return request.body && typeof request.body === "object"
     ? request.body as Record<string, unknown>
     : {};
+}
+
+function positiveIntegerInput(value: unknown, fallback: number, max?: number): number {
+  const parsed = typeof value === "number" ? value : Number.parseInt(String(value ?? ""), 10);
+  const normalized = Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+  return max === undefined ? normalized : Math.min(normalized, max);
 }
 
 async function sendProviderResult(reply: FastifyReply, result: ProviderResult): Promise<void> {
@@ -1264,6 +1271,40 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
         error: {
           message: error instanceof Error ? error.message : "VIP balance refresh failed",
           type: "balance_refresh_failed"
+        }
+      });
+    }
+  });
+
+  app.post("/api/accounts/balances/reconcile", async (request, reply) => {
+    if (!requireLocalAuth(request, reply)) {
+      return;
+    }
+    const vipClient = options.vipClient;
+    if (!vipClient) {
+      await reply.status(503).send({
+        error: {
+          message: "VIP balance client is not configured",
+          type: "balance_reconcile_unavailable"
+        }
+      });
+      return;
+    }
+
+    try {
+      const body = bodyRecord(request);
+      const result = await reconcileDepletedAccountBalances({
+        accountService,
+        vipClient,
+        limit: positiveIntegerInput(body.limit, 1000, 10_000),
+        concurrency: positiveIntegerInput(body.concurrency, 5, 20)
+      });
+      await reply.send(result);
+    } catch (error) {
+      await reply.status(502).send({
+        error: {
+          message: error instanceof Error ? error.message : "VIP balance reconcile failed",
+          type: "balance_reconcile_failed"
         }
       });
     }

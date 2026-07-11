@@ -1524,6 +1524,57 @@ describe("server routes", () => {
     });
   });
 
+  it("reconciles depleted account balances through the VIP balance protocol", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    await accountService.importAccount({
+      uid: "u1",
+      token: "token-1",
+      balanceRemaining: 0,
+      balanceTotal: 2000,
+      status: "depleted"
+    });
+    await accountService.importAccount({
+      uid: "u2",
+      token: "token-2",
+      balanceRemaining: 0,
+      balanceTotal: 2000,
+      status: "depleted"
+    });
+    const vipClient = {
+      queryBalance: vi.fn(async (uid: string) => uid === "u1"
+        ? { availableBalance: 2000, totalBalance: 2000 }
+        : { availableBalance: 0, totalBalance: 2000 })
+    };
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      vipClient,
+      fetchImpl: async () => Response.json({ ok: true })
+    });
+
+    const reconciled = await app.inject({
+      method: "POST",
+      url: "/api/accounts/balances/reconcile",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { limit: 10, concurrency: 2 }
+    });
+
+    expect(reconciled.statusCode).toBe(200);
+    expect(reconciled.json()).toEqual({
+      checked: 2,
+      restored: 1,
+      stillDepleted: 1,
+      failed: 0,
+      failures: []
+    });
+    expect(vipClient.queryBalance).toHaveBeenCalledTimes(2);
+    expect(await store.get("u1")).toMatchObject({ status: "active", balanceRemaining: 2000 });
+    expect(await store.get("u2")).toMatchObject({ status: "depleted", balanceRemaining: 0 });
+  });
+
   it("creates and polls image generations through the protected local route", async () => {
     const paths: string[] = [];
     let forwardedBody: Record<string, unknown> | undefined;

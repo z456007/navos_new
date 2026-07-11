@@ -151,7 +151,8 @@ export class MysqlAccountStore implements AccountStore {
     leaseId: string,
     leaseUntilMs: number,
     nowMs: number = Date.now(),
-    minimumBalanceRemaining: number = 0
+    minimumBalanceRemaining: number = 0,
+    maximumBalanceRemainingExclusive?: number
   ): Promise<AccountRecord | undefined> {
     const connection = await this.pool.getConnection();
     try {
@@ -162,10 +163,11 @@ export class MysqlAccountStore implements AccountStore {
            AND rate_limited_until <= :nowMs
            AND lease_until <= :nowMs
            AND balance_remaining >= :minimumBalanceRemaining
+           AND (:maximumBalanceRemainingExclusive IS NULL OR balance_remaining < :maximumBalanceRemainingExclusive)
          ORDER BY last_used_at ASC, created_at ASC
          LIMIT 1
          FOR UPDATE`,
-        { nowMs, minimumBalanceRemaining }
+        { nowMs, minimumBalanceRemaining, maximumBalanceRemainingExclusive: maximumBalanceRemainingExclusive ?? null }
       );
       const row = rows[0];
       if (!row) {

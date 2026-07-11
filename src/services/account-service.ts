@@ -58,6 +58,10 @@ export class AccountService {
     return this.store.get(uid);
   }
 
+  async listProviderAccounts(): Promise<AccountRecord[]> {
+    return this.store.list();
+  }
+
   async pickAccount(): Promise<AccountRecord | undefined> {
     const account = await this.store.pickActive();
     if (account) {
@@ -79,7 +83,18 @@ export class AccountService {
     ttlMs: number = 10 * 60 * 1000,
     minimumBalanceRemaining: number = IMAGE_ACCOUNT_REQUIRED_BALANCE
   ): Promise<AccountRecord | undefined> {
-    return this.store.leaseActive(leaseId, Date.now() + ttlMs, undefined, minimumBalanceRemaining);
+    const leaseUntilMs = Date.now() + ttlMs;
+    const imageOnlyAccount = await this.store.leaseActive(
+      leaseId,
+      leaseUntilMs,
+      undefined,
+      minimumBalanceRemaining,
+      VIDEO_ACCOUNT_REQUIRED_BALANCE
+    );
+    if (imageOnlyAccount) {
+      return imageOnlyAccount;
+    }
+    return this.store.leaseActive(leaseId, leaseUntilMs, undefined, minimumBalanceRemaining);
   }
 
   async leaseModelAccount(
@@ -123,7 +138,14 @@ export class AccountService {
     balanceRemaining: number,
     balanceTotal?: number
   ): Promise<AccountListItem | undefined> {
+    const existing = await this.store.get(uid);
+    if (!existing) {
+      return undefined;
+    }
     await this.store.setBalance(uid, balanceRemaining, balanceTotal);
+    if (existing.status !== "disabled") {
+      await this.store.setStatus(uid, balanceRemaining > 0 ? "active" : "depleted");
+    }
     const account = await this.store.get(uid);
     return account ? toListItem(account) : undefined;
   }

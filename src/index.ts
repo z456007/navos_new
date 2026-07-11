@@ -3,6 +3,7 @@ import { loadConfig } from "./config/env.js";
 import { YydsMailClient } from "./protocols/mail/yyds-mail.js";
 import { VipClient } from "./protocols/vip-client.js";
 import { createApp } from "./server/app.js";
+import { reconcileDepletedAccountBalances } from "./services/account-balance-reconciler.js";
 import { AccountService } from "./services/account-service.js";
 import { BullmqRegistrationQueue } from "./services/bullmq-registration-queue.js";
 import { RegistrationJobService } from "./services/registration-job-service.js";
@@ -104,6 +105,44 @@ registrationWorker.on("error", () => {
   console.error("Registration worker infrastructure error");
 });
 
+let accountBalanceReconcileRunning = false;
+let accountBalanceReconcileInterval: NodeJS.Timeout | undefined;
+let accountBalanceReconcileStartup: NodeJS.Timeout | undefined;
+
+async function runAccountBalanceReconcile(reason: "startup" | "interval"): Promise<void> {
+  if (accountBalanceReconcileRunning) {
+    return;
+  }
+  accountBalanceReconcileRunning = true;
+  try {
+    const result = await reconcileDepletedAccountBalances({
+      accountService,
+      vipClient,
+      limit: config.accountBalanceReconcileBatchSize,
+      concurrency: config.accountBalanceReconcileConcurrency
+    });
+    if (result.checked > 0 || result.failed > 0) {
+      console.log(`account balance reconcile ${reason}: checked=${result.checked} restored=${result.restored} still_depleted=${result.stillDepleted} failed=${result.failed}`);
+    }
+  } catch (error) {
+    console.error("Account balance reconcile failed", error instanceof Error ? error.message : String(error));
+  } finally {
+    accountBalanceReconcileRunning = false;
+  }
+}
+
+if (config.accountBalanceReconcileEnabled) {
+  accountBalanceReconcileStartup = setTimeout(() => {
+    void runAccountBalanceReconcile("startup");
+  }, 10_000);
+  accountBalanceReconcileStartup.unref?.();
+
+  accountBalanceReconcileInterval = setInterval(() => {
+    void runAccountBalanceReconcile("interval");
+  }, config.accountBalanceReconcileIntervalMinutes * 60_000);
+  accountBalanceReconcileInterval.unref?.();
+}
+
 const app = createApp({
   ...config,
   accountService,
@@ -118,6 +157,12 @@ const app = createApp({
 });
 
 app.addHook("onClose", async () => {
+  if (accountBalanceReconcileStartup) {
+    clearTimeout(accountBalanceReconcileStartup);
+  }
+  if (accountBalanceReconcileInterval) {
+    clearInterval(accountBalanceReconcileInterval);
+  }
   try {
     await registrationWorker.close();
   } finally {

@@ -30,6 +30,10 @@ export interface AppConfig {
   imageAccountWaitMs: number;
   imageMaxPollAttempts: number;
   imagePollIntervalMs: number;
+  accountBalanceReconcileEnabled: boolean;
+  accountBalanceReconcileIntervalMinutes: number;
+  accountBalanceReconcileBatchSize: number;
+  accountBalanceReconcileConcurrency: number;
   yydsDomainPool: YydsDomainPoolConfig;
 }
 
@@ -196,6 +200,10 @@ export function loadConfig(env: EnvInput = process.env): AppConfig {
     imageAccountWaitMs: parsePositiveInt(env.IMAGE_ACCOUNT_WAIT_MS, 120_000),
     imageMaxPollAttempts: parsePositiveInt(env.IMAGE_MAX_POLL_ATTEMPTS, 30),
     imagePollIntervalMs: parsePositiveInt(env.IMAGE_POLL_INTERVAL_MS, 4_000),
+    accountBalanceReconcileEnabled: parseStrictBool(env.ACCOUNT_BALANCE_RECONCILE_ENABLED, true, "ACCOUNT_BALANCE_RECONCILE_ENABLED"),
+    accountBalanceReconcileIntervalMinutes: parsePositiveInt(env.ACCOUNT_BALANCE_RECONCILE_INTERVAL_MINUTES, 30),
+    accountBalanceReconcileBatchSize: parsePositiveInt(env.ACCOUNT_BALANCE_RECONCILE_BATCH_SIZE, 1000),
+    accountBalanceReconcileConcurrency: parseCappedPositiveInt(env.ACCOUNT_BALANCE_RECONCILE_CONCURRENCY, 5, 20),
     yydsDomainPool: normalizeYydsDomainPoolConfig({
       enabled: parseStrictBool(env.YYDS_DOMAIN_POOL_ENABLED, true, "YYDS_DOMAIN_POOL_ENABLED"),
       mode: parseDomainPoolMode(env.YYDS_DOMAIN_POOL_MODE),

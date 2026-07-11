@@ -72,6 +72,27 @@ describe("loadConfig", () => {
     expect(config.imageAccountWaitMs).toBe(120000);
     expect(config.imageMaxPollAttempts).toBe(30);
     expect(config.imagePollIntervalMs).toBe(4000);
+    expect(config.accountBalanceReconcileEnabled).toBe(true);
+    expect(config.accountBalanceReconcileIntervalMinutes).toBe(30);
+    expect(config.accountBalanceReconcileBatchSize).toBe(1000);
+    expect(config.accountBalanceReconcileConcurrency).toBe(5);
+  });
+
+  it("loads account balance reconcile settings", () => {
+    const config = loadConfig({
+      MASTER_API_KEY: "sk-test",
+      PROVIDER_BASE_URL: "https://upstream.test",
+      VIP_HMAC_SECRET: "test-secret-32-chars-long-key!!",
+      ACCOUNT_BALANCE_RECONCILE_ENABLED: "false",
+      ACCOUNT_BALANCE_RECONCILE_INTERVAL_MINUTES: "15",
+      ACCOUNT_BALANCE_RECONCILE_BATCH_SIZE: "5000",
+      ACCOUNT_BALANCE_RECONCILE_CONCURRENCY: "80"
+    });
+
+    expect(config.accountBalanceReconcileEnabled).toBe(false);
+    expect(config.accountBalanceReconcileIntervalMinutes).toBe(15);
+    expect(config.accountBalanceReconcileBatchSize).toBe(5000);
+    expect(config.accountBalanceReconcileConcurrency).toBe(20);
   });
 
   it("loads registration scheduler and YYDS domain pool defaults", () => {

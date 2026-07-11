@@ -80,6 +80,28 @@ describe("AccountService", () => {
     expect(await store.get("u1")).toMatchObject({ balanceRemaining: 200, leaseUntil: 0 });
   });
 
+  it("prefers image-capable accounts below the video balance threshold", async () => {
+    const store = new InMemoryAccountStore();
+    const service = new AccountService(store);
+    await service.importAccount({ uid: "video-ready", token: "t1", balanceRemaining: 2000, balanceTotal: 2000 });
+    await service.importAccount({ uid: "image-ready", token: "t2", balanceRemaining: 500, balanceTotal: 2000 });
+
+    const leased = await service.leaseImageAccount("image-job-1");
+
+    expect(leased?.uid).toBe("image-ready");
+    expect((await store.get("video-ready"))?.leaseId).toBeUndefined();
+  });
+
+  it("falls back to video-balance accounts for images when no lower-balance image account exists", async () => {
+    const store = new InMemoryAccountStore();
+    const service = new AccountService(store);
+    await service.importAccount({ uid: "video-ready", token: "t1", balanceRemaining: 2000, balanceTotal: 2000 });
+
+    const leased = await service.leaseImageAccount("image-job-1");
+
+    expect(leased?.uid).toBe("video-ready");
+  });
+
   it("leases model accounts without requiring image or video balance", async () => {
     const store = new InMemoryAccountStore();
     const service = new AccountService(store);
@@ -128,6 +150,41 @@ describe("AccountService", () => {
     expect(account?.balanceRemaining).toBe(0);
     expect(account?.balanceTotal).toBe(2000);
     expect(account?.lastBalanceAt).toBeGreaterThan(0);
+  });
+
+  it("reactivates depleted accounts when refreshed balance is positive", async () => {
+    const store = new InMemoryAccountStore();
+    const service = new AccountService(store);
+    await service.importAccount({ uid: "u1", token: "t1", balanceRemaining: 2000, balanceTotal: 2000 });
+    await service.depleteAccount("u1");
+
+    const updated = await service.updateBalance("u1", 1000, 2000);
+
+    expect(updated).toMatchObject({ uid: "u1", status: "active", balanceRemaining: 1000 });
+    expect(await store.get("u1")).toMatchObject({ status: "active", balanceRemaining: 1000 });
+  });
+
+  it("depletes non-disabled accounts when refreshed balance is zero", async () => {
+    const store = new InMemoryAccountStore();
+    const service = new AccountService(store);
+    await service.importAccount({ uid: "u1", token: "t1", balanceRemaining: 1000, balanceTotal: 2000 });
+
+    const updated = await service.updateBalance("u1", 0, 2000);
+
+    expect(updated).toMatchObject({ uid: "u1", status: "depleted", balanceRemaining: 0 });
+    expect(await store.get("u1")).toMatchObject({ status: "depleted", balanceRemaining: 0 });
+  });
+
+  it("does not reactivate disabled accounts when refreshed balance is positive", async () => {
+    const store = new InMemoryAccountStore();
+    const service = new AccountService(store);
+    await service.importAccount({ uid: "u1", token: "t1", balanceRemaining: 0, balanceTotal: 2000 });
+    await service.disableAccount("u1");
+
+    const updated = await service.updateBalance("u1", 1000, 2000);
+
+    expect(updated).toMatchObject({ uid: "u1", status: "disabled", balanceRemaining: 1000 });
+    expect(await store.get("u1")).toMatchObject({ status: "disabled", balanceRemaining: 1000 });
   });
 
   it("rejects invalid imports", async () => {

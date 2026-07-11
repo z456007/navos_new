@@ -33,7 +33,8 @@ export interface AccountStore {
     leaseId: string,
     leaseUntilMs: number,
     nowMs?: number,
-    minimumBalanceRemaining?: number
+    minimumBalanceRemaining?: number,
+    maximumBalanceRemainingExclusive?: number
   ): Promise<AccountRecord | undefined>;
   consumeLease(uid: string, leaseId: string | undefined, cost: number, nowMs?: number): Promise<boolean>;
   releaseLease(uid: string, leaseId?: string): Promise<void>;
@@ -104,7 +105,8 @@ export class InMemoryAccountStore implements AccountStore {
     leaseId: string,
     leaseUntilMs: number,
     nowMs: number = now(),
-    minimumBalanceRemaining: number = 0
+    minimumBalanceRemaining: number = 0,
+    maximumBalanceRemainingExclusive?: number
   ): Promise<AccountRecord | undefined> {
     const account = Array.from(this.accounts.values())
       .filter((candidate) =>
@@ -112,6 +114,10 @@ export class InMemoryAccountStore implements AccountStore {
         && candidate.rateLimitedUntil <= nowMs
         && candidate.leaseUntil <= nowMs
         && candidate.balanceRemaining >= minimumBalanceRemaining
+        && (
+          maximumBalanceRemainingExclusive === undefined
+          || candidate.balanceRemaining < maximumBalanceRemainingExclusive
+        )
       )
       .sort((a, b) => a.lastUsedAt - b.lastUsedAt || a.createdAt - b.createdAt)[0];
     if (!account) {
