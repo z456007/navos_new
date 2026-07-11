@@ -477,7 +477,7 @@ describe("admin app gate", () => {
     await waitFor(() => {
       expect(screen.getAllByRole("heading", { name: "账号池" }).length).toBeGreaterThan(0);
     });
-    expect(screen.getByLabelText("并发数")).toHaveAttribute("aria-valuemax", "2");
+    expect(screen.getByLabelText("任务并发")).toHaveAttribute("aria-valuemax", "20");
     fireEvent.click(screen.getByRole("button", { name: "启动单个注册" }));
 
     await waitFor(() => {
