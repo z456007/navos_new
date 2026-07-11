@@ -2083,6 +2083,121 @@ describe("server routes", () => {
     expect(registrationService.registerOne).toHaveBeenCalledOnce();
   });
 
+  it("hides thrown registration failure details from public video create responses", async () => {
+    const accountService = new AccountService(new InMemoryAccountStore());
+    const registrationService = {
+      registerOne: vi.fn(async () => {
+        throw new Error("internal yyds domain mail.test quota detail");
+      })
+    };
+    const fetchImpl = vi.fn(async () => Response.json({ task_id: "task_1", status: "queued" }));
+    const app = createApp({
+      masterApiKey: "sk-master",
+      publicProxyApiKeys: ["sk-public"],
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      registrationService: registrationService as never,
+      fetchImpl
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/video/generations",
+      headers: { authorization: "Bearer sk-public" },
+      payload: { prompt: "city skyline", durationSeconds: 5, resolution: "720P" }
+    });
+
+    const body = response.json();
+    expect(response.statusCode).toBe(503);
+    expect(body.error).toEqual({
+      message: "Video account registration failed",
+      type: "video_account_registration_failed"
+    });
+    expect(JSON.stringify(body)).not.toContain("internal yyds");
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(registrationService.registerOne).toHaveBeenCalledOnce();
+  });
+
+  it("returns a controlled raw registration exception for local video create responses", async () => {
+    const accountService = new AccountService(new InMemoryAccountStore());
+    const registrationService = {
+      registerOne: vi.fn(async () => {
+        throw new Error("internal yyds domain mail.test quota detail");
+      })
+    };
+    const fetchImpl = vi.fn(async () => Response.json({ task_id: "task_1", status: "queued" }));
+    const app = createApp({
+      masterApiKey: "sk-master",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      registrationService: registrationService as never,
+      fetchImpl
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/video/generations",
+      headers: { authorization: "Bearer sk-master" },
+      payload: { prompt: "city skyline", durationSeconds: 5, resolution: "720P" }
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json().error).toMatchObject({
+      message: expect.stringContaining("internal yyds domain"),
+      type: "video_account_registration_failed"
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(registrationService.registerOne).toHaveBeenCalledOnce();
+  });
+
+  it("does not let public proxy keys poll known v1 video tasks without bound accounts", async () => {
+    const videoTaskStore = new InMemoryVideoTaskStore();
+    await videoTaskStore.upsert({
+      taskId: "orphan_task",
+      status: "queued",
+      raw: { task_id: "orphan_task", status: "queued" }
+    });
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    await accountService.importAccount({
+      uid: "video-ready",
+      token: "provider-token",
+      balanceRemaining: 2000,
+      balanceTotal: 2000
+    });
+    const fetchImpl = vi.fn(async () => Response.json({ task_id: "orphan_task", status: "success" }));
+    const app = createApp({
+      masterApiKey: "sk-master",
+      publicProxyApiKeys: ["sk-public"],
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      videoTaskStore,
+      fetchImpl
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/video/generations/orphan_task",
+      headers: { authorization: "Bearer sk-public" }
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json().error).toMatchObject({
+      message: "Video task not found",
+      type: "video_task_not_found"
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(await store.get("video-ready")).toMatchObject({
+      status: "active",
+      balanceRemaining: 2000,
+      leaseUntil: 0
+    });
+    expect((await store.get("video-ready"))?.leaseId).toBeUndefined();
+  });
+
   it("uploads and normalizes video references before forwarding task creation", async () => {
     const store = new InMemoryAccountStore();
     const accountService = new AccountService(store);

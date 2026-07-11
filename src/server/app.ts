@@ -852,7 +852,21 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       return undefined;
     }
 
-    const registrationResult = await registrationService.registerOne();
+    let registrationResult: Awaited<ReturnType<typeof registrationService.registerOne>>;
+    try {
+      registrationResult = await registrationService.registerOne();
+    } catch (error) {
+      const exposeRegistrationErrors = leaseOptions.exposeRegistrationErrors ?? true;
+      await reply.status(503).send({
+        error: {
+          message: exposeRegistrationErrors && error instanceof Error
+            ? error.message
+            : "Video account registration failed",
+          type: "video_account_registration_failed"
+        }
+      });
+      return undefined;
+    }
     if (!registrationResult.success) {
       const exposeRegistrationErrors = leaseOptions.exposeRegistrationErrors ?? true;
       await reply.status(503).send({
@@ -1558,6 +1572,15 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       return;
     }
     const taskAccount = existingTask?.accountUid ? await accountService.getProviderAccount(existingTask.accountUid) : undefined;
+    if (taskOptions.requireKnownTask && !taskAccount) {
+      await reply.status(404).send({
+        error: {
+          message: "Video task not found",
+          type: "video_task_not_found"
+        }
+      });
+      return;
+    }
     const headers = taskAccount
       ? buildProviderAuthHeaders(taskAccount, options.providerAuthMode)
       : await providerHeaders(reply);
