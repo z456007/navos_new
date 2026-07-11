@@ -27,7 +27,7 @@ GET  /api/video/generations/{task_id}
 
 ## Models
 
-Public `/v1` video routes accept omitted `model` or one of the supported Seedance aliases. Unsupported public model names are rejected before NavOS leases an account.
+For requests authenticated with public proxy API keys, public `/v1` video routes accept omitted `model` or one of the supported Seedance aliases. Unsupported public model names are rejected before NavOS leases an account. Master-key requests through `/v1/video/*` are operational/admin compatibility and may be more permissive.
 
 Supported aliases normalize to `navos/doubao-seedance-2-0-260128`:
 
@@ -43,6 +43,13 @@ seedance-2.0-pro
 
 NavOS rejects requests that exceed the selected resolution limit before leasing an account.
 
+Defaults when request fields are omitted:
+
+```text
+resolution: 720P
+durationSeconds: 5
+```
+
 ```text
 480P  <= 15 seconds
 720P  <= 10 seconds
@@ -51,17 +58,25 @@ NavOS rejects requests that exceed the selected resolution limit before leasing 
 
 ## Account And Credit Rules
 
-Video generation uses one video-capable account per accepted task.
+NavOS leases a video-capable account only after authentication, model allow-list checks, and request validation pass. Capacity is consumed at the upstream task boundary, not merely because an HTTP request was accepted by auth.
 
 ```text
-required balance: 2000 credits
-accepted create request: consumes one account
-over-duration request: consumes no account
-reference upload failure: releases the account
-upstream insufficient balance: marks the account depleted
+required balance to lease: 2000 credits
+pre-lease validation/model failure: consumes no account
+reference upload failure: releases the leased account
+upstream task creation success (2xx): depletes the leased account immediately
+upstream insufficient-balance/quota exhaustion: depletes the leased account
+other upstream failures: release the leased account
 ```
 
-Keep a warm account pool when selling video generation. On-demand registration can add latency and can fail if mail or upstream registration is limited.
+For sellers, the capacity and billing boundary is upstream task creation success or a quota-exhausted upstream response. Keep a warm account pool when selling video generation. On-demand registration can add latency and can fail if mail or upstream registration is limited.
+
+Set these variables before running the examples:
+
+```bash
+export BASE_URL="https://your-navos.example.com"
+export NAVOS_API_KEY="sk-your-public-proxy-key"
+```
 
 ## Text-To-Video Example
 
@@ -191,41 +206,32 @@ NavOS uploads local `data:` references and plain `http://` media references befo
 ```text
 401 authentication_error
 ```
-
 The API key is missing or not allowed for the selected route.
 
 ```text
 400 model_not_allowed
 ```
-
-Public `/v1/video/generations` returns this when the request uses a non-Seedance model. Use one of the supported Seedance aliases or omit `model`.
+With a public proxy API key, `/v1/video/generations` returns this when the request uses a non-Seedance model. Use one of the supported Seedance aliases or omit `model`.
 
 ```text
 400 validation error
 ```
-
 The requested duration is longer than the selected resolution allows. The response has a validation message containing the selected resolution's maximum duration, for example `1080P` max 5 seconds; do not rely on a stable `error.type` for duration validation.
 
 ```text
 404 video_task_not_found
 ```
-
 The public polling route did not find a task for the requested id.
 
 ```text
 503 account_unavailable
 ```
-
 No eligible video account has at least 2000 remaining credits, and NavOS has no registration service or no usable account path for this request.
 
 ```text
 503 video_account_registration_failed
 ```
-
 NavOS attempted to register an account for the video task, but registration failed. Public `/v1` responses return the generic message `Video account registration failed`; admin/local responses may include internal registration details.
 
-```text
-402 or upstream insufficient balance
-```
-
-The leased upstream account did not have enough credits. NavOS marks that account depleted.
+Upstream insufficient balance or quota exhaustion:
+NavOS forwards the upstream status and body for upstream insufficient-balance or quota-exhaustion responses. Clients should inspect the response body or message for `insufficient_balance` or equivalent provider text. NavOS marks the leased video account depleted when the upstream result indicates quota exhaustion.
