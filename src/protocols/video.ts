@@ -501,7 +501,11 @@ function normalizeDurationForPayload(value: unknown): unknown {
 }
 
 function normalizeVideoModel(model: string): string {
-  return SEEDANCE_2_ALIASES.has(model.toLowerCase()) ? SEEDANCE_2_MODEL : model;
+  const normalized = model.trim().toLowerCase();
+  if (!normalized) {
+    return SEEDANCE_2_MODEL;
+  }
+  return SEEDANCE_2_ALIASES.has(normalized) ? SEEDANCE_2_MODEL : model;
 }
 
 function isFrameRole(role: string): boolean {

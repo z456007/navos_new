@@ -123,6 +123,12 @@ describe("video protocol", () => {
     expect(payload).not.toHaveProperty("images");
   });
 
+  it("treats blank video model values as the default Seedance model", () => {
+    expect(normalizeSeedanceVideoPayload({ prompt: "city skyline", model: "   " })).toMatchObject({
+      model: "navos/doubao-seedance-2-0-260128"
+    });
+  });
+
   it("uploads local data URL references before creating a video payload", async () => {
     const paths: string[] = [];
     const client = new ProviderHttpClient("https://upstream.test", async (url) => {
