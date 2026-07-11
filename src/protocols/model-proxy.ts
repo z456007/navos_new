@@ -290,6 +290,13 @@ async function forwardChatCompletion<T = unknown>(
     if (result.status < 200 || result.status >= 300) {
       return result as ProviderResult<T>;
     }
+    const contentType = result.headers.get("content-type") ?? "";
+    if (contentType.includes("text/event-stream") && isNodeReadable(result.body)) {
+      return {
+        ...result,
+        body: result.body.pipe(createOpenAiResponsesToChatCompletionsStream(model)) as T
+      };
+    }
     return {
       ...result,
       body: openAiResponseToChat(result.body, model) as T
@@ -302,6 +309,13 @@ async function forwardChatCompletion<T = unknown>(
   });
   if (result.status < 200 || result.status >= 300) {
     return result as ProviderResult<T>;
+  }
+  const contentType = result.headers.get("content-type") ?? "";
+  if (contentType.includes("text/event-stream") && isNodeReadable(result.body)) {
+    return {
+      ...result,
+      body: result.body.pipe(createAnthropicMessagesToChatCompletionsStream(model)) as T
+    };
   }
   return {
     ...result,
@@ -370,6 +384,9 @@ function buildOpenAiResponsesBody(body: Record<string, unknown>, model: string):
     if (body[key] !== undefined) {
       out[key] = body[key];
     }
+  }
+  if (body.stream === true) {
+    out.stream = true;
   }
   return out;
 }
@@ -598,6 +615,9 @@ function buildAnthropicMessagesBody(body: Record<string, unknown>, requestedMode
   }
   if (body.stop !== undefined) {
     out.stop_sequences = Array.isArray(body.stop) ? body.stop : [body.stop];
+  }
+  if (body.stream === true) {
+    out.stream = true;
   }
   return out;
 }
@@ -968,6 +988,250 @@ interface ResponsesStreamState {
   }>;
   finishReason?: string;
   usage?: Record<string, unknown>;
+}
+
+interface ChatCompletionStreamState {
+  id: string;
+  model: string;
+  created: number;
+  roleSent: boolean;
+  finalSent: boolean;
+  finishReason?: string;
+}
+
+function createOpenAiResponsesToChatCompletionsStream(model: string): Transform {
+  const state = createChatCompletionStreamState(model);
+  let buffer = "";
+  return new Transform({
+    transform(chunk, _encoding, callback) {
+      try {
+        buffer += chunk.toString("utf8");
+        const events = buffer.split(/\r?\n\r?\n/);
+        buffer = events.pop() ?? "";
+        for (const event of events) {
+          processOpenAiResponsesSseEventAsChat(this, event, state);
+        }
+        callback();
+      } catch (error) {
+        callback(error as Error);
+      }
+    },
+    flush(callback) {
+      try {
+        if (buffer.trim()) {
+          processOpenAiResponsesSseEventAsChat(this, buffer, state);
+        }
+        pushChatCompletionDoneIfNeeded(this, state);
+        callback();
+      } catch (error) {
+        callback(error as Error);
+      }
+    }
+  });
+}
+
+function createAnthropicMessagesToChatCompletionsStream(model: string): Transform {
+  const state = createChatCompletionStreamState(model);
+  let buffer = "";
+  return new Transform({
+    transform(chunk, _encoding, callback) {
+      try {
+        buffer += chunk.toString("utf8");
+        const events = buffer.split(/\r?\n\r?\n/);
+        buffer = events.pop() ?? "";
+        for (const event of events) {
+          processAnthropicMessagesSseEventAsChat(this, event, state);
+        }
+        callback();
+      } catch (error) {
+        callback(error as Error);
+      }
+    },
+    flush(callback) {
+      try {
+        if (buffer.trim()) {
+          processAnthropicMessagesSseEventAsChat(this, buffer, state);
+        }
+        pushChatCompletionDoneIfNeeded(this, state);
+        callback();
+      } catch (error) {
+        callback(error as Error);
+      }
+    }
+  });
+}
+
+function createChatCompletionStreamState(model: string): ChatCompletionStreamState {
+  return {
+    id: `chatcmpl-${Date.now()}`,
+    model,
+    created: Math.floor(Date.now() / 1000),
+    roleSent: false,
+    finalSent: false
+  };
+}
+
+function processOpenAiResponsesSseEventAsChat(
+  stream: Transform,
+  event: string,
+  state: ChatCompletionStreamState
+): void {
+  const data = sseEventData(event);
+  if (!data) {
+    return;
+  }
+  if (data === "[DONE]") {
+    pushChatCompletionDoneIfNeeded(stream, state);
+    return;
+  }
+
+  const chunk = JSON.parse(data) as Record<string, unknown>;
+  updateChatCompletionStateFromOpenAiResponseEvent(state, chunk);
+  const type = readString(chunk.type);
+  if (type === "response.output_text.delta") {
+    const delta = readString(chunk.delta) ?? readString(chunk.text);
+    if (delta) {
+      pushChatCompletionRoleIfNeeded(stream, state);
+      pushChatCompletionChunk(stream, state, { content: delta }, null);
+    }
+    return;
+  }
+  if (type === "response.completed" || type === "response.incomplete" || type === "response.failed") {
+    const response = chunk.response && typeof chunk.response === "object"
+      ? chunk.response as Record<string, unknown>
+      : {};
+    state.finishReason = mapOpenAiResponseStatus(readString(response.status) ?? (type === "response.incomplete" ? "incomplete" : undefined));
+    pushChatCompletionDoneIfNeeded(stream, state);
+  }
+}
+
+function processAnthropicMessagesSseEventAsChat(
+  stream: Transform,
+  event: string,
+  state: ChatCompletionStreamState
+): void {
+  const data = sseEventData(event);
+  if (!data) {
+    return;
+  }
+  if (data === "[DONE]") {
+    pushChatCompletionDoneIfNeeded(stream, state);
+    return;
+  }
+
+  const chunk = JSON.parse(data) as Record<string, unknown>;
+  if (readString(chunk.id)) {
+    state.id = readString(chunk.id) ?? state.id;
+  }
+  if (readString(chunk.model)) {
+    state.model = readString(chunk.model) ?? state.model;
+  }
+  const type = readString(chunk.type) ?? sseEventName(event);
+  if (type === "content_block_delta") {
+    const delta = chunk.delta && typeof chunk.delta === "object"
+      ? chunk.delta as Record<string, unknown>
+      : {};
+    const text = readString(delta.text);
+    if (text) {
+      pushChatCompletionRoleIfNeeded(stream, state);
+      pushChatCompletionChunk(stream, state, { content: text }, null);
+    }
+    return;
+  }
+  if (type === "content_block_start") {
+    const block = chunk.content_block && typeof chunk.content_block === "object"
+      ? chunk.content_block as Record<string, unknown>
+      : {};
+    const text = readString(block.text);
+    if (text) {
+      pushChatCompletionRoleIfNeeded(stream, state);
+      pushChatCompletionChunk(stream, state, { content: text }, null);
+    }
+    return;
+  }
+  if (type === "message_delta") {
+    const delta = chunk.delta && typeof chunk.delta === "object"
+      ? chunk.delta as Record<string, unknown>
+      : {};
+    state.finishReason = mapAnthropicStopReason(readString(delta.stop_reason));
+    return;
+  }
+  if (type === "message_stop") {
+    pushChatCompletionDoneIfNeeded(stream, state);
+  }
+}
+
+function updateChatCompletionStateFromOpenAiResponseEvent(
+  state: ChatCompletionStreamState,
+  event: Record<string, unknown>
+): void {
+  const response = event.response && typeof event.response === "object"
+    ? event.response as Record<string, unknown>
+    : {};
+  const id = readString(response.id) ?? readString(event.response_id) ?? readString(event.id);
+  if (id) {
+    state.id = id;
+  }
+  const model = readString(response.model) ?? readString(event.model);
+  if (model) {
+    state.model = model;
+  }
+}
+
+function sseEventData(event: string): string {
+  return event
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice("data:".length).trimStart())
+    .join("\n")
+    .trim();
+}
+
+function sseEventName(event: string): string | undefined {
+  return event
+    .split(/\r?\n/)
+    .map((line) => /^event:\s*(.+)$/i.exec(line)?.[1]?.trim())
+    .find((value): value is string => Boolean(value));
+}
+
+function pushChatCompletionRoleIfNeeded(stream: Transform, state: ChatCompletionStreamState): void {
+  if (state.roleSent || state.finalSent) {
+    return;
+  }
+  state.roleSent = true;
+  pushChatCompletionChunk(stream, state, { role: "assistant" }, null);
+}
+
+function pushChatCompletionDoneIfNeeded(
+  stream: Transform,
+  state: ChatCompletionStreamState,
+  finishReason = state.finishReason ?? "stop"
+): void {
+  if (state.finalSent) {
+    return;
+  }
+  state.finalSent = true;
+  pushChatCompletionChunk(stream, state, {}, finishReason);
+  stream.push("data: [DONE]\n\n");
+}
+
+function pushChatCompletionChunk(
+  stream: Transform,
+  state: ChatCompletionStreamState,
+  delta: Record<string, unknown>,
+  finishReason: string | null
+): void {
+  stream.push(`data: ${JSON.stringify({
+    id: state.id,
+    object: "chat.completion.chunk",
+    created: state.created,
+    model: state.model,
+    choices: [{
+      index: 0,
+      delta,
+      finish_reason: finishReason
+    }]
+  })}\n\n`);
 }
 
 function createChatCompletionsToResponsesStream(model: string): Transform {

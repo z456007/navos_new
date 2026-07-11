@@ -42,6 +42,43 @@ async function startFakeUpstream(
   };
 }
 
+async function readRequestJson(request: IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) {
+    chunks.push(Buffer.from(chunk));
+  }
+  const raw = Buffer.concat(chunks).toString("utf8");
+  return raw ? JSON.parse(raw) as Record<string, unknown> : {};
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function readResponseBodyWithFirstChunkTiming(response: Response, startedAt: number): Promise<{
+  firstChunkMs: number;
+  totalMs: number;
+  body: string;
+}> {
+  const reader = response.body?.getReader();
+  expect(reader).toBeDefined();
+  const first = await reader!.read();
+  const firstChunkMs = Date.now() - startedAt;
+  let body = first.value ? Buffer.from(first.value).toString("utf8") : "";
+  while (true) {
+    const next = await reader!.read();
+    if (next.done) {
+      break;
+    }
+    body += Buffer.from(next.value).toString("utf8");
+  }
+  return {
+    firstChunkMs,
+    totalMs: Date.now() - startedAt,
+    body
+  };
+}
+
 function uidFromAuthorization(authorization: string | undefined): string {
   return (authorization ?? "").replace(/^Bearer\s+/i, "").split(":")[0] ?? "";
 }
@@ -1036,6 +1073,136 @@ describe("server routes", () => {
       path: "/chat/completions",
       body: { model: "openai.gpt-5.5", stream: true }
     });
+  });
+
+  it("streams Codex chat completions through the upstream responses stream in real time", async () => {
+    const forwarded: Array<{ path: string; body: Record<string, unknown> }> = [];
+    const upstream = await startFakeUpstream(async (request, response) => {
+      const path = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+      const body = await readRequestJson(request);
+      forwarded.push({ path, body });
+      if (path !== "/responses" || body.stream !== true) {
+        response.writeHead(200, { "content-type": "application/json" });
+        await delay(500);
+        response.end(JSON.stringify({
+          id: "resp-buffered",
+          status: "completed",
+          output: [{ content: [{ text: "buffered" }] }]
+        }));
+        return;
+      }
+
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.flushHeaders?.();
+      response.write("data: {\"type\":\"response.output_text.delta\",\"delta\":\"first\"}\n\n");
+      await delay(500);
+      response.end("data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\ndata: [DONE]\n\n");
+    });
+    const app = createApp({
+      masterApiKey: "sk-master",
+      publicProxyApiKeys: ["sk-public"],
+      providerBaseUrl: upstream.baseUrl,
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" }))
+    });
+
+    try {
+      await app.listen({ port: 0, host: "127.0.0.1" });
+      const address = app.server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("app did not bind to a TCP port");
+      }
+      const startedAt = Date.now();
+      const response = await fetch(`http://127.0.0.1:${address.port}/v1/chat/completions`, {
+        method: "POST",
+        headers: { authorization: "Bearer sk-public", "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "codex",
+          stream: true,
+          messages: [{ role: "user", content: "hi" }],
+          max_tokens: 16
+        })
+      });
+      const result = await readResponseBodyWithFirstChunkTiming(response, startedAt);
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("text/event-stream");
+      expect(result.firstChunkMs).toBeLessThan(350);
+      expect(result.totalMs).toBeGreaterThanOrEqual(450);
+      expect(result.body).toContain("\"object\":\"chat.completion.chunk\"");
+      expect(result.body).toContain("\"content\":\"first\"");
+      expect(result.body).toContain("data: [DONE]");
+      expect(forwarded).toEqual([{
+        path: "/responses",
+        body: expect.objectContaining({ model: "openai.gpt-5.3-codex", stream: true })
+      }]);
+    } finally {
+      await app.close();
+      await upstream.close();
+    }
+  });
+
+  it("streams Claude chat completions through the upstream Anthropic messages stream in real time", async () => {
+    const forwarded: Array<{ path: string; body: Record<string, unknown> }> = [];
+    const upstream = await startFakeUpstream(async (request, response) => {
+      const path = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+      const body = await readRequestJson(request);
+      forwarded.push({ path, body });
+      if (path !== "/v1/messages" || body.stream !== true) {
+        response.writeHead(200, { "content-type": "application/json" });
+        await delay(500);
+        response.end(JSON.stringify({ id: "msg-buffered", content: [{ text: "buffered" }] }));
+        return;
+      }
+
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.flushHeaders?.();
+      response.write("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"first\"}}\n\n");
+      await delay(500);
+      response.end("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n");
+    });
+    const app = createApp({
+      masterApiKey: "sk-master",
+      publicProxyApiKeys: ["sk-public"],
+      providerBaseUrl: upstream.baseUrl,
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(new InMemoryAccountStore({ uid: "u1", token: "t1" }))
+    });
+
+    try {
+      await app.listen({ port: 0, host: "127.0.0.1" });
+      const address = app.server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("app did not bind to a TCP port");
+      }
+      const startedAt = Date.now();
+      const response = await fetch(`http://127.0.0.1:${address.port}/v1/chat/completions`, {
+        method: "POST",
+        headers: { authorization: "Bearer sk-public", "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-6",
+          stream: true,
+          messages: [{ role: "user", content: "hi" }],
+          max_tokens: 16
+        })
+      });
+      const result = await readResponseBodyWithFirstChunkTiming(response, startedAt);
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("text/event-stream");
+      expect(result.firstChunkMs).toBeLessThan(350);
+      expect(result.totalMs).toBeGreaterThanOrEqual(450);
+      expect(result.body).toContain("\"object\":\"chat.completion.chunk\"");
+      expect(result.body).toContain("\"content\":\"first\"");
+      expect(result.body).toContain("data: [DONE]");
+      expect(forwarded).toEqual([{
+        path: "/v1/messages",
+        body: expect.objectContaining({ model: "claude.sonnet-4.6", stream: true })
+      }]);
+    } finally {
+      await app.close();
+      await upstream.close();
+    }
   });
 
   it("blocks public native responses requests for non-public models", async () => {
