@@ -591,6 +591,8 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     return publicKeys.some((key) => isClientAuthorized(headersFromRequest(request), key));
   }
 
+  type RequestAuthGuard = (request: FastifyRequest, reply: FastifyReply) => boolean;
+
   function requireLocalAuth(request: FastifyRequest, reply: FastifyReply): boolean {
     if (isLocalAuthorized(request)) {
       return true;
@@ -1466,8 +1468,12 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     await sendProviderResult(reply, result);
   });
 
-  async function handleCreateVideo(request: FastifyRequest, reply: FastifyReply): Promise<void> {
-    if (!requireLocalAuth(request, reply)) {
+  async function handleCreateVideo(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    requireAuth: RequestAuthGuard = requireLocalAuth
+  ): Promise<void> {
+    if (!requireAuth(request, reply)) {
       return;
     }
     const body = bodyRecord(request);
@@ -1514,8 +1520,12 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     await sendProviderResult(reply, result);
   }
 
-  async function handleGetVideoTask(request: FastifyRequest, reply: FastifyReply): Promise<void> {
-    if (!requireLocalAuth(request, reply)) {
+  async function handleGetVideoTask(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    requireAuth: RequestAuthGuard = requireLocalAuth
+  ): Promise<void> {
+    if (!requireAuth(request, reply)) {
       return;
     }
     const params = request.params as { taskId?: string };
@@ -1677,10 +1687,18 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     await handleGetImageGeneration(request, reply);
   });
 
-  app.post("/api/video/generations", handleCreateVideo);
-  app.post("/v1/video/generations", handleCreateVideo);
-  app.get("/api/video/generations/:taskId", handleGetVideoTask);
-  app.get("/v1/video/generations/:taskId", handleGetVideoTask);
+  app.post("/api/video/generations", async (request, reply) => {
+    await handleCreateVideo(request, reply, requireLocalAuth);
+  });
+  app.post("/v1/video/generations", async (request, reply) => {
+    await handleCreateVideo(request, reply, requirePublicProxyAuth);
+  });
+  app.get("/api/video/generations/:taskId", async (request, reply) => {
+    await handleGetVideoTask(request, reply, requireLocalAuth);
+  });
+  app.get("/v1/video/generations/:taskId", async (request, reply) => {
+    await handleGetVideoTask(request, reply, requirePublicProxyAuth);
+  });
 
   app.post("/api/registration/register", async (request, reply) => {
     if (!requireLocalAuth(request, reply)) return;

@@ -1921,6 +1921,63 @@ describe("server routes", () => {
     ]);
   });
 
+  it("allows public proxy keys on v1 video routes while keeping api video routes local only", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    await accountService.importAccount({
+      uid: "video-public",
+      token: "provider-token",
+      balanceRemaining: 2000,
+      balanceTotal: 2000
+    });
+    const paths: string[] = [];
+    const app = createApp({
+      masterApiKey: "sk-master",
+      publicProxyApiKeys: ["sk-public"],
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      fetchImpl: async (url, init) => {
+        paths.push(`${init?.method ?? "GET"} ${new URL(String(url)).pathname}`);
+        if (String(url).endsWith("/api/tasks/navos-seedance-video-generation")) {
+          return Response.json({ task_id: "task_public", status: "queued" });
+        }
+        return Response.json({ task_id: "task_public", status: "success", video_url: "https://cdn.test/public.mp4" });
+      }
+    });
+
+    const apiWithPublicKey = await app.inject({
+      method: "POST",
+      url: "/api/video/generations",
+      headers: { authorization: "Bearer sk-public" },
+      payload: { prompt: "city skyline", durationSeconds: 5, resolution: "720P" }
+    });
+    expect(apiWithPublicKey.statusCode).toBe(401);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/video/generations",
+      headers: { authorization: "Bearer sk-public" },
+      payload: { prompt: "city skyline", durationSeconds: 5, resolution: "720P" }
+    });
+    expect(created.statusCode).toBe(200);
+    expect(created.json()).toMatchObject({ task_id: "task_public" });
+
+    const polled = await app.inject({
+      method: "GET",
+      url: "/v1/video/generations/task_public",
+      headers: { authorization: "Bearer sk-public" }
+    });
+    expect(polled.statusCode).toBe(200);
+    expect(polled.json()).toMatchObject({ status: "succeeded", videoUrl: "https://cdn.test/public.mp4" });
+
+    expect(paths).toEqual([
+      "POST /api/tasks/navos-seedance-video-generation",
+      "GET /api/tasks/video/generations/task_public"
+    ]);
+    expect((await store.get("video-public"))?.status).toBe("depleted");
+  });
+
   it("uploads and normalizes video references before forwarding task creation", async () => {
     const store = new InMemoryAccountStore();
     const accountService = new AccountService(store);
@@ -2026,6 +2083,42 @@ describe("server routes", () => {
     expect(rejected.statusCode).toBe(400);
     expect(rejected.json().error.message).toContain("1080P");
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("rejects over-duration public video requests before leasing an account", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    await accountService.importAccount({
+      uid: "video-ready",
+      token: "provider-token",
+      balanceRemaining: 2000,
+      balanceTotal: 2000
+    });
+    const fetchImpl = vi.fn(async () => Response.json({ task_id: "task_1", status: "queued" }));
+    const app = createApp({
+      masterApiKey: "sk-master",
+      publicProxyApiKeys: ["sk-public"],
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      fetchImpl
+    });
+
+    const rejected = await app.inject({
+      method: "POST",
+      url: "/v1/video/generations",
+      headers: { authorization: "Bearer sk-public" },
+      payload: { prompt: "city skyline", durationSeconds: 10, resolution: "1080P" }
+    });
+
+    expect(rejected.statusCode).toBe(400);
+    expect(rejected.json().error.message).toContain("1080P");
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(await store.get("video-ready")).toMatchObject({
+      status: "active",
+      balanceRemaining: 2000,
+      leaseUntil: 0
+    });
   });
 
   it("uses one leased account per concurrent video create and depletes successful accounts", async () => {
