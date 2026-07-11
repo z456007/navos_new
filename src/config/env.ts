@@ -160,10 +160,16 @@ export function loadConfig(env: EnvInput = process.env): AppConfig {
   const uid = env.PROVIDER_ACCOUNT_UID?.trim();
   const token = env.PROVIDER_ACCOUNT_TOKEN?.trim();
   const defaultAccount = uid && token ? { uid, token } : undefined;
+  const masterApiKey = requireEnv(env, "MASTER_API_KEY");
+  const publicProxyApiKeys = parseCsv(env.PUBLIC_PROXY_API_KEYS);
+
+  if (publicProxyApiKeys.includes(masterApiKey)) {
+    throw new Error("PUBLIC_PROXY_API_KEYS must not include MASTER_API_KEY");
+  }
 
   return {
-    masterApiKey: requireEnv(env, "MASTER_API_KEY"),
-    publicProxyApiKeys: parseCsv(env.PUBLIC_PROXY_API_KEYS),
+    masterApiKey,
+    publicProxyApiKeys,
     providerBaseUrl: requireEnv(env, "PROVIDER_BASE_URL").replace(/\/+$/, ""),
     providerAuthMode: parseProviderAuthMode(env.PROVIDER_AUTH_MODE),
     listenPort: parsePort(env.PORT),

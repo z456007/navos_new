@@ -59,6 +59,15 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ MASTER_API_KEY: "sk-test", PROVIDER_BASE_URL: "https://upstream.test" })).toThrow(/VIP_HMAC_SECRET/);
   });
 
+  it("rejects public proxy keys that overlap the master key", () => {
+    expect(() => loadConfig({
+      MASTER_API_KEY: "sk-test",
+      PROVIDER_BASE_URL: "https://upstream.test",
+      VIP_HMAC_SECRET: "test-secret-32-chars-long-key!!",
+      PUBLIC_PROXY_API_KEYS: " sk-public, sk-test "
+    })).toThrow(/PUBLIC_PROXY_API_KEYS.*MASTER_API_KEY/);
+  });
+
   it("uses default registration queue settings", () => {
     const config = loadConfig({
       MASTER_API_KEY: "sk-test",
