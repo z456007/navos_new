@@ -898,11 +898,11 @@ describe("admin app gate", () => {
 
     render(<YydsMailConfigPanel apiKey="sk-local" />);
 
-    const fallbackSwitch = await screen.findByRole("switch", { name: "Allow images to use video reserve accounts" });
+    const fallbackSwitch = await screen.findByRole("switch", { name: "???????" });
     expect(fallbackSwitch).not.toBeChecked();
 
     fireEvent.click(fallbackSwitch);
-    fireEvent.click(screen.getByRole("button", { name: "Save runtime config" }));
+    fireEvent.click(screen.getByRole("button", { name: "????" }));
 
     await waitFor(() => {
       expect(savedPayload).toEqual({ imageAllowVideoReserveFallback: true });
@@ -956,9 +956,9 @@ describe("admin app gate", () => {
     fireEvent.click(screen.getByRole("button", { name: "YYDS配置" }));
 
     fireEvent.change(await screen.findByLabelText("YYDS Mail Key"), { target: { value: "ac-ui-key" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save YYDS config" }));
+    fireEvent.click(screen.getByRole("button", { name: "?? YYDS ??" }));
 
-    await screen.findByText("Saved");
+    await screen.findByText("???");
     expect(screen.queryByText("ac-ui-key")).not.toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith("/api/mail/yyds/config", expect.objectContaining({ method: "PUT" }));
   });

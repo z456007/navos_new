@@ -11,7 +11,7 @@ export const navosTheme: ThemeConfig = {
     borderRadius: 7,
     controlHeight: 38,
     controlOutline: "rgba(47, 111, 235, 0.14)",
-    fontFamily: "Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
+    fontFamily: "\"Microsoft YaHei UI\", \"Microsoft YaHei\", \"PingFang SC\", \"Noto Sans CJK SC\", Inter, ui-sans-serif, system-ui, sans-serif"
   },
   components: {
     Card: { borderRadiusLG: 8 },

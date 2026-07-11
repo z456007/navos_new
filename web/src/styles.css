@@ -2,22 +2,24 @@
   color-scheme: light;
   --ink: #182230;
   --muted: #697586;
-  --paper: #f3f5f7;
+  --paper: #eef4fb;
   --panel: #ffffff;
-  --line: #d7dee8;
-  --line-strong: #b9c4d1;
-  --nav: #1f2937;
-  --blue: #2563eb;
-  --blue-soft: #edf4ff;
-  --green: #1a7f55;
-  --green-soft: #e7f6ee;
-  --amber: #a15c07;
-  --amber-soft: #fff6df;
+  --line: #d8e3f0;
+  --line-strong: #aebfd3;
+  --nav: #101827;
+  --blue: #2557d6;
+  --blue-soft: #e9f1ff;
+  --green: #0f8a5f;
+  --green-soft: #e4f7ef;
+  --amber: #b45309;
+  --amber-soft: #fff4dc;
   --red: #b42318;
   --red-soft: #fff0ee;
+  --cyan-soft: #e9fbff;
+  --rail: linear-gradient(180deg, #1d4ed8 0%, #0f8a5f 100%);
   --shadow: 0 12px 32px rgba(16, 24, 40, 0.08);
   --shadow-soft: 0 4px 18px rgba(16, 24, 40, 0.06);
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", Inter, ui-sans-serif, system-ui, sans-serif;
 }
 
 * {
@@ -34,7 +36,10 @@ body,
 body {
   margin: 0;
   min-width: 320px;
-  background: var(--paper);
+  background:
+    radial-gradient(circle at 12% 8%, rgba(37, 99, 235, 0.10), transparent 28%),
+    radial-gradient(circle at 80% 0%, rgba(15, 138, 95, 0.08), transparent 28%),
+    var(--paper);
   color: var(--ink);
 }
 
@@ -281,7 +286,7 @@ a.button {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  padding: 22px;
+  padding: 24px;
 }
 
 .workspace-head {
@@ -365,7 +370,7 @@ a.button {
 }
 
 .panel.narrow {
-  max-width: 840px;
+  max-width: 1080px;
 }
 
 .panel-head {
@@ -380,6 +385,18 @@ a.button {
 .panel-head h2 {
   margin: 0;
   font-size: 16px;
+}
+
+.panel-head h3 {
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.25;
+}
+
+.panel-subtitle {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .status {
@@ -403,7 +420,7 @@ a.button {
 .import-grid,
 .form-row,
 .probe-grid,
-\.config-form {
+.config-form {
   display: grid;
   gap: 12px;
   padding: 14px;
@@ -1357,12 +1374,94 @@ a.button {
   padding: 5px 9px;
 }
 
+.config-panel {
+  position: relative;
+  border-color: #cbd9ea;
+  background:
+    linear-gradient(90deg, rgba(37, 87, 214, 0.08), transparent 36%),
+    var(--panel);
+}
+
+.config-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: var(--rail);
+}
+
+.config-hero {
+  align-items: flex-start;
+  background: linear-gradient(180deg, #fbfdff 0%, #f5f9ff 100%);
+  padding: 18px 20px;
+}
+
+.key-config-card {
+  background: #ffffff;
+  border-bottom: 1px solid var(--line);
+  padding: 16px 20px;
+}
+
 .runtime-config-panel,
 .domain-pool-panel {
   display: grid;
   gap: 12px;
   border-top: 1px solid var(--line);
+  padding: 16px 20px;
+}
+
+.inner-head {
+  border-bottom: 0;
+  padding: 0;
+}
+
+.guard-panel {
+  background:
+    linear-gradient(90deg, rgba(15, 138, 95, 0.08), transparent 50%),
+    #ffffff;
+}
+
+.reserve-guard {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 12px;
+  align-items: start;
+  border: 1px solid var(--line);
+  border-left: 5px solid var(--green);
+  border-radius: 16px;
+  background: #f8fffb;
   padding: 14px;
+}
+
+.reserve-guard.open {
+  border-left-color: var(--amber);
+  background: #fffaf0;
+}
+
+.reserve-guard-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.reserve-guard.open .reserve-guard-icon {
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.reserve-guard strong {
+  display: block;
+  font-size: 17px;
+}
+
+.reserve-guard p {
+  margin: 6px 0 0;
+  color: #41516a;
+  line-height: 1.6;
 }
 
 .runtime-toggle-row {
@@ -1372,7 +1471,7 @@ a.button {
   align-items: start;
   border: 1px solid var(--line);
   border-radius: 14px;
-  background: #fbfcfe;
+  background: #fbfdff;
   padding: 12px;
 }
 
@@ -1382,7 +1481,17 @@ a.button {
   font-size: 12px;
 }
 
-\.config-enabled {
+.domain-list-grid {
+  padding: 0;
+}
+
+.domain-table {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.config-enabled {
   justify-self: start;
 }
 
