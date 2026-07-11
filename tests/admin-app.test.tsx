@@ -878,6 +878,18 @@ describe("admin app gate", () => {
       if (path === "/api/mail/yyds/config" && init?.method === "GET") {
         return Response.json({ configured: false });
       }
+      if (path === "/api/mail/yyds/domains" && init?.method === "GET") {
+        return Response.json({
+          config: {
+            enabled: true,
+            mode: "auto-plus-whitelist",
+            whitelist: [],
+            blacklist: [],
+            refreshIntervalMinutes: 30
+          },
+          domains: []
+        });
+      }
       if (path === "/api/mail/yyds/config" && init?.method === "PUT") {
         const payload = JSON.parse(String(init.body));
         expect(payload.apiKey).toBe("ac-ui-key");
@@ -907,6 +919,83 @@ describe("admin app gate", () => {
     await screen.findByText("Saved");
     expect(screen.queryByText("ac-ui-key")).not.toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith("/api/mail/yyds/config", expect.objectContaining({ method: "PUT" }));
+  });
+
+  it("manages YYDS domain pool config and refreshes domains without exposing secrets", async () => {
+    let domainLoads = 0;
+    let savedDomainConfig: unknown;
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });
+      const path = String(url);
+      if (path === "/api/accounts") {
+        return Response.json([]);
+      }
+      if (path === "/api/mail/yyds/config" && init?.method === "GET") {
+        return Response.json({ configured: true, apiKeyConfigured: true });
+      }
+      if (path === "/api/mail/yyds/domains" && init?.method === "GET") {
+        domainLoads += 1;
+        return Response.json({
+          config: {
+            enabled: true,
+            mode: "auto-plus-whitelist",
+            whitelist: ["old.test"],
+            blacklist: ["blocked.test"],
+            refreshIntervalMinutes: 30,
+            apiKey: "ac-secret-should-not-render"
+          },
+          domains: [{
+            domain: domainLoads > 1 ? "fresh.test" : "healthy.test",
+            status: "active",
+            weight: 10,
+            successCount: 3,
+            failureCount: 1
+          }]
+        });
+      }
+      if (path === "/api/mail/yyds/domain-pool/config" && init?.method === "PUT") {
+        savedDomainConfig = JSON.parse(String(init.body));
+        return Response.json(savedDomainConfig);
+      }
+      if (path === "/api/mail/yyds/domains/refresh" && init?.method === "POST") {
+        return Response.json({ eligible: [{ domain: "fresh.test" }] });
+      }
+      return Response.json({ error: { message: "unexpected path" } }, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("Master API Key"), { target: { value: "sk-local" } });
+    fireEvent.click(screen.getByRole("button", { name: "进入控制台" }));
+
+    const yydsButton = await screen.findByRole("button", { name: /YYDS/ });
+    fireEvent.click(yydsButton);
+
+    expect(await screen.findByText("healthy.test")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("old.test")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("blocked.test")).toBeInTheDocument();
+    expect(screen.queryByText("ac-secret-should-not-render")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("白名单域名"), { target: { value: "good.test\nextra.test" } });
+    fireEvent.change(screen.getByLabelText("黑名单域名"), { target: { value: "bad.test, blocked.test" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存域名池配置" }));
+
+    await waitFor(() => {
+      expect(savedDomainConfig).toEqual({
+        enabled: true,
+        mode: "auto-plus-whitelist",
+        refreshIntervalMinutes: 30,
+        whitelist: ["good.test", "extra.test"],
+        blacklist: ["bad.test", "blocked.test"]
+      });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "刷新域名" }));
+
+    expect(await screen.findByText("fresh.test")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/api/mail/yyds/domains/refresh", expect.objectContaining({ method: "POST" }));
+    expect(domainLoads).toBeGreaterThanOrEqual(2);
   });
 });
 
