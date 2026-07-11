@@ -592,6 +592,9 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
   }
 
   type RequestAuthGuard = (request: FastifyRequest, reply: FastifyReply) => boolean;
+  type VideoAccountLeaseOptions = { exposeRegistrationErrors?: boolean };
+  type VideoCreateOptions = { exposeRegistrationErrors?: boolean };
+  type VideoTaskLookupOptions = { requireKnownTask?: boolean };
 
   function requireLocalAuth(request: FastifyRequest, reply: FastifyReply): boolean {
     if (isLocalAuthorized(request)) {
@@ -828,7 +831,11 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     };
   }
 
-  async function leaseVideoAccountOrRegister(leaseId: string, reply: FastifyReply): Promise<AccountRecord | undefined> {
+  async function leaseVideoAccountOrRegister(
+    leaseId: string,
+    reply: FastifyReply,
+    leaseOptions: VideoAccountLeaseOptions = {}
+  ): Promise<AccountRecord | undefined> {
     const existingAccount = await accountService.leaseVideoAccount(leaseId);
     if (existingAccount) {
       return existingAccount;
@@ -847,9 +854,12 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
 
     const registrationResult = await registrationService.registerOne();
     if (!registrationResult.success) {
+      const exposeRegistrationErrors = leaseOptions.exposeRegistrationErrors ?? true;
       await reply.status(503).send({
         error: {
-          message: registrationResult.error ?? "Video account registration failed",
+          message: exposeRegistrationErrors
+            ? registrationResult.error ?? "Video account registration failed"
+            : "Video account registration failed",
           type: "video_account_registration_failed"
         }
       });
@@ -1471,7 +1481,8 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
   async function handleCreateVideo(
     request: FastifyRequest,
     reply: FastifyReply,
-    requireAuth: RequestAuthGuard = requireLocalAuth
+    requireAuth: RequestAuthGuard = requireLocalAuth,
+    createOptions: VideoCreateOptions = {}
   ): Promise<void> {
     if (!requireAuth(request, reply)) {
       return;
@@ -1485,7 +1496,9 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     }
 
     const leaseId = `video:${randomUUID()}`;
-    const account = await leaseVideoAccountOrRegister(leaseId, reply);
+    const account = await leaseVideoAccountOrRegister(leaseId, reply, {
+      exposeRegistrationErrors: createOptions.exposeRegistrationErrors
+    });
     if (!account) {
       return;
     }
@@ -1523,7 +1536,8 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
   async function handleGetVideoTask(
     request: FastifyRequest,
     reply: FastifyReply,
-    requireAuth: RequestAuthGuard = requireLocalAuth
+    requireAuth: RequestAuthGuard = requireLocalAuth,
+    taskOptions: VideoTaskLookupOptions = {}
   ): Promise<void> {
     if (!requireAuth(request, reply)) {
       return;
@@ -1534,6 +1548,15 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       return;
     }
     const existingTask = await videoTaskStore.get(params.taskId);
+    if (taskOptions.requireKnownTask && !existingTask) {
+      await reply.status(404).send({
+        error: {
+          message: "Video task not found",
+          type: "video_task_not_found"
+        }
+      });
+      return;
+    }
     const taskAccount = existingTask?.accountUid ? await accountService.getProviderAccount(existingTask.accountUid) : undefined;
     const headers = taskAccount
       ? buildProviderAuthHeaders(taskAccount, options.providerAuthMode)
@@ -1691,13 +1714,17 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     await handleCreateVideo(request, reply, requireLocalAuth);
   });
   app.post("/v1/video/generations", async (request, reply) => {
-    await handleCreateVideo(request, reply, requirePublicProxyAuth);
+    await handleCreateVideo(request, reply, requirePublicProxyAuth, {
+      exposeRegistrationErrors: !isPublicProxyOnly(request)
+    });
   });
   app.get("/api/video/generations/:taskId", async (request, reply) => {
     await handleGetVideoTask(request, reply, requireLocalAuth);
   });
   app.get("/v1/video/generations/:taskId", async (request, reply) => {
-    await handleGetVideoTask(request, reply, requirePublicProxyAuth);
+    await handleGetVideoTask(request, reply, requirePublicProxyAuth, {
+      requireKnownTask: isPublicProxyOnly(request)
+    });
   });
 
   app.post("/api/registration/register", async (request, reply) => {
