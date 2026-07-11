@@ -370,7 +370,8 @@ a.button {
 }
 
 .panel.narrow {
-  max-width: 1080px;
+  width: 100%;
+  max-width: none;
 }
 
 .panel-head {
@@ -1376,6 +1377,10 @@ a.button {
 
 .config-panel {
   position: relative;
+  display: grid;
+  grid-template-columns: minmax(360px, 0.9fr) minmax(460px, 1.1fr);
+  align-content: start;
+  width: 100%;
   border-color: #cbd9ea;
   background:
     linear-gradient(90deg, rgba(37, 87, 214, 0.08), transparent 36%),
@@ -1391,13 +1396,17 @@ a.button {
 }
 
 .config-hero {
+  grid-column: 1 / -1;
   align-items: flex-start;
   background: linear-gradient(180deg, #fbfdff 0%, #f5f9ff 100%);
   padding: 18px 20px;
 }
 
 .key-config-card {
+  grid-column: 1;
+  min-width: 0;
   background: #ffffff;
+  border-right: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   padding: 16px 20px;
 }
@@ -1405,9 +1414,21 @@ a.button {
 .runtime-config-panel,
 .domain-pool-panel {
   display: grid;
+  min-width: 0;
   gap: 12px;
   border-top: 1px solid var(--line);
   padding: 16px 20px;
+}
+
+.runtime-config-panel {
+  grid-column: 2;
+  border-top: 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.domain-pool-panel {
+  grid-column: 1 / -1;
+  border-top: 0;
 }
 
 .inner-head {
@@ -1622,6 +1643,7 @@ a.button {
   .image-workbench,
   .video-rule-band,
   .video-grid,
+  .config-panel,
   .reference-grid,
   .form-row.two,
   .form-row.three,
@@ -1662,6 +1684,17 @@ a.button {
   .image-output {
     border-left: 0;
     border-top: 1px solid var(--line);
+  }
+
+  .config-hero,
+  .key-config-card,
+  .runtime-config-panel,
+  .domain-pool-panel {
+    grid-column: 1;
+  }
+
+  .key-config-card {
+    border-right: 0;
   }
 
   .reference-column {
