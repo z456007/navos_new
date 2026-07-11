@@ -22,6 +22,7 @@ describe("loadConfig", () => {
       IMAGE_ACCOUNT_WAIT_MS: "45000",
       IMAGE_MAX_POLL_ATTEMPTS: "90",
       IMAGE_POLL_INTERVAL_MS: "2000",
+      IMAGE_ALLOW_VIDEO_RESERVE_FALLBACK: "true",
       PUBLIC_PROXY_API_KEYS: " sk-public-1,sk-public-2 ,, "
     });
 
@@ -41,6 +42,7 @@ describe("loadConfig", () => {
     expect(config.imageAccountWaitMs).toBe(45000);
     expect(config.imageMaxPollAttempts).toBe(90);
     expect(config.imagePollIntervalMs).toBe(2000);
+    expect(config.imageAllowVideoReserveFallback).toBe(true);
     expect(config.publicProxyApiKeys).toEqual(["sk-public-1", "sk-public-2"]);
     expect(config.mysql).toEqual({
       host: "127.0.0.1",
@@ -72,6 +74,7 @@ describe("loadConfig", () => {
     expect(config.imageAccountWaitMs).toBe(120000);
     expect(config.imageMaxPollAttempts).toBe(30);
     expect(config.imagePollIntervalMs).toBe(4000);
+    expect(config.imageAllowVideoReserveFallback).toBe(false);
     expect(config.accountBalanceReconcileEnabled).toBe(true);
     expect(config.accountBalanceReconcileIntervalMinutes).toBe(30);
     expect(config.accountBalanceReconcileBatchSize).toBe(1000);

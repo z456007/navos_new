@@ -1687,6 +1687,112 @@ describe("server routes", () => {
     expect(paths).toHaveLength(2);
   });
 
+  it("lets runtime config protect video-reserve accounts from image fallback", async () => {
+    const paths: string[] = [];
+    const store = new InMemoryAccountStore();
+    await store.upsert({ uid: "video-only", token: "t1", balanceRemaining: 2000, balanceTotal: 2000 });
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(store),
+      imageAllowVideoReserveFallback: false,
+      imageAccountWaitMs: 0,
+      fetchImpl: async (url) => {
+        const path = new URL(String(url)).pathname;
+        paths.push(path);
+        if (path === "/api/tasks/navos-gpt-image-t2i") {
+          return Response.json({ code: 200, data: { task_id: "img_reserved", status: "queued" } });
+        }
+        if (path === "/api/tasks/image/generations/img_reserved") {
+          return Response.json({ code: 200, data: { status: "succeeded", url: "https://cdn.test/reserved.png" } });
+        }
+        return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+      }
+    });
+
+    const loaded = await app.inject({
+      method: "GET",
+      url: "/api/runtime-config",
+      headers: { authorization: "Bearer sk-test" }
+    });
+    expect(loaded.statusCode).toBe(200);
+    expect(loaded.json()).toMatchObject({ imageAllowVideoReserveFallback: false });
+
+    const blocked = await app.inject({
+      method: "POST",
+      url: "/api/images/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "do not burn video reserve" }
+    });
+    expect(blocked.statusCode).toBe(503);
+    expect(blocked.json()).toMatchObject({ error: { type: "account_unavailable" } });
+    expect(paths).toEqual([]);
+    expect(await store.get("video-only")).toMatchObject({
+      balanceRemaining: 2000,
+      status: "active",
+      leaseUntil: 0
+    });
+
+    const saved = await app.inject({
+      method: "PUT",
+      url: "/api/runtime-config",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { imageAllowVideoReserveFallback: true }
+    });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json()).toMatchObject({ imageAllowVideoReserveFallback: true });
+
+    const generated = await app.inject({
+      method: "POST",
+      url: "/api/images/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "fallback now allowed" }
+    });
+    expect(generated.statusCode).toBe(200);
+    expect(generated.json()).toMatchObject({
+      task_id: "img_reserved",
+      data: [{ url: "https://cdn.test/reserved.png" }]
+    });
+    expect(paths).toEqual([
+      "/api/tasks/navos-gpt-image-t2i",
+      "/api/tasks/image/generations/img_reserved"
+    ]);
+    expect(await store.get("video-only")).toMatchObject({ balanceRemaining: 1900, status: "active" });
+  });
+
+  it("does not auto-register unusable image accounts while video reserve fallback is disabled", async () => {
+    const store = new InMemoryAccountStore();
+    const registerOne = vi.fn(async () => ({
+      success: true,
+      uid: "fresh-video-reserve",
+      token: "t-new",
+      email: "fresh@mail.test",
+      balance: 2000
+    }));
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(store),
+      imageAllowVideoReserveFallback: false,
+      imageAccountWaitMs: 0,
+      registrationService: { registerOne } as never,
+      fetchImpl: async () => Response.json({ error: { message: "should not call upstream" } }, { status: 500 })
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/images/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "no bootstrap into video reserve" }
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(registerOne).not.toHaveBeenCalled();
+    expect(await store.list()).toEqual([]);
+  });
+
   it("creates image edits with reference images through the protected local route", async () => {
     const paths: string[] = [];
     let forwardedForm: FormData | undefined;

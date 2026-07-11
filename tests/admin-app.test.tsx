@@ -5,6 +5,7 @@ import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../web/src/App";
 import { ConsoleShell } from "../web/src/app/ConsoleShell";
+import { YydsMailConfigPanel } from "../web/src/panels/YydsMailConfigPanel";
 
 describe("admin app gate", () => {
   afterEach(() => {
@@ -863,9 +864,50 @@ describe("admin app gate", () => {
     fireEvent.change(screen.getByLabelText("Master API Key"), { target: { value: "sk-local" } });
     fireEvent.submit(screen.getByLabelText("Master API Key").closest("form") as HTMLFormElement);
 
-    await screen.findByRole("button", { name: "YYDS配置" });
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/accounts", expect.objectContaining({ method: "GET" }));
+    });
     expect(screen.queryByRole("button", { name: /COS/ })).not.toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalledWith("/api/cos/config", expect.anything());
+  });
+
+  it("toggles image video-reserve fallback from the config console", async () => {
+    let savedPayload: Record<string, unknown> | undefined;
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });
+      const path = String(url);
+      if (path === "/api/mail/yyds/config" && init?.method === "GET") {
+        return Response.json({ configured: true, apiKeyConfigured: true });
+      }
+      if (path === "/api/mail/yyds/domains" && init?.method === "GET") {
+        return Response.json({
+          config: { enabled: true, mode: "auto-plus-whitelist", whitelist: [], blacklist: [], refreshIntervalMinutes: 30 },
+          domains: []
+        });
+      }
+      if (path === "/api/runtime-config" && init?.method === "GET") {
+        return Response.json({ imageAllowVideoReserveFallback: false });
+      }
+      if (path === "/api/runtime-config" && init?.method === "PUT") {
+        savedPayload = JSON.parse(String(init.body));
+        return Response.json(savedPayload);
+      }
+      return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<YydsMailConfigPanel apiKey="sk-local" />);
+
+    const fallbackSwitch = await screen.findByRole("switch", { name: "Allow images to use video reserve accounts" });
+    expect(fallbackSwitch).not.toBeChecked();
+
+    fireEvent.click(fallbackSwitch);
+    fireEvent.click(screen.getByRole("button", { name: "Save runtime config" }));
+
+    await waitFor(() => {
+      expect(savedPayload).toEqual({ imageAllowVideoReserveFallback: true });
+    });
+    expect(fetchMock).toHaveBeenCalledWith("/api/runtime-config", expect.objectContaining({ method: "PUT" }));
   });
 
   it("saves YYDS Mail config from the console without exposing the key", async () => {

@@ -60,6 +60,11 @@ export interface YydsMailConfig {
   updatedAt?: number;
 }
 
+export interface RuntimeConfigView {
+  imageAllowVideoReserveFallback: boolean;
+  updatedAt?: number;
+}
+
 export type VideoTaskStatus = "queued" | "running" | "succeeded" | "failed" | "unknown";
 
 export interface VideoTaskView {

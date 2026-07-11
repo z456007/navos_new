@@ -30,6 +30,7 @@ export interface AppConfig {
   imageAccountWaitMs: number;
   imageMaxPollAttempts: number;
   imagePollIntervalMs: number;
+  imageAllowVideoReserveFallback: boolean;
   accountBalanceReconcileEnabled: boolean;
   accountBalanceReconcileIntervalMinutes: number;
   accountBalanceReconcileBatchSize: number;
@@ -200,6 +201,11 @@ export function loadConfig(env: EnvInput = process.env): AppConfig {
     imageAccountWaitMs: parsePositiveInt(env.IMAGE_ACCOUNT_WAIT_MS, 120_000),
     imageMaxPollAttempts: parsePositiveInt(env.IMAGE_MAX_POLL_ATTEMPTS, 30),
     imagePollIntervalMs: parsePositiveInt(env.IMAGE_POLL_INTERVAL_MS, 4_000),
+    imageAllowVideoReserveFallback: parseStrictBool(
+      env.IMAGE_ALLOW_VIDEO_RESERVE_FALLBACK,
+      false,
+      "IMAGE_ALLOW_VIDEO_RESERVE_FALLBACK"
+    ),
     accountBalanceReconcileEnabled: parseStrictBool(env.ACCOUNT_BALANCE_RECONCILE_ENABLED, true, "ACCOUNT_BALANCE_RECONCILE_ENABLED"),
     accountBalanceReconcileIntervalMinutes: parsePositiveInt(env.ACCOUNT_BALANCE_RECONCILE_INTERVAL_MINUTES, 30),
     accountBalanceReconcileBatchSize: parsePositiveInt(env.ACCOUNT_BALANCE_RECONCILE_BATCH_SIZE, 1000),

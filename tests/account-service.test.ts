@@ -102,6 +102,17 @@ describe("AccountService", () => {
     expect(leased?.uid).toBe("video-ready");
   });
 
+  it("can protect video-balance accounts from image leases", async () => {
+    const store = new InMemoryAccountStore();
+    const service = new AccountService(store);
+    await service.importAccount({ uid: "video-ready", token: "t1", balanceRemaining: 2000, balanceTotal: 2000 });
+
+    const leased = await service.leaseImageAccount("image-job-1", undefined, undefined, false);
+
+    expect(leased).toBeUndefined();
+    expect((await store.get("video-ready"))?.leaseId).toBeUndefined();
+  });
+
   it("leases model accounts without requiring image or video balance", async () => {
     const store = new InMemoryAccountStore();
     const service = new AccountService(store);

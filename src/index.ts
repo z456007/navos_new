@@ -9,11 +9,13 @@ import { BullmqRegistrationQueue } from "./services/bullmq-registration-queue.js
 import { RegistrationJobService } from "./services/registration-job-service.js";
 import { RegistrationService } from "./services/registration-service.js";
 import { createRegistrationWorker } from "./services/registration-worker.js";
+import { RuntimeConfigService } from "./services/runtime-config-service.js";
 import { normalizeYydsDomainPoolConfig, YydsDomainPool } from "./services/yyds-domain-pool.js";
 import { YydsMailConfigService } from "./services/yyds-mail-config-service.js";
 import { SecretBox } from "./security/secretbox.js";
 import { MysqlImageTaskStore } from "./store/image-task-store.js";
 import { MysqlAccountStore } from "./store/mysql-account-store.js";
+import { MysqlRuntimeConfigStore } from "./store/runtime-config-store.js";
 import { MysqlYydsDomainPoolStore } from "./store/yyds-domain-pool-store.js";
 import { MysqlYydsMailConfigStore } from "./store/yyds-mail-config-store.js";
 import { MysqlVideoTaskStore } from "./store/video-task-store.js";
@@ -31,6 +33,7 @@ const yydsMailConfigStore = new MysqlYydsMailConfigStore(config.mysql);
 const yydsDomainPoolStore = new MysqlYydsDomainPoolStore(config.mysql);
 const imageTaskStore = new MysqlImageTaskStore(config.mysql);
 const videoTaskStore = new MysqlVideoTaskStore(config.mysql);
+const runtimeConfigStore = new MysqlRuntimeConfigStore(config.mysql);
 await accountStore.ensureSchema();
 await yydsMailConfigStore.ensureSchema();
 await yydsDomainPoolStore.ensureSchema();
@@ -39,12 +42,16 @@ if (!(await yydsDomainPoolStore.hasConfig())) {
 }
 await imageTaskStore.ensureSchema();
 await videoTaskStore.ensureSchema();
+await runtimeConfigStore.ensureSchema();
 
 if (config.defaultAccount) {
   await accountStore.upsert(config.defaultAccount);
 }
 
 const accountService = new AccountService(accountStore);
+const runtimeConfigService = new RuntimeConfigService(runtimeConfigStore, {
+  imageAllowVideoReserveFallback: config.imageAllowVideoReserveFallback
+});
 const yydsDomainPool = new YydsDomainPool({
   store: yydsDomainPoolStore,
   // Runtime registration only picks from persisted/admin-refreshed candidates.
@@ -151,6 +158,7 @@ const app = createApp({
   yydsDomainPoolStore,
   imageTaskStore,
   videoTaskStore,
+  runtimeConfigService,
   vipClient,
   registrationService,
   registrationJobService

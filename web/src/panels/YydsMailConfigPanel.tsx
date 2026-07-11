@@ -5,6 +5,7 @@ import { apiRequest, errorMessage } from "../api";
 import { StatusLine } from "../components/feedback";
 import { TextField } from "../components/fields";
 import { idleStatus } from "../app/defaults";
+import { RuntimeConfigPanel } from "./RuntimeConfigPanel";
 import { YydsDomainPoolPanel } from "./YydsDomainPoolPanel";
 import type { StatusState, YydsMailConfig } from "../types";
 
@@ -86,6 +87,7 @@ export function YydsMailConfigPanel({ apiKey }: { apiKey: string }) {
           </AntButton>
         </div>
       </form>
+      <RuntimeConfigPanel apiKey={apiKey} />
       <YydsDomainPoolPanel apiKey={apiKey} />
     </section>
   );

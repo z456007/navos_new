@@ -1357,6 +1357,31 @@ a.button {
   padding: 5px 9px;
 }
 
+.runtime-config-panel,
+.domain-pool-panel {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+  padding: 14px;
+}
+
+.runtime-toggle-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 12px;
+  align-items: start;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fbfcfe;
+  padding: 12px;
+}
+
+.runtime-toggle-row p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 \.config-enabled {
   justify-self: start;
 }

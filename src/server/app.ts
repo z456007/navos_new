@@ -37,6 +37,7 @@ import {
 import { YydsMailClient, YydsMailError } from "../protocols/mail/yyds-mail.js";
 import { reconcileDepletedAccountBalances } from "../services/account-balance-reconciler.js";
 import { AccountService, IMAGE_ACCOUNT_COST } from "../services/account-service.js";
+import { RuntimeConfigService, type RuntimeConfigUpdateInput } from "../services/runtime-config-service.js";
 import {
   assertYydsDomainPoolConfigInput,
   isValidYydsDomainPoolDomain,
@@ -55,6 +56,7 @@ import {
 import { SecretBox } from "../security/secretbox.js";
 import { InMemoryAccountStore, type AccountRecord } from "../store/account-store.js";
 import { InMemoryImageTaskStore, type ImageTaskRecord, type ImageTaskStore } from "../store/image-task-store.js";
+import { InMemoryRuntimeConfigStore } from "../store/runtime-config-store.js";
 import { InMemoryYydsDomainPoolStore, type YydsDomainPoolStore } from "../store/yyds-domain-pool-store.js";
 import { InMemoryYydsMailConfigStore, type YydsMailConfigStore } from "../store/yyds-mail-config-store.js";
 import { InMemoryVideoTaskStore, type VideoTaskRecord, type VideoTaskStore } from "../store/video-task-store.js";
@@ -87,6 +89,8 @@ export interface CreateAppOptions {
   imageMaxPollAttempts?: number;
   imagePollIntervalMs?: number;
   imageAccountWaitMs?: number;
+  imageAllowVideoReserveFallback?: boolean;
+  runtimeConfigService?: RuntimeConfigService;
   modelAccountWaitMs?: number;
 }
 
@@ -580,6 +584,10 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
   );
   const videoTaskStore = options.videoTaskStore ?? new InMemoryVideoTaskStore();
   const imageTaskStore = options.imageTaskStore ?? new InMemoryImageTaskStore();
+  const runtimeConfigService = options.runtimeConfigService ?? new RuntimeConfigService(
+    new InMemoryRuntimeConfigStore(),
+    { imageAllowVideoReserveFallback: options.imageAllowVideoReserveFallback ?? false }
+  );
   const client = new ProviderHttpClient(options.providerBaseUrl, options.fetchImpl);
   let providerRegistrationAttempt: Promise<boolean> | undefined;
 
@@ -921,16 +929,27 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     const waitMs = sendUnavailable ? Math.max(0, options.imageAccountWaitMs ?? DEFAULT_IMAGE_ACCOUNT_WAIT_MS) : 0;
     const deadline = Date.now() + waitMs;
     let attemptedRegistration = false;
+    const runtimeConfig = await runtimeConfigService.get();
     do {
-      const existingAccount = await accountService.leaseImageAccount(leaseId);
+      const existingAccount = await accountService.leaseImageAccount(
+        leaseId,
+        undefined,
+        undefined,
+        runtimeConfig.imageAllowVideoReserveFallback
+      );
       if (existingAccount) {
         return existingAccount;
       }
 
-      if (!attemptedRegistration && options.registrationService) {
+      if (!attemptedRegistration && options.registrationService && runtimeConfig.imageAllowVideoReserveFallback) {
         attemptedRegistration = true;
         await registerProviderAccountIfPossible();
-        const registeredAccount = await accountService.leaseImageAccount(leaseId);
+        const registeredAccount = await accountService.leaseImageAccount(
+          leaseId,
+          undefined,
+          undefined,
+          runtimeConfig.imageAllowVideoReserveFallback
+        );
         if (registeredAccount) {
           return registeredAccount;
         }
@@ -1307,6 +1326,24 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
           type: "balance_reconcile_failed"
         }
       });
+    }
+  });
+
+  app.get("/api/runtime-config", async (request, reply) => {
+    if (!requireLocalAuth(request, reply)) {
+      return;
+    }
+    await reply.send(await runtimeConfigService.get());
+  });
+
+  app.put("/api/runtime-config", async (request, reply) => {
+    if (!requireLocalAuth(request, reply)) {
+      return;
+    }
+    try {
+      await reply.send(await runtimeConfigService.update(bodyRecord(request) as RuntimeConfigUpdateInput));
+    } catch (error) {
+      await sendBadRequest(reply, error);
     }
   });
 

@@ -81,7 +81,8 @@ export class AccountService {
   async leaseImageAccount(
     leaseId: string,
     ttlMs: number = 10 * 60 * 1000,
-    minimumBalanceRemaining: number = IMAGE_ACCOUNT_REQUIRED_BALANCE
+    minimumBalanceRemaining: number = IMAGE_ACCOUNT_REQUIRED_BALANCE,
+    allowVideoReserveFallback: boolean = true
   ): Promise<AccountRecord | undefined> {
     const leaseUntilMs = Date.now() + ttlMs;
     const imageOnlyAccount = await this.store.leaseActive(
@@ -93,6 +94,9 @@ export class AccountService {
     );
     if (imageOnlyAccount) {
       return imageOnlyAccount;
+    }
+    if (!allowVideoReserveFallback) {
+      return undefined;
     }
     return this.store.leaseActive(leaseId, leaseUntilMs, undefined, minimumBalanceRemaining);
   }
