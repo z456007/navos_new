@@ -80,11 +80,30 @@ curl -X POST "$BASE_URL/v1/video/generations" \
 
 Read the task id from `task_id`, `taskId`, or `id`.
 
+Sample create response:
+
+```json
+{
+  "task_id": "task_123",
+  "status": "queued"
+}
+```
+
 ## Polling Example
 
 ```bash
 curl "$BASE_URL/v1/video/generations/task_123" \
   -H "Authorization: Bearer $NAVOS_API_KEY"
+```
+
+Sample succeeded polling response:
+
+```json
+{
+  "id": "task_123",
+  "status": "succeeded",
+  "videoUrl": "https://cdn.example.com/task_123.mp4"
+}
 ```
 
 Poll every 5 to 10 seconds until `status` is `succeeded` or `failed`.
@@ -176,16 +195,16 @@ NavOS uploads local `data:` references and plain `http://` media references befo
 The API key is missing or not allowed for the selected route.
 
 ```text
-400 unsupported model
+400 model_not_allowed
 ```
 
-Public `/v1` video routes accept only supported Seedance aliases or an omitted `model`.
+Public `/v1/video/generations` returns this when the request uses a non-Seedance model. Use one of the supported Seedance aliases or omit `model`.
 
 ```text
-400 duration rule violation
+400 validation error
 ```
 
-The requested duration is longer than the selected resolution allows.
+The requested duration is longer than the selected resolution allows. The response has a validation message containing the selected resolution's maximum duration, for example `1080P` max 5 seconds; do not rely on a stable `error.type` for duration validation.
 
 ```text
 404 video_task_not_found
@@ -197,13 +216,13 @@ The public polling route did not find a task for the requested id.
 503 account_unavailable
 ```
 
-No active account has at least 2000 remaining credits, and no registration service produced a usable account. Public clients may receive a generic account availability error when registration fails.
+No eligible video account has at least 2000 remaining credits, and NavOS has no registration service or no usable account path for this request.
 
 ```text
 503 video_account_registration_failed
 ```
 
-NavOS attempted to register an account for the video task, but registration failed. This error is intended for admin or internal diagnostics; public `/v1` responses are sanitized.
+NavOS attempted to register an account for the video task, but registration failed. Public `/v1` responses return the generic message `Video account registration failed`; admin/local responses may include internal registration details.
 
 ```text
 402 or upstream insufficient balance
