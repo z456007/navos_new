@@ -17,7 +17,7 @@ export default defineConfig({
     sourcemap: false,
     cssCodeSplit: false,
     rollupOptions: {
-      input: resolve(__dirname, "web/src/main.tsx"),
+      input: resolve(__dirname, "index.html"),
       output: {
         entryFileNames: "assets/admin.js",
         chunkFileNames: "assets/[name].js",
