@@ -35,6 +35,17 @@ const SEEDANCE_2_ALIASES = new Set([
   SEEDANCE_2_MODEL
 ]);
 
+export function isSeedanceVideoModel(model: unknown): boolean {
+  if (model === undefined || model === null) {
+    return true;
+  }
+  if (typeof model !== "string") {
+    return false;
+  }
+  const normalized = model.trim().toLowerCase();
+  return normalized === "" || SEEDANCE_2_ALIASES.has(normalized);
+}
+
 export function assertVideoGenerationRules(payload: Record<string, unknown>): void {
   const resolution = normalizeResolution(payload.resolution);
   const duration = normalizeDuration(payload.durationSeconds ?? payload.duration_seconds ?? payload.duration);

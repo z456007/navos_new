@@ -29,6 +29,7 @@ import {
   assertVideoGenerationRules,
   createVideoTask,
   getVideoTask,
+  isSeedanceVideoModel,
   normalizeVideoTaskStatus,
   prepareVideoTaskPayload,
   type NormalizedVideoTask
@@ -852,61 +853,57 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       return undefined;
     }
 
-    let registrationResult: Awaited<ReturnType<typeof registrationService.registerOne>>;
-    try {
-      registrationResult = await registrationService.registerOne();
-    } catch (error) {
-      const exposeRegistrationErrors = leaseOptions.exposeRegistrationErrors ?? true;
-      await reply.status(503).send({
-        error: {
-          message: exposeRegistrationErrors && error instanceof Error
-            ? error.message
-            : "Video account registration failed",
-          type: "video_account_registration_failed"
-        }
-      });
-      return undefined;
-    }
-    if (!registrationResult.success) {
-      const exposeRegistrationErrors = leaseOptions.exposeRegistrationErrors ?? true;
+    const exposeRegistrationErrors = leaseOptions.exposeRegistrationErrors ?? true;
+    const sendVideoRegistrationFailed = async (message?: string): Promise<void> => {
       await reply.status(503).send({
         error: {
           message: exposeRegistrationErrors
-            ? registrationResult.error ?? "Video account registration failed"
+            ? message ?? "Video account registration failed"
             : "Video account registration failed",
           type: "video_account_registration_failed"
         }
       });
-      return undefined;
-    }
-
-    if (registrationResult.uid && registrationResult.token) {
-      const savedAccount = await accountService.getProviderAccount(registrationResult.uid);
-      if (!savedAccount) {
-        await accountService.importAccount({
-          uid: registrationResult.uid,
-          token: registrationResult.token,
-          mailboxAddr: registrationResult.email,
-          mailboxToken: registrationResult.mailboxToken,
-          balanceRemaining: registrationResult.balance,
-          balanceTotal: registrationResult.balance,
-          status: "active"
-        });
+    };
+    const errorMessage = (error: unknown): string | undefined => {
+      if (error instanceof Error) {
+        return error.message;
       }
-    }
+      return typeof error === "string" ? error : undefined;
+    };
 
-    const registeredAccount = await accountService.leaseVideoAccount(leaseId);
-    if (!registeredAccount) {
-      await reply.status(503).send({
-        error: {
-          message: "Video account registration completed, but no account could be leased",
-          type: "account_unavailable"
+    try {
+      const registrationResult = await registrationService.registerOne();
+      if (!registrationResult.success) {
+        await sendVideoRegistrationFailed(registrationResult.error);
+        return undefined;
+      }
+
+      if (registrationResult.uid && registrationResult.token) {
+        const savedAccount = await accountService.getProviderAccount(registrationResult.uid);
+        if (!savedAccount) {
+          await accountService.importAccount({
+            uid: registrationResult.uid,
+            token: registrationResult.token,
+            mailboxAddr: registrationResult.email,
+            mailboxToken: registrationResult.mailboxToken,
+            balanceRemaining: registrationResult.balance,
+            balanceTotal: registrationResult.balance,
+            status: "active"
+          });
         }
-      });
+      }
+
+      const registeredAccount = await accountService.leaseVideoAccount(leaseId);
+      if (!registeredAccount) {
+        await sendVideoRegistrationFailed("Video account registration completed, but no account could be leased");
+        return undefined;
+      }
+
+      return registeredAccount;
+    } catch (error) {
+      await sendVideoRegistrationFailed(errorMessage(error));
       return undefined;
     }
-
-    return registeredAccount;
   }
 
   async function leaseImageAccountOrRegister(
@@ -1737,8 +1734,16 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     await handleCreateVideo(request, reply, requireLocalAuth);
   });
   app.post("/v1/video/generations", async (request, reply) => {
-    await handleCreateVideo(request, reply, requirePublicProxyAuth, {
-      exposeRegistrationErrors: !isPublicProxyOnly(request)
+    if (!requirePublicProxyAuth(request, reply)) {
+      return;
+    }
+    const publicProxyOnly = isPublicProxyOnly(request);
+    if (publicProxyOnly && !isSeedanceVideoModel(bodyRecord(request).model)) {
+      await sendModelNotAllowed(reply, "Only Seedance video models are allowed on this endpoint");
+      return;
+    }
+    await handleCreateVideo(request, reply, () => true, {
+      exposeRegistrationErrors: !publicProxyOnly
     });
   });
   app.get("/api/video/generations/:taskId", async (request, reply) => {
