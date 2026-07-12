@@ -69,6 +69,7 @@ const runScenariosInParallel = process.env.LOAD_SCENARIO_PARALLEL === "true" || 
 const pollMedia = process.env.LOAD_POLL_MEDIA !== "false";
 const mediaPollIntervalMs = nonNegativeInt(process.env.LOAD_MEDIA_POLL_INTERVAL_MS, 5000);
 const mediaPollMaxAttempts = positiveInt(process.env.LOAD_MEDIA_POLL_MAX_ATTEMPTS, 60);
+const selectedScenarioNames = csvSet(process.env.LOAD_SCENARIOS);
 const DEFAULT_REFERENCE_IMAGE_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAUAAAADICAIAAAAWZq/8AAAEL0lEQVR42u3dsU0DQRCGUXcAGRWQUIc7oRLKoiYCIiQCAsiRrPP5fDf/zJO+Ciw/rXb3dvf09f0jKbSTn0ACWBLAkgCWAJYEsCSAJQEsASwJYEkASwBLAlgSwJIAlgCWBLAkgCUBLAEsCWBJAEsASwJYEsCSAJYAlgSwJIAlASwBLAlgSQBLAEsC+FLPrx9al3+tAAZYAAMMsAAWwAIYYAEMMMACGGCABbAAFsAAC2CAAT6kz/MZVIABrq50XQADDHAYWpgBBriP28mSAQa4j9uBkgEGuCfdIYwBBrgz3faMAQZ4hN6uhgEGeATdrowBBniW3maGAQZ4Ft1mjAEGeKjeHoYBBniu3gaGAQZ4tN50wwADPF1vtGGAAaY32DDAANMbbBhggOkNNpwB+OHpZUgRgBvrjTMMMMD0BhsGGGCAAQZ4BuAheoMMAwwwvcGGAQYYYIAB7g54oN4Iw/aB7QPTG2wYYIABBhjgvoCH6y1uGGCAAQYY4KaA0S1uGGCAAQYYYIABBlilAENb3zDAAAMMMMAAAwyw6gDGNcIwwAADDDDAAAMMsAAG2HHCyEOCpQCDmmIYYIABBhhggAEGGGCAAQYYYIABBhhgAQwwwADbBxbAAAMMMMAAA9wbMKJBhgEGmGEjMMAAAwywAAYYYIABBhhggAUwwAADDLAABhhggAEGGGCAAQYYRXdi0QswwP96fH/7C2CAAQ4GfCNjVgEG+HjAqyWzCjDAhQCvYIyrt5EArgX4KsbEAgxwRcALGRMLMMCHbSMtZHxZMrSV9QI8Yh/4FsbcAgxwiQ851jHmFmCAC32JtYIxumX1Ajz0U8qrGNMLMMAVv4VevspFL8AA1z3MgDHAAMefRsI4Ti/AAGMcrBdggE2PAQa444F+A3J9vQADjHGwXoABxhhggGcAnsM4RS/AAFvlCtYLMMC33nrXjHGWXoAB3ubmyh6M4/QCDPCW10dHM07UCzDA218Bnzg9DtULMMB3fMYhhXGuXoABvvtTLMUZR+sFGOCdnlOqyThdL8AAD2XcgC7AAB/zsuHhq1xt9AIM8JEPlO7PuBNdgAEu8cjwboz76QUY4BGMW9IFGOBUxsslN6YLMMBtB+T2bgEGuOEq1xy3AAPcbfd4oF6AAc6wveGjxwADDHDATSAAAwxwvGSAAQYYY4ABBhjjToAl02OApdEDMsDCGGAJY4AljAGWpqxyASySgxkDLIyDGQMsjIMZAywFT48BloIHZIClYMYAS8GMAZaCGQMsBa9yASwFD8gAS8GMAZaCGQMsBU+PAZaCB2SApWDGAEvBjAGWghkDLB3MGGApWDLAUjBjgKVgxgBLwYwBloYGsASwJIAlASwBLAlgSQBLAlgCWBLAkgCWAJYEsCSAJQEsASwJYEkASwJYAlgSwJIAlgCWBLAkgCUBLPXtF1CSxZ6X3shOAAAAAElFTkSuQmCC";
 const referenceImageUrl = process.env.LOAD_REFERENCE_IMAGE_URL ?? DEFAULT_REFERENCE_IMAGE_URL;
 const referenceVideoUrl = process.env.LOAD_REFERENCE_VIDEO_URL;
@@ -79,6 +80,10 @@ const claudeCodeModel = process.env.LOAD_CLAUDE_CODE_MODEL ?? "claude-sonnet-4-6
 const deepseekModel = process.env.LOAD_DEEPSEEK_MODEL ?? "deepseek-v4-pro";
 const imageModel = process.env.LOAD_IMAGE_MODEL ?? "gpt-image-2";
 const videoModel = process.env.LOAD_VIDEO_MODEL ?? "doubao-seedance-2-0-260128";
+const imageSize = process.env.LOAD_IMAGE_SIZE ?? "1024x1024";
+const videoResolution = process.env.LOAD_VIDEO_RESOLUTION ?? "480P";
+const videoDurationSeconds = positiveInt(process.env.LOAD_VIDEO_DURATION_SECONDS, 5);
+const videoAspectRatio = process.env.LOAD_VIDEO_ASPECT_RATIO ?? "1:1";
 const concurrencyCsv = (process.env.LOAD_CONCURRENCY ?? "100")
   .split(",")
   .map((item) => Number(item.trim()))
@@ -148,7 +153,7 @@ const recipes: ScenarioRecipe[] = [
     build: (index) => ({
       path: "/images/generations",
       apiKey: imageApiKey,
-      body: { model: imageModel, prompt: `load test text-to-image ${index}`, response_format: "url", size: "1024x1024" }
+      body: { model: imageModel, prompt: `load test text-to-image ${index}`, response_format: "url", size: imageSize }
     })
   },
   {
@@ -172,9 +177,9 @@ const recipes: ScenarioRecipe[] = [
       body: {
         model: videoModel,
         prompt: `load test text-to-video ${index}`,
-        duration: 5,
-        aspect_ratio: "16:9",
-        resolution: "720P"
+        durationSeconds: videoDurationSeconds,
+        aspectRatio: videoAspectRatio,
+        resolution: videoResolution
       }
     })
   },
@@ -188,15 +193,17 @@ const recipes: ScenarioRecipe[] = [
         prompt: `load test reference-to-video ${index}`,
         images: [referenceImageUrl],
         imageRoles: ["first_frame"],
-        duration: 5,
-        aspect_ratio: "16:9",
-        resolution: "720P"
+        mode: "omni_reference",
+        generation_mode: "omni_reference",
+        durationSeconds: videoDurationSeconds,
+        aspectRatio: videoAspectRatio,
+        resolution: videoResolution
       }
     })
   }
 ];
 
-const scenarios: Scenario[] = concurrencyCsv.flatMap((concurrency) => {
+const allScenarios: Scenario[] = concurrencyCsv.flatMap((concurrency) => {
   const perScenarioRequests = requestsPerScenario > 0 ? requestsPerScenario : concurrency;
   if (production100) {
     const target = requestsPerScenario > 0 ? requestsPerScenario : 100;
@@ -226,6 +233,13 @@ const scenarios: Scenario[] = concurrencyCsv.flatMap((concurrency) => {
   };
   return includeMixedAll ? [...individual, mixedAll] : individual;
 });
+const scenarios: Scenario[] = selectedScenarioNames.size === 0
+  ? allScenarios
+  : allScenarios.filter((scenario) => scenarioMatchesSelection(scenario.name, selectedScenarioNames));
+
+if (scenarios.length === 0) {
+  throw new Error(`LOAD_SCENARIOS did not match any scenarios. requested=${[...selectedScenarioNames].join(",")}`);
+}
 
 function recipeByName(name: string): ScenarioRecipe {
   const recipe = recipes.find((item) => item.name === name);
@@ -444,6 +458,11 @@ const markdown = [
   `LOAD_SCENARIO_PARALLEL: ${runScenariosInParallel}`,
   `LOAD_MIXED_ALL: ${includeMixedAll}`,
   `LOAD_POLL_MEDIA: ${pollMedia}`,
+  `LOAD_SCENARIOS: ${selectedScenarioNames.size > 0 ? [...selectedScenarioNames].join(",") : "all"}`,
+  `LOAD_IMAGE_SIZE: ${imageSize}`,
+  `LOAD_VIDEO_RESOLUTION: ${videoResolution}`,
+  `LOAD_VIDEO_DURATION_SECONDS: ${videoDurationSeconds}`,
+  `LOAD_VIDEO_ASPECT_RATIO: ${videoAspectRatio}`,
   `Reference image: ${referenceImageUrl.startsWith("data:") ? "data-url" : referenceImageUrl}`,
   `Reference video: ${referenceVideoUrl ? "configured" : "not configured"}`,
   `Reference audio: ${referenceAudioUrl ? "configured" : "not configured"}`,
@@ -561,7 +580,7 @@ function buildGptImage2MixedGeneration(index: number): LoadRequest {
         ? `real load gpt-image-2 reference image generation case ${index}: transform the attached reference into a clean product poster`
         : `real load gpt-image-2 text-to-image generation case ${index}: futuristic server rack in blue green light`,
       response_format: "url",
-      size: "1024x1024",
+      size: imageSize,
       ...(withReference ? { images: [referenceImageUrl] } : {})
     }
   };
@@ -573,9 +592,11 @@ function buildSeedanceReferenceVideo(index: number): LoadRequest {
     prompt: `real load seedance reference video case ${index}: camera pushes through a neon AI operations room, smooth cinematic motion`,
     images: [referenceImageUrl],
     imageRoles: ["first_frame"],
-    duration: 5,
-    aspect_ratio: "16:9",
-    resolution: "720P",
+    mode: "omni_reference",
+    generation_mode: "omni_reference",
+    durationSeconds: videoDurationSeconds,
+    aspectRatio: videoAspectRatio,
+    resolution: videoResolution,
     response_format: "url"
   };
   if (referenceVideoUrl) {
@@ -760,6 +781,23 @@ function positiveInt(value: string | undefined, fallback: number): number {
 function nonNegativeInt(value: string | undefined, fallback: number): number {
   const n = Number(value);
   return Number.isInteger(n) && n >= 0 ? n : fallback;
+}
+
+function csvSet(value: string | undefined): Set<string> {
+  return new Set((value ?? "")
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean));
+}
+
+function scenarioMatchesSelection(scenarioName: string, selected: Set<string>): boolean {
+  const lower = scenarioName.toLowerCase();
+  for (const item of selected) {
+    if (lower === item || lower.startsWith(`${item}-`)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function dateStamp(date: Date, timeZone: string): string {

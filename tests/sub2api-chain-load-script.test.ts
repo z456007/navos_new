@@ -112,6 +112,31 @@ describe("sub2api chain load script", () => {
     expect(source).not.toContain("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=");
   });
 
+  it("can narrow real diagnostics to specific media scenarios with faster Seedance settings", async () => {
+    const source = await readFile("scripts/load/sub2api-chain-load-test.ts", "utf8");
+    const wrapper = await readFile("scripts/load/run-local-sub2api-chain.ps1", "utf8");
+
+    expect(source).toContain("LOAD_SCENARIOS");
+    expect(source).toContain("selectedScenarioNames");
+    expect(source).toContain("LOAD_VIDEO_RESOLUTION");
+    expect(source).toContain("LOAD_VIDEO_DURATION_SECONDS");
+    expect(source).toContain("LOAD_VIDEO_ASPECT_RATIO");
+    expect(source).toContain("LOAD_IMAGE_SIZE");
+    expect(source).toContain("videoResolution");
+    expect(source).toContain("videoDurationSeconds");
+    expect(source).toContain("videoAspectRatio");
+    expect(source).toContain("imageSize");
+    expect(source).toContain('resolution: videoResolution');
+    expect(source).toContain('durationSeconds: videoDurationSeconds');
+    expect(source).toContain('aspectRatio: videoAspectRatio');
+    expect(source).toContain('generation_mode: "omni_reference"');
+    expect(source).toContain('size: imageSize');
+    expect(wrapper).toContain("[string]$Scenarios");
+    expect(wrapper).toContain('[string]$VideoResolution = "480P"');
+    expect(wrapper).toContain("[int]$VideoDurationSeconds = 5");
+    expect(wrapper).toContain('[string]$VideoAspectRatio = "1:1"');
+  });
+
   it("fake upstream covers video routes used by the all-channel runner", async () => {
     const source = await readFile("scripts/load/fake-navos-provider.ts", "utf8");
 
