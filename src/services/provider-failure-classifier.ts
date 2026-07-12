@@ -18,7 +18,7 @@ export interface ProviderClassifierResultInput {
 type ClassifiedKind = Exclude<ProviderFailureKind, "none">;
 
 const QUOTA_PATTERN = /insufficient[_ -]?balance|quota[_ -]?(exhausted|exceeded)|积分不足|余额不足|额度不足/i;
-const INVALID_ACCOUNT_PATTERN = /invalid.*token|token.*invalid|credential|unauthorized|authentication|banned|account.*disabled/i;
+const INVALID_ACCOUNT_PATTERN = /(?:invalid|expired|revoked)\s+(?:access[_ -]?token|token|credentials?)\b|(?:access[_ -]?token|token|credentials?)\b.*(?:invalid|expired|revoked)|\bunauthorized\b|authentication|banned|account.*disabled/i;
 const RATE_LIMIT_PATTERN = /rate.?limit|too many|temporarily unavailable|try again later|频率.*限制|请求频率|限流|稍后再试/i;
 const USER_ERROR_PATTERN = /invalid|bad request|unsupported|policy|content|prompt|image_url|parameter|参数/i;
 
@@ -102,7 +102,7 @@ function classifyErrorText(text: string | undefined, status: number): Classified
   if (status === 429 || RATE_LIMIT_PATTERN.test(value)) {
     return "rate_limited";
   }
-  if (status >= 400 && status < 500 && USER_ERROR_PATTERN.test(value)) {
+  if (USER_ERROR_PATTERN.test(value)) {
     return "user_error";
   }
   return "temporary";

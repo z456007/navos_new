@@ -554,7 +554,8 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       imageAllowVideoReserveFallback: options.imageAllowVideoReserveFallback ?? DEFAULT_RUNTIME_CONFIG.imageAllowVideoReserveFallback,
       imageAccountWaitMs: options.imageAccountWaitMs ?? DEFAULT_RUNTIME_CONFIG.imageAccountWaitMs,
       imageMaxPollAttempts: options.imageMaxPollAttempts ?? DEFAULT_RUNTIME_CONFIG.imageMaxPollAttempts,
-      imagePollIntervalMs: options.imagePollIntervalMs ?? DEFAULT_RUNTIME_CONFIG.imagePollIntervalMs
+      imagePollIntervalMs: options.imagePollIntervalMs ?? DEFAULT_RUNTIME_CONFIG.imagePollIntervalMs,
+      modelAccountWaitMs: options.modelAccountWaitMs ?? DEFAULT_RUNTIME_CONFIG.modelAccountWaitMs
     }
   );
   const client = new ProviderHttpClient(options.providerBaseUrl, options.fetchImpl);
@@ -803,9 +804,9 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
   async function applyStreamedProviderFailure(
     uid: string,
     decision: ProviderFailureDecision,
-    modelRateLimitKey?: string
+    modelRateLimitKey?: string,
+    leaseId?: string
   ): Promise<void> {
-    holdModelRateLimitGate(modelRateLimitKey, decision);
     if (decision.accountAction === "deplete") {
       await accountService.depleteAccount(uid);
       return;
@@ -815,7 +816,12 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       return;
     }
     if (decision.accountAction === "cooldown") {
+      holdModelRateLimitGate(modelRateLimitKey, decision);
       await accountService.cooldownAccount(uid, decision.retryAfterSeconds ?? MODEL_PROXY_RETRY_COOLDOWN_SECONDS);
+      return;
+    }
+    if (decision.accountAction === "release" || decision.accountAction === "none") {
+      await accountService.releaseModelAccount(uid, leaseId);
     }
   }
 
@@ -830,15 +836,21 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       return result;
     }
     let failed = false;
+    let finalized = false;
+    const releaseIfClean = (): void => {
+      if (finalized || failed || !leaseId) {
+        return;
+      }
+      finalized = true;
+      void accountService.releaseModelAccount(uid, leaseId);
+    };
     const detector = createProviderFailureDetectionStream(async (decision) => {
       failed = true;
-      await applyStreamedProviderFailure(uid, decision, modelRateLimitKey);
+      finalized = true;
+      await applyStreamedProviderFailure(uid, decision, modelRateLimitKey, leaseId);
     });
-    detector.once("finish", () => {
-      if (!failed && leaseId) {
-        void accountService.releaseModelAccount(uid, leaseId);
-      }
-    });
+    detector.once("finish", releaseIfClean);
+    detector.once("close", releaseIfClean);
     return {
       ...result,
       body: pipeProviderStream(result.body, detector, {
@@ -892,17 +904,21 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     return providerRegistrationAttempt;
   }
 
-  async function leaseModelAccountOrRegister(leaseId: string, allowRegister: boolean): Promise<{
+  async function leaseModelAccountOrRegister(
+    leaseId: string,
+    allowRegister: boolean,
+    leaseTtlMs: number
+  ): Promise<{
     auth?: ProviderAuthContext;
     registered: boolean;
   }> {
-    let account = await accountService.leaseModelAccount(leaseId);
+    let account = await accountService.leaseModelAccount(leaseId, leaseTtlMs);
     let registered = false;
     if (!account && allowRegister) {
       registered = await registerProviderAccountIfPossible();
     }
     if (!account && registered) {
-      account = await accountService.leaseModelAccount(leaseId);
+      account = await accountService.leaseModelAccount(leaseId, leaseTtlMs);
     }
     if (!account) {
       return { registered };
@@ -910,23 +926,33 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     return { auth: authContextForAccount(account, leaseId), registered };
   }
 
-  async function modelAuthOrWait(leaseId: string, allowRegister: boolean): Promise<{
+  async function modelAuthOrWait(
+    leaseId: string,
+    allowRegister: boolean,
+    waitMs: number,
+    leaseTtlMs: number
+  ): Promise<{
     auth?: ProviderAuthContext;
     registered: boolean;
   }> {
-    const deadline = Date.now() + Math.max(0, options.modelAccountWaitMs ?? DEFAULT_MODEL_ACCOUNT_WAIT_MS);
+    const deadline = Date.now() + Math.max(0, waitMs);
     let first = true;
     let registered = false;
+    let hasCandidate = true;
     while (first || Date.now() < deadline) {
       first = false;
-      const next = await leaseModelAccountOrRegister(leaseId, allowRegister && !registered);
+      const next = await leaseModelAccountOrRegister(leaseId, allowRegister && !registered, leaseTtlMs);
       if (next.registered) {
         registered = true;
       }
       if (next.auth) {
         return { auth: next.auth, registered };
       }
-      if (!await hasActiveModelAccountCandidate()) {
+      if (!hasCandidate) {
+        break;
+      }
+      hasCandidate = await hasActiveModelAccountCandidate();
+      if (!hasCandidate) {
         break;
       }
       await delay(Math.min(ACCOUNT_WAIT_POLL_INTERVAL_MS, Math.max(1, deadline - Date.now())));
@@ -977,11 +1003,20 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     let lastDecision: ProviderFailureDecision | undefined;
     let registeredDuringRequest = false;
     const modelRateLimitKey = modelRateLimitKeyForRequest(path, body);
+    const runtimeConfig = await runtimeConfigService.get();
+    const modelAccountWaitMs = Math.max(
+      0,
+      Math.trunc(runtimeConfig.modelAccountWaitMs ?? options.modelAccountWaitMs ?? DEFAULT_MODEL_ACCOUNT_WAIT_MS)
+    );
+    const accountLeaseTtlMs = Math.max(
+      1_000,
+      Math.trunc(runtimeConfig.accountLeaseTtlMs ?? DEFAULT_RUNTIME_CONFIG.accountLeaseTtlMs)
+    );
 
     for (let attempt = 0; attempt < MODEL_PROXY_MAX_ATTEMPTS; attempt += 1) {
       await waitForModelRateLimitGate(modelRateLimitKey);
       const leaseId = `model:${randomUUID()}`;
-      const nextAuth = await modelAuthOrWait(leaseId, !registeredDuringRequest);
+      const nextAuth = await modelAuthOrWait(leaseId, !registeredDuringRequest, modelAccountWaitMs, accountLeaseTtlMs);
       if (nextAuth.registered) {
         registeredDuringRequest = true;
       }

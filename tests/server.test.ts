@@ -2,6 +2,8 @@ import { once } from "node:events";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { AccountService } from "../src/services/account-service.js";
+import { RuntimeConfigService } from "../src/services/runtime-config-service.js";
+import { DEFAULT_RUNTIME_CONFIG } from "../src/services/runtime-config-schema.js";
 import {
   RegistrationJobNotFoundError,
   RegistrationQueueUnavailableError
@@ -9,6 +11,7 @@ import {
 import { createApp } from "../src/server/app.js";
 import { InMemoryAccountStore } from "../src/store/account-store.js";
 import { InMemoryImageTaskStore } from "../src/store/image-task-store.js";
+import { InMemoryRuntimeConfigStore } from "../src/store/runtime-config-store.js";
 import { InMemoryYydsMailConfigStore } from "../src/store/yyds-mail-config-store.js";
 import { SecretBox } from "../src/security/secretbox.js";
 import { InMemoryVideoTaskStore } from "../src/store/video-task-store.js";
@@ -4195,6 +4198,45 @@ describe("server routes", () => {
     });
   });
 
+  it("releases a model account when a streamed provider error is not account punitive", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    await accountService.importAccount({ uid: "u1", token: "t1", balanceRemaining: 1000, balanceTotal: 1000 });
+    const encoder = new TextEncoder();
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      fetchImpl: async () => new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode('event: error\ndata: {"error":{"message":"invalid parameter: max_tokens"}}\n\n'));
+            controller.close();
+          }
+        }),
+        { status: 200, headers: { "content-type": "text/event-stream" } }
+      )
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: { authorization: "Bearer sk-test" },
+      payload: {
+        model: "gpt-5.5",
+        stream: true,
+        messages: [{ role: "user", content: "hello" }]
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain("invalid parameter");
+    expect((await store.get("u1"))?.status).toBe("active");
+    expect((await store.get("u1"))?.rateLimitedUntil).toBe(0);
+    expect((await store.get("u1"))?.leaseUntil).toBe(0);
+  });
+
   it("rotates to the next model account after a fake upstream streamed insufficient balance error", async () => {
     const upstreamUids: string[] = [];
     const fakeUpstream = await startFakeUpstream((request, response) => {
@@ -4295,6 +4337,101 @@ describe("server routes", () => {
     const account = await store.get("u1");
     expect(account?.status).toBe("active");
     expect(account?.balanceRemaining).toBe(1000);
+  });
+
+  it("uses runtime config modelAccountWaitMs when waiting for a model account to free up", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    await accountService.importAccount({ uid: "u1", token: "t1", balanceRemaining: 1000, balanceTotal: 1000 });
+    const seedLease = await accountService.leaseModelAccount("seed-lease", 60_000);
+    expect(seedLease?.uid).toBe("u1");
+
+    const runtimeConfigService = new RuntimeConfigService(
+      new InMemoryRuntimeConfigStore(),
+      { ...DEFAULT_RUNTIME_CONFIG, modelAccountWaitMs: 200, accountLeaseTtlMs: 65_000 }
+    );
+
+    let fetchStarted = false;
+    let releaseFetch!: () => void;
+    const fetchReleased = new Promise<void>((resolve) => {
+      releaseFetch = resolve;
+    });
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      runtimeConfigService,
+      modelAccountWaitMs: 5,
+      fetchImpl: async () => {
+        fetchStarted = true;
+        await fetchReleased;
+        return Response.json({
+          id: "chatcmpl_wait",
+          object: "chat.completion",
+          choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }]
+        });
+      }
+    });
+
+    const responsePromise = app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: { authorization: "Bearer sk-test" },
+      payload: {
+        model: "gpt-5.5",
+        messages: [{ role: "user", content: "hello" }]
+      }
+    });
+    setTimeout(() => {
+      void accountService.releaseModelAccount("u1", "seed-lease");
+    }, 40);
+
+    await vi.waitFor(() => expect(fetchStarted).toBe(true));
+    expect((await store.get("u1"))?.leaseUntil - Date.now()).toBeLessThan(120_000);
+    releaseFetch();
+    const response = await responsePromise;
+
+    expect(response.statusCode).toBe(200);
+    expect((await store.get("u1"))?.status).toBe("active");
+    expect((await store.get("u1"))?.leaseUntil).toBe(0);
+  });
+
+  it("releases a leased model account after a non-streaming upstream failure", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    await accountService.importAccount({ uid: "u1", token: "t1", balanceRemaining: 1000, balanceTotal: 1000 });
+    const runtimeConfigService = new RuntimeConfigService(
+      new InMemoryRuntimeConfigStore(),
+      { ...DEFAULT_RUNTIME_CONFIG, modelAccountWaitMs: 200, accountLeaseTtlMs: 65_000 }
+    );
+    const fetchImpl = vi.fn(async () => Response.json(
+      { error: { message: "Service temporarily unavailable" } },
+      { status: 503 }
+    ));
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      runtimeConfigService,
+      fetchImpl
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: { authorization: "Bearer sk-test" },
+      payload: {
+        model: "gpt-5.5",
+        messages: [{ role: "user", content: "hello" }]
+      }
+    });
+
+    expect(response.statusCode).toBe(429);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect((await store.get("u1"))?.leaseUntil).toBe(0);
+    expect((await store.get("u1"))?.lastUsedAt).toBeGreaterThan(0);
   });
 
   it("auto-registers a model account when the pool has no available account", async () => {
