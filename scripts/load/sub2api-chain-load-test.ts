@@ -1,11 +1,21 @@
-﻿import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { performance } from "node:perf_hooks";
+
+interface LoadRequest {
+  path: string;
+  body: unknown;
+}
+
+interface ScenarioRecipe {
+  name: string;
+  build: (index: number) => LoadRequest;
+}
 
 interface Scenario {
   name: string;
   concurrency: number;
   requests: number;
-  build: () => { path: string; body: unknown };
+  build: (index: number) => LoadRequest;
 }
 
 interface ScenarioResult {
@@ -26,6 +36,14 @@ const baseUrl = (process.env.SUB2API_BASE_URL ?? "http://127.0.0.1:18080/v1").re
 const apiKey = process.env.SUB2API_API_KEY ?? "sk-local-openai-zgm2003";
 const timeoutMs = Number(process.env.LOAD_TIMEOUT_MS ?? 180000);
 const reportTimeZone = process.env.LOAD_REPORT_TIME_ZONE ?? "Asia/Shanghai";
+const requestsPerScenario = positiveInt(process.env.LOAD_REQUESTS_PER_SCENARIO, 0);
+const includeMixedAll = process.env.LOAD_MIXED_ALL !== "false";
+const referenceImageUrl = process.env.LOAD_REFERENCE_IMAGE_URL
+  ?? "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+const chatModel = process.env.LOAD_CHAT_MODEL ?? "gpt-5.5";
+const deepseekModel = process.env.LOAD_DEEPSEEK_MODEL ?? "deepseek-chat";
+const imageModel = process.env.LOAD_IMAGE_MODEL ?? "gpt-image-2";
+const videoModel = process.env.LOAD_VIDEO_MODEL ?? "seedance-1.0-pro";
 const concurrencyCsv = (process.env.LOAD_CONCURRENCY ?? "100")
   .split(",")
   .map((item) => Number(item.trim()))
@@ -39,26 +57,130 @@ if (concurrencyCsv.length === 0) {
   throw new Error("LOAD_CONCURRENCY must include at least one positive integer");
 }
 
-const scenarios: Scenario[] = concurrencyCsv.flatMap((concurrency) => [
+const recipes: ScenarioRecipe[] = [
   {
-    name: `chat-${concurrency}`,
-    concurrency,
-    requests: concurrency,
-    build: () => ({ path: "/chat/completions", body: { model: "gpt-5.5", messages: [{ role: "user", content: "ping" }] } })
+    name: "chat",
+    build: () => ({
+      path: "/chat/completions",
+      body: { model: chatModel, messages: [{ role: "user", content: "ping" }], max_tokens: 256 }
+    })
   },
   {
-    name: `responses-stream-${concurrency}`,
-    concurrency,
-    requests: concurrency,
-    build: () => ({ path: "/responses", body: { model: "codex", input: "ping", stream: true } })
+    name: "long-chat",
+    build: (index) => ({
+      path: "/chat/completions",
+      body: {
+        model: chatModel,
+        messages: longConversation(index),
+        max_tokens: 4096
+      }
+    })
   },
   {
-    name: `image-t2i-${Math.min(concurrency, 100)}`,
-    concurrency: Math.min(concurrency, 100),
-    requests: Math.min(concurrency, 100),
-    build: () => ({ path: "/images/generations", body: { model: "gpt-image-2", prompt: "load test cat", response_format: "url" } })
+    name: "vision-chat",
+    build: () => ({
+      path: "/chat/completions",
+      body: {
+        model: chatModel,
+        messages: [{
+          role: "user",
+          content: [
+            { type: "text", text: "Describe this reference image in one sentence." },
+            { type: "image_url", image_url: { url: referenceImageUrl } }
+          ]
+        }],
+        max_tokens: 512
+      }
+    })
+  },
+  {
+    name: "deepseek-chat",
+    build: () => ({
+      path: "/chat/completions",
+      body: {
+        model: deepseekModel,
+        messages: [{ role: "user", content: "DeepSeek pure text route smoke: answer with ok." }],
+        max_tokens: 512
+      }
+    })
+  },
+  {
+    name: "image-t2i",
+    build: (index) => ({
+      path: "/images/generations",
+      body: { model: imageModel, prompt: `load test text-to-image ${index}`, response_format: "url", size: "1024x1024" }
+    })
+  },
+  {
+    name: "image-reference",
+    build: (index) => ({
+      path: "/images/generations",
+      body: {
+        model: imageModel,
+        prompt: `load test reference image generation ${index}`,
+        response_format: "url",
+        images: [referenceImageUrl]
+      }
+    })
+  },
+  {
+    name: "seedance-t2v",
+    build: (index) => ({
+      path: "/video/generations",
+      body: {
+        model: videoModel,
+        prompt: `load test text-to-video ${index}`,
+        duration: 5,
+        aspect_ratio: "16:9",
+        resolution: "720P"
+      }
+    })
+  },
+  {
+    name: "seedance-reference",
+    build: (index) => ({
+      path: "/video/generations",
+      body: {
+        model: videoModel,
+        prompt: `load test reference-to-video ${index}`,
+        images: [referenceImageUrl],
+        imageRoles: ["first_frame"],
+        duration: 5,
+        aspect_ratio: "16:9",
+        resolution: "720P"
+      }
+    })
   }
-]);
+];
+
+const scenarios: Scenario[] = concurrencyCsv.flatMap((concurrency) => {
+  const perScenarioRequests = requestsPerScenario > 0 ? requestsPerScenario : concurrency;
+  const individual: Scenario[] = [
+    { name: `chat-${concurrency}`, concurrency, requests: perScenarioRequests, build: recipeByName("chat").build },
+    { name: `long-chat-${concurrency}`, concurrency, requests: perScenarioRequests, build: recipeByName("long-chat").build },
+    { name: `vision-chat-${concurrency}`, concurrency, requests: perScenarioRequests, build: recipeByName("vision-chat").build },
+    { name: `deepseek-chat-${concurrency}`, concurrency, requests: perScenarioRequests, build: recipeByName("deepseek-chat").build },
+    { name: `image-t2i-${concurrency}`, concurrency, requests: perScenarioRequests, build: recipeByName("image-t2i").build },
+    { name: `image-reference-${concurrency}`, concurrency, requests: perScenarioRequests, build: recipeByName("image-reference").build },
+    { name: `seedance-t2v-${concurrency}`, concurrency, requests: perScenarioRequests, build: recipeByName("seedance-t2v").build },
+    { name: `seedance-reference-${concurrency}`, concurrency, requests: perScenarioRequests, build: recipeByName("seedance-reference").build }
+  ];
+  const mixedAll: Scenario = {
+    name: `mixed-all-${concurrency}`,
+    concurrency,
+    requests: perScenarioRequests,
+    build: (index) => recipes[index % recipes.length].build(index)
+  };
+  return includeMixedAll ? [...individual, mixedAll] : individual;
+});
+
+function recipeByName(name: string): ScenarioRecipe {
+  const recipe = recipes.find((item) => item.name === name);
+  if (!recipe) {
+    throw new Error(`Unknown load scenario recipe: ${name}`);
+  }
+  return recipe;
+}
 
 async function runScenario(scenario: Scenario): Promise<ScenarioResult> {
   const latencies: number[] = [];
@@ -71,8 +193,9 @@ async function runScenario(scenario: Scenario): Promise<ScenarioResult> {
 
   async function worker(): Promise<void> {
     while (next < scenario.requests) {
+      const requestIndex = next;
       next += 1;
-      const { path, body } = scenario.build();
+      const { path, body } = scenario.build(requestIndex);
       const start = performance.now();
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -132,6 +255,8 @@ const markdown = [
   `Mode: ${mode}`,
   `Timeout: ${timeoutMs} ms`,
   `Report timezone: ${reportTimeZone}`,
+  `LOAD_MIXED_ALL: ${includeMixedAll}`,
+  `Reference image: ${referenceImageUrl.startsWith("data:") ? "data-url" : referenceImageUrl}`,
   "",
   "| scenario | total | success | 4xx | 5xx | timeout | network error | rps | p50 ms | p95 ms | p99 ms |",
   "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
@@ -143,8 +268,25 @@ await writeFile(path, markdown, "utf8");
 console.log(markdown);
 console.log(`report=${path}`);
 
+function longConversation(index: number): Array<{ role: "system" | "user" | "assistant"; content: string }> {
+  const turns: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+    { role: "system", content: "You are a long-context load-test assistant. Keep context and answer briefly." }
+  ];
+  for (let i = 0; i < 24; i += 1) {
+    turns.push({ role: "user", content: `case ${index} turn ${i}: remember marker ${index}-${i} and continue.` });
+    turns.push({ role: "assistant", content: `ack marker ${index}-${i}` });
+  }
+  turns.push({ role: "user", content: `Summarize markers for case ${index} in one paragraph.` });
+  return turns;
+}
+
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
+}
+
+function positiveInt(value: string | undefined, fallback: number): number {
+  const n = Number(value);
+  return Number.isInteger(n) && n > 0 ? n : fallback;
 }
 
 function dateStamp(date: Date, timeZone: string): string {

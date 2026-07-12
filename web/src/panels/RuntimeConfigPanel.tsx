@@ -9,7 +9,7 @@ import type { AccountBalanceReconcileScope, RuntimeConfigView, StatusState } fro
 const zh = {
   eyebrow: "生产运行参数",
   title: "运行配置",
-  subtitle: "把图片、视频、余额检查和注册并发放到页面上操控，不再靠 SSH 改 .env。",
+  subtitle: "默认用预设跑，不懂底层参数也能直接压测；只保留少量必须手动调的开关。",
   save: "保存运行配置",
   loading: "正在读取运行配置",
   saving: "正在保存运行配置",
@@ -19,7 +19,7 @@ const zh = {
   presets: "运行预设",
   imageVideo: "图片/视频任务",
   balance: "余额检查",
-  registration: "注册与 YYDS 限速",
+  registration: "注册吞吐",
   mysql: "数据库连接",
   restartTitle: "数据库连接池保存后需要重启 NavOS 才会完整生效",
   restartDesc: "连接池是启动期资源；页面会先写入运行配置，下次重启时按这里的值启动。",
@@ -45,14 +45,14 @@ const defaultRuntimeConfig: RuntimeConfigView = {
   accountBalanceReconcileBatchSize: 1000,
   accountBalanceReconcileConcurrency: 10,
   accountBalanceReconcileScope: "depleted",
-  registrationConcurrency: 2,
-  registrationMaxInFlight: 20,
-  registrationMailboxCreateConcurrency: 2,
-  registrationMailboxCreatePerSecond: 2,
-  registrationVipSendConcurrency: 6,
-  registrationPollConcurrency: 50,
-  registrationLoginConcurrency: 6,
-  registrationCertConcurrency: 6,
+  registrationConcurrency: 20,
+  registrationMaxInFlight: 10000,
+  registrationMailboxCreateConcurrency: 20,
+  registrationMailboxCreatePerSecond: 50,
+  registrationVipSendConcurrency: 100,
+  registrationPollConcurrency: 500,
+  registrationLoginConcurrency: 100,
+  registrationCertConcurrency: 100,
   registrationYydsQuotaBlockSeconds: 300,
   mysqlConnectionLimit: 100,
   mysqlQueueLimit: 0,
@@ -72,9 +72,14 @@ const runtimePresets: Array<{ name: string; desc: string; patch: Partial<Runtime
       accountBalanceReconcileScope: "depleted",
       accountBalanceReconcileBatchSize: 1000,
       accountBalanceReconcileConcurrency: 10,
-      registrationMailboxCreateConcurrency: 2,
-      registrationMailboxCreatePerSecond: 2,
-      registrationPollConcurrency: 50
+      registrationConcurrency: 20,
+      registrationMaxInFlight: 10000,
+      registrationMailboxCreateConcurrency: 20,
+      registrationMailboxCreatePerSecond: 50,
+      registrationVipSendConcurrency: 100,
+      registrationPollConcurrency: 500,
+      registrationLoginConcurrency: 100,
+      registrationCertConcurrency: 100
     }
   },
   {
@@ -87,9 +92,14 @@ const runtimePresets: Array<{ name: string; desc: string; patch: Partial<Runtime
       accountBalanceReconcileScope: "non_disabled",
       accountBalanceReconcileBatchSize: 1000,
       accountBalanceReconcileConcurrency: 20,
-      registrationMailboxCreateConcurrency: 3,
-      registrationMailboxCreatePerSecond: 3,
-      registrationPollConcurrency: 80,
+      registrationConcurrency: 100,
+      registrationMaxInFlight: 20000,
+      registrationMailboxCreateConcurrency: 100,
+      registrationMailboxCreatePerSecond: 200,
+      registrationVipSendConcurrency: 300,
+      registrationPollConcurrency: 1000,
+      registrationLoginConcurrency: 300,
+      registrationCertConcurrency: 300,
       mysqlConnectionLimit: 100,
       mysqlQueueLimit: 0
     }
@@ -101,10 +111,14 @@ const runtimePresets: Array<{ name: string; desc: string; patch: Partial<Runtime
       accountBalanceReconcileScope: "non_disabled",
       accountBalanceReconcileBatchSize: 2000,
       accountBalanceReconcileConcurrency: 30,
-      registrationMaxInFlight: 100,
-      registrationMailboxCreateConcurrency: 4,
-      registrationMailboxCreatePerSecond: 4,
-      registrationPollConcurrency: 120,
+      registrationConcurrency: 300,
+      registrationMaxInFlight: 100000,
+      registrationMailboxCreateConcurrency: 300,
+      registrationMailboxCreatePerSecond: 800,
+      registrationVipSendConcurrency: 1000,
+      registrationPollConcurrency: 3000,
+      registrationLoginConcurrency: 1000,
+      registrationCertConcurrency: 1000,
       mysqlConnectionLimit: 160,
       mysqlQueueLimit: 0
     }
@@ -119,6 +133,51 @@ const runtimePresets: Array<{ name: string; desc: string; patch: Partial<Runtime
       imageSyncWaitBudgetMs: 240000,
       videoCreateTimeoutMs: 60000,
       videoPollTimeoutMs: 60000
+    }
+  }
+];
+
+const registrationThroughputPresets: Array<{ name: string; desc: string; patch: Partial<RuntimeConfigView> }> = [
+  {
+    name: "稳定填池",
+    desc: "适合日常补号，吞吐高于旧版但更平滑。",
+    patch: {
+      registrationConcurrency: 20,
+      registrationMaxInFlight: 10000,
+      registrationMailboxCreateConcurrency: 20,
+      registrationMailboxCreatePerSecond: 50,
+      registrationVipSendConcurrency: 100,
+      registrationPollConcurrency: 500,
+      registrationLoginConcurrency: 100,
+      registrationCertConcurrency: 100
+    }
+  },
+  {
+    name: "强力注册",
+    desc: "推荐：准备 100 并发全链路压测时使用。",
+    patch: {
+      registrationConcurrency: 100,
+      registrationMaxInFlight: 20000,
+      registrationMailboxCreateConcurrency: 100,
+      registrationMailboxCreatePerSecond: 200,
+      registrationVipSendConcurrency: 300,
+      registrationPollConcurrency: 1000,
+      registrationLoginConcurrency: 300,
+      registrationCertConcurrency: 300
+    }
+  },
+  {
+    name: "暴力填池",
+    desc: "账号池大批量补齐，失败就记录失败，不在 UI 里保守拦截。",
+    patch: {
+      registrationConcurrency: 300,
+      registrationMaxInFlight: 100000,
+      registrationMailboxCreateConcurrency: 300,
+      registrationMailboxCreatePerSecond: 800,
+      registrationVipSendConcurrency: 1000,
+      registrationPollConcurrency: 3000,
+      registrationLoginConcurrency: 1000,
+      registrationCertConcurrency: 1000
     }
   }
 ];
@@ -255,15 +314,22 @@ export function RuntimeConfigPanel({ apiKey }: { apiKey: string }) {
       </Card>
 
       <Card title={zh.registration} className="runtime-card runtime-registration-card">
+        <div className="runtime-toggle-row">
+          <div>
+            <strong>当前注册强度：{config.registrationConcurrency} 并发 / {config.registrationMaxInFlight} 待处理</strong>
+            <p>选择一个档位即可同步调整邮箱、发码、轮询、登录和认证吞吐；失败会进入失败结果，不再用 500 这种小上限挡住新增。</p>
+          </div>
+        </div>
+        <div className="runtime-preset-grid">
+          {registrationThroughputPresets.map((preset) => (
+            <AntButton className="runtime-preset" key={preset.name} onClick={() => patchConfig(preset.patch)}>
+              <strong>{preset.name}</strong>
+              <span>{preset.desc}</span>
+            </AntButton>
+          ))}
+        </div>
         <div className="runtime-grid compact-runtime-grid">
-          <NumberControl label="注册任务并发" value={config.registrationConcurrency} onChange={(value) => numberPatch("registrationConcurrency", value)} />
-          <NumberControl label="注册队列上限" value={config.registrationMaxInFlight} onChange={(value) => numberPatch("registrationMaxInFlight", value)} />
-          <NumberControl label="邮箱创建并发" value={config.registrationMailboxCreateConcurrency} onChange={(value) => numberPatch("registrationMailboxCreateConcurrency", value)} />
-          <NumberControl label="邮箱每秒创建" value={config.registrationMailboxCreatePerSecond} onChange={(value) => numberPatch("registrationMailboxCreatePerSecond", value)} />
-          <NumberControl label="VIP 发码并发" value={config.registrationVipSendConcurrency} onChange={(value) => numberPatch("registrationVipSendConcurrency", value)} />
-          <NumberControl label="邮件轮询并发" value={config.registrationPollConcurrency} onChange={(value) => numberPatch("registrationPollConcurrency", value)} />
-          <NumberControl label="登录并发" value={config.registrationLoginConcurrency} onChange={(value) => numberPatch("registrationLoginConcurrency", value)} />
-          <NumberControl label="认证并发" value={config.registrationCertConcurrency} onChange={(value) => numberPatch("registrationCertConcurrency", value)} />
+          <NumberControl label="注册并发" help="只调这个就够了；其他注册链路会由预设同步。" value={config.registrationConcurrency} onChange={(value) => numberPatch("registrationConcurrency", value)} />
           <NumberControl label="YYDS 熔断秒数" help="YYDS quota 用尽后暂停邮箱创建多久。" value={config.registrationYydsQuotaBlockSeconds} onChange={(value) => numberPatch("registrationYydsQuotaBlockSeconds", value)} />
         </div>
       </Card>

@@ -44,8 +44,17 @@ export interface AppConfig {
 
 
 type EnvInput = Record<string, string | undefined>;
-const YYDS_SAFE_REGISTRATION_CONCURRENCY = 2;
-const SMALL_SERVER_REGISTRATION_JOB_CONCURRENCY = 1;
+const DEFAULT_REGISTRATION_CONCURRENCY = 20;
+const DEFAULT_REGISTRATION_JOB_CONCURRENCY = 20;
+const REGISTRATION_CONCURRENCY_CAP = 5000;
+const REGISTRATION_MAX_IN_FLIGHT_CAP = 100000;
+const REGISTRATION_MAILBOX_CREATE_CONCURRENCY_CAP = 5000;
+const REGISTRATION_MAILBOX_CREATE_PER_SECOND_CAP = 5000;
+const REGISTRATION_VIP_SEND_CONCURRENCY_CAP = 5000;
+const REGISTRATION_POLL_CONCURRENCY_CAP = 5000;
+const REGISTRATION_LOGIN_CONCURRENCY_CAP = 5000;
+const REGISTRATION_CERT_CONCURRENCY_CAP = 5000;
+const ACCOUNT_BALANCE_RECONCILE_CONCURRENCY_CAP = 500;
 
 function requireEnv(env: EnvInput, name: string): string {
   const value = env[name]?.trim();
@@ -192,24 +201,38 @@ export function loadConfig(env: EnvInput = process.env): AppConfig {
     vipBaseUrl: (env.VIP_BASE_URL?.trim() || "https://navos-mind-server-vip.tec-do.com").replace(/\/+$/, ""),
     vipHmacSecret: requireEnv(env, "VIP_HMAC_SECRET"),
     poolTargetSize: parseNonNegativeInt(env.POOL_TARGET_SIZE, 0),
-    registrationConcurrency: Math.min(
-      parsePositiveInt(env.REGISTRATION_CONCURRENCY, YYDS_SAFE_REGISTRATION_CONCURRENCY),
-      YYDS_SAFE_REGISTRATION_CONCURRENCY
+    registrationConcurrency: parseCappedPositiveInt(
+      env.REGISTRATION_CONCURRENCY,
+      DEFAULT_REGISTRATION_CONCURRENCY,
+      REGISTRATION_CONCURRENCY_CAP
     ),
-    registrationMaxInFlight: parseCappedPositiveInt(env.REGISTRATION_MAX_IN_FLIGHT, 6, 20),
-    registrationMailboxCreateConcurrency: parseCappedPositiveInt(env.REGISTRATION_MAILBOX_CREATE_CONCURRENCY, 2, 5),
-    registrationMailboxCreatePerSecond: parseCappedPositiveInt(env.REGISTRATION_MAILBOX_CREATE_PER_SECOND, 2, 10),
-    registrationVipSendConcurrency: parseCappedPositiveInt(env.REGISTRATION_VIP_SEND_CONCURRENCY, 6, 20),
-    registrationPollConcurrency: parseCappedPositiveInt(env.REGISTRATION_POLL_CONCURRENCY, 30, 100),
-    registrationLoginConcurrency: parseCappedPositiveInt(env.REGISTRATION_LOGIN_CONCURRENCY, 6, 20),
-    registrationCertConcurrency: parseCappedPositiveInt(env.REGISTRATION_CERT_CONCURRENCY, 4, 20),
+    registrationMaxInFlight: parseCappedPositiveInt(env.REGISTRATION_MAX_IN_FLIGHT, 10000, REGISTRATION_MAX_IN_FLIGHT_CAP),
+    registrationMailboxCreateConcurrency: parseCappedPositiveInt(
+      env.REGISTRATION_MAILBOX_CREATE_CONCURRENCY,
+      20,
+      REGISTRATION_MAILBOX_CREATE_CONCURRENCY_CAP
+    ),
+    registrationMailboxCreatePerSecond: parseCappedPositiveInt(
+      env.REGISTRATION_MAILBOX_CREATE_PER_SECOND,
+      50,
+      REGISTRATION_MAILBOX_CREATE_PER_SECOND_CAP
+    ),
+    registrationVipSendConcurrency: parseCappedPositiveInt(
+      env.REGISTRATION_VIP_SEND_CONCURRENCY,
+      100,
+      REGISTRATION_VIP_SEND_CONCURRENCY_CAP
+    ),
+    registrationPollConcurrency: parseCappedPositiveInt(env.REGISTRATION_POLL_CONCURRENCY, 500, REGISTRATION_POLL_CONCURRENCY_CAP),
+    registrationLoginConcurrency: parseCappedPositiveInt(env.REGISTRATION_LOGIN_CONCURRENCY, 100, REGISTRATION_LOGIN_CONCURRENCY_CAP),
+    registrationCertConcurrency: parseCappedPositiveInt(env.REGISTRATION_CERT_CONCURRENCY, 100, REGISTRATION_CERT_CONCURRENCY_CAP),
     registrationVerificationTimeoutMs: parsePositiveInt(env.REGISTRATION_VERIFICATION_TIMEOUT_MS, 90_000),
     registrationYydsQuotaBlockSeconds: parsePositiveInt(env.REGISTRATION_YYDS_QUOTA_BLOCK_SECONDS, 300),
     redisUrl: env.REDIS_URL?.trim() || "redis://127.0.0.1:6379",
     queuePrefix: env.QUEUE_PREFIX?.trim() || "navos",
-    registrationJobConcurrency: Math.min(
-      parsePositiveInt(env.REGISTRATION_JOB_CONCURRENCY, SMALL_SERVER_REGISTRATION_JOB_CONCURRENCY),
-      SMALL_SERVER_REGISTRATION_JOB_CONCURRENCY
+    registrationJobConcurrency: parseCappedPositiveInt(
+      env.REGISTRATION_JOB_CONCURRENCY,
+      DEFAULT_REGISTRATION_JOB_CONCURRENCY,
+      REGISTRATION_CONCURRENCY_CAP
     ),
     registrationJobRemoveOnComplete: parsePositiveInt(env.REGISTRATION_JOB_REMOVE_ON_COMPLETE, 50),
     registrationJobRemoveOnFail: parsePositiveInt(env.REGISTRATION_JOB_REMOVE_ON_FAIL, 100),
@@ -224,7 +247,11 @@ export function loadConfig(env: EnvInput = process.env): AppConfig {
     accountBalanceReconcileEnabled: parseStrictBool(env.ACCOUNT_BALANCE_RECONCILE_ENABLED, true, "ACCOUNT_BALANCE_RECONCILE_ENABLED"),
     accountBalanceReconcileIntervalMinutes: parsePositiveInt(env.ACCOUNT_BALANCE_RECONCILE_INTERVAL_MINUTES, 30),
     accountBalanceReconcileBatchSize: parsePositiveInt(env.ACCOUNT_BALANCE_RECONCILE_BATCH_SIZE, 1000),
-    accountBalanceReconcileConcurrency: parseCappedPositiveInt(env.ACCOUNT_BALANCE_RECONCILE_CONCURRENCY, 5, 20),
+    accountBalanceReconcileConcurrency: parseCappedPositiveInt(
+      env.ACCOUNT_BALANCE_RECONCILE_CONCURRENCY,
+      50,
+      ACCOUNT_BALANCE_RECONCILE_CONCURRENCY_CAP
+    ),
     accountBalanceReconcileScope: parseAccountBalanceReconcileScope(env.ACCOUNT_BALANCE_RECONCILE_SCOPE),
     yydsDomainPool: normalizeYydsDomainPoolConfig({
       enabled: parseStrictBool(env.YYDS_DOMAIN_POOL_ENABLED, true, "YYDS_DOMAIN_POOL_ENABLED"),
