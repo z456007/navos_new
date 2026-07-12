@@ -195,6 +195,7 @@ export class InMemoryAccountStore implements AccountStore {
     const account = this.accounts.get(uid);
     if (account) {
       account.rateLimitedUntil = untilMs;
+      account.lastUsedAt = Math.max(account.lastUsedAt, now());
       account.leaseId = undefined;
       account.leaseUntil = 0;
     }

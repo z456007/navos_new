@@ -19,15 +19,15 @@ Reference audio: not configured
 
 | scenario | total | success | 4xx | 5xx | timeout | network error | rps | p50 ms | p95 ms | p99 ms |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| image-t2i-5 | 5 | 0 | 5 | 0 | 0 | 0 | 0.21 | 9904 | 24067 | 24067 |
-| image-reference-5 | 5 | 0 | 0 | 5 | 0 | 0 | 146.52 | 28 | 33 | 33 |
+| image-t2i-5 | 5 | 2 | 3 | 0 | 0 | 0 | 0.06 | 25166 | 81663 | 81663 |
+| image-reference-5 | 5 | 0 | 5 | 0 | 0 | 0 | 0.2 | 21096 | 25419 | 25419 |
 
 ## Error Summary
 
 | scenario | category | count |
 |---|---|---:|
-| image-t2i-5 | rate_limit | 5 |
-| image-reference-5 | server_error | 5 |
+| image-t2i-5 | rate_limit | 3 |
+| image-reference-5 | rate_limit | 5 |
 
 ## Failure Samples
 
@@ -36,10 +36,8 @@ Reference audio: not configured
 | image-t2i-5 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limit_error"}} |
 | image-t2i-5 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limit_error"}} |
 | image-t2i-5 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limit_error"}} |
-| image-t2i-5 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limit_error"}} |
-| image-t2i-5 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limit_error"}} |
-| image-reference-5 | 503 | server_error | /images/generations | {"error":{"message":"No available compatible accounts","type":"api_error"}} |
-| image-reference-5 | 503 | server_error | /images/generations | {"error":{"message":"No available compatible accounts","type":"api_error"}} |
-| image-reference-5 | 503 | server_error | /images/generations | {"error":{"message":"No available compatible accounts","type":"api_error"}} |
-| image-reference-5 | 503 | server_error | /images/generations | {"error":{"message":"No available compatible accounts","type":"api_error"}} |
-| image-reference-5 | 503 | server_error | /images/generations | {"error":{"message":"No available compatible accounts","type":"api_error"}} |
+| image-reference-5 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limit_error"}} |
+| image-reference-5 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limit_error"}} |
+| image-reference-5 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limit_error"}} |
+| image-reference-5 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limit_error"}} |
+| image-reference-5 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limit_error"}} |

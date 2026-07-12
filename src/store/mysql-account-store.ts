@@ -256,8 +256,13 @@ export class MysqlAccountStore implements AccountStore {
 
   async setCooldown(uid: string, untilMs: number): Promise<void> {
     await this.pool.execute(
-      "UPDATE accounts SET rate_limited_until = :untilMs, lease_id = NULL, lease_until = 0 WHERE uid = :uid",
-      { uid, untilMs }
+      `UPDATE accounts
+       SET rate_limited_until = :untilMs,
+           last_used_at = GREATEST(last_used_at, :nowMs),
+           lease_id = NULL,
+           lease_until = 0
+       WHERE uid = :uid`,
+      { uid, untilMs, nowMs: Date.now() }
     );
   }
 }
