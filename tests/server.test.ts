@@ -2433,6 +2433,70 @@ describe("server routes", () => {
     expect((await store.get("u2"))?.rateLimitedUntil).toBe(0);
   });
 
+  it("queues image generation through an upstream concurrency gate", async () => {
+    const store = new InMemoryAccountStore();
+    await store.upsert({ uid: "u1", token: "t1", balanceRemaining: 200, balanceTotal: 200 });
+    await store.upsert({ uid: "u2", token: "t2", balanceRemaining: 200, balanceTotal: 200 });
+    let createCalls = 0;
+    let releaseFirstPoll: (() => void) | undefined;
+    const firstPollReady = new Promise<void>((resolve) => {
+      releaseFirstPoll = resolve;
+    });
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(store),
+      imageMaxInFlight: 1,
+      fetchImpl: async (url) => {
+        const path = new URL(String(url)).pathname;
+        if (path === "/api/tasks/navos-gpt-image-t2i") {
+          createCalls += 1;
+          return Response.json({ code: 200, msg: "success", data: { task_id: `img_${createCalls}`, status: "queued" } });
+        }
+        if (path === "/api/tasks/image/generations/img_1") {
+          await firstPollReady;
+          return Response.json({ code: 200, msg: "success", data: { status: "succeeded", url: "https://cdn.test/img_1.png" } });
+        }
+        if (path === "/api/tasks/image/generations/img_2") {
+          return Response.json({ code: 200, msg: "success", data: { status: "succeeded", url: "https://cdn.test/img_2.png" } });
+        }
+        return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+      }
+    });
+
+    const firstPromise = app.inject({
+      method: "POST",
+      url: "/api/images/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "white robot", n: 1, quality: "low", size: "1024x1024" }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(createCalls).toBe(1);
+
+    let secondSettled = false;
+    const secondPromise = app.inject({
+      method: "POST",
+      url: "/api/images/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "black robot", n: 1, quality: "low", size: "1024x1024" }
+    }).then((response) => {
+      secondSettled = true;
+      return response;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(secondSettled).toBe(false);
+    expect(createCalls).toBe(1);
+
+    releaseFirstPoll?.();
+    const first = await firstPromise;
+    const second = await secondPromise;
+
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    expect(createCalls).toBe(2);
+  });
+
   it("exposes v1 video generation compatibility routes", async () => {
     const paths: string[] = [];
     const accountService = new AccountService(new InMemoryAccountStore());
@@ -3088,7 +3152,7 @@ describe("server routes", () => {
             billing: { points_amount: 500, remaining_amount: 1500 }
           });
         }
-        if (path === "/api/tasks/video/task_1") {
+        if (path === "/api/tasks/video/generations/task_1") {
           return Response.json({
             code: 200,
             data: { task_id: "task_1", status: "succeeded", video_url: "https://cdn.test/task_1.mp4" }

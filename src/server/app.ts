@@ -103,6 +103,9 @@ export interface CreateAppOptions {
   imageAllowVideoReserveFallback?: boolean;
   runtimeConfigService?: RuntimeConfigService;
   modelAccountWaitMs?: number;
+  imageMaxInFlight?: number;
+  videoT2vMaxInFlight?: number;
+  videoT2vGateTtlMs?: number;
 }
 
 interface UploadRequestBody {
@@ -132,10 +135,39 @@ const JSON_BODY_LIMIT_BYTES = 64 * 1024 * 1024;
 const MODEL_PROXY_MAX_ATTEMPTS = 5;
 const MODEL_PROXY_RETRY_COOLDOWN_SECONDS = 30;
 const DEFAULT_IMAGE_ACCOUNT_WAIT_MS = 120_000;
+const DEFAULT_IMAGE_MAX_IN_FLIGHT = 2;
 const DEFAULT_MODEL_ACCOUNT_WAIT_MS = 30_000;
+const DEFAULT_VIDEO_T2V_MAX_IN_FLIGHT = 2;
+const DEFAULT_VIDEO_T2V_GATE_TTL_MS = 10 * 60 * 1000;
 const ACCOUNT_WAIT_POLL_INTERVAL_MS = 100;
 const DEFAULT_YYDS_DOMAINS_URL = "https://maliapi.215.im/v1/domains";
 const YYDS_DOMAIN_FETCH_TIMEOUT_MS = 10_000;
+
+class AsyncSemaphore {
+  private active = 0;
+  private readonly queue: Array<() => void> = [];
+
+  constructor(private readonly maxInFlight: number) {}
+
+  async acquire(): Promise<() => void> {
+    if (this.active >= this.maxInFlight) {
+      await new Promise<void>((resolve) => this.queue.push(resolve));
+    }
+    this.active += 1;
+    let released = false;
+    return () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      this.active = Math.max(0, this.active - 1);
+      const next = this.queue.shift();
+      if (next) {
+        next();
+      }
+    };
+  }
+}
 
 function headersFromRequest(request: FastifyRequest): HeaderBag {
   const headers: HeaderBag = {};
@@ -518,6 +550,11 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     }
   );
   const client = new ProviderHttpClient(options.providerBaseUrl, options.fetchImpl);
+  const imageGenerationGate = new AsyncSemaphore(Math.max(1, Math.trunc(options.imageMaxInFlight ?? DEFAULT_IMAGE_MAX_IN_FLIGHT)));
+  const videoT2vGate = new AsyncSemaphore(Math.max(1, Math.trunc(options.videoT2vMaxInFlight ?? DEFAULT_VIDEO_T2V_MAX_IN_FLIGHT)));
+  const videoT2vGateTtlMs = Math.max(1_000, Math.trunc(options.videoT2vGateTtlMs ?? DEFAULT_VIDEO_T2V_GATE_TTL_MS));
+  const videoT2vGateReleases = new Map<string, () => void>();
+  const videoT2vGateTimers = new Map<string, ReturnType<typeof setTimeout>>();
   let providerRegistrationAttempt: Promise<boolean> | undefined;
 
   app.addHook("onRequest", async (request, reply) => {
@@ -540,6 +577,53 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
   type VideoAccountLeaseOptions = { exposeRegistrationErrors?: boolean; sendUnavailable?: boolean };
   type VideoCreateOptions = { exposeRegistrationErrors?: boolean };
   type VideoTaskLookupOptions = { requireKnownTask?: boolean };
+
+  function isTextToVideoTaskPayload(payload: Record<string, unknown>): boolean {
+    return !hasNonEmptyArray(payload.image_urls)
+      && !hasNonEmptyArray(payload.image_with_roles)
+      && !hasNonEmptyArray(payload.video_urls)
+      && !hasNonEmptyArray(payload.audio_urls);
+  }
+
+  function hasNonEmptyArray(value: unknown): boolean {
+    return Array.isArray(value) && value.length > 0;
+  }
+
+  function videoTaskIsTerminal(status: string | undefined): boolean {
+    return status === "succeeded" || status === "failed";
+  }
+
+  function holdVideoT2vGate(taskId: string | undefined, status: string | undefined, release: (() => void) | undefined): void {
+    if (!release) {
+      return;
+    }
+    if (!taskId || videoTaskIsTerminal(status)) {
+      release();
+      return;
+    }
+    releaseVideoT2vGate(taskId);
+    videoT2vGateReleases.set(taskId, release);
+    const timer = setTimeout(() => releaseVideoT2vGate(taskId), videoT2vGateTtlMs);
+    timer.unref?.();
+    videoT2vGateTimers.set(taskId, timer);
+  }
+
+  function releaseVideoT2vGate(taskId: string | undefined): void {
+    if (!taskId) {
+      return;
+    }
+    const timer = videoT2vGateTimers.get(taskId);
+    if (timer) {
+      clearTimeout(timer);
+      videoT2vGateTimers.delete(taskId);
+    }
+    const release = videoT2vGateReleases.get(taskId);
+    if (!release) {
+      return;
+    }
+    videoT2vGateReleases.delete(taskId);
+    release();
+  }
 
   function requireLocalAuth(request: FastifyRequest, reply: FastifyReply): boolean {
     if (isLocalAuthorized(request)) {
@@ -1701,7 +1785,16 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
         return;
       }
 
-      const result = await createVideoTask(client, taskPayload, headers);
+      const videoGateRelease = isTextToVideoTaskPayload(taskPayload)
+        ? await videoT2vGate.acquire()
+        : undefined;
+      let result: ProviderResult;
+      try {
+        result = await createVideoTask(client, taskPayload, headers);
+      } catch (error) {
+        videoGateRelease?.();
+        throw error;
+      }
       logProviderFailure({
         kind: "video",
         route: request.url,
@@ -1719,9 +1812,11 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
         if (createdTask.id) {
           await saveVideoTask(createdTask, account.uid);
         }
+        holdVideoT2vGate(createdTask.id, createdTask.status, videoGateRelease);
         await sendProviderResult(reply, result);
         return;
       }
+      videoGateRelease?.();
       if (lastDecision.accountAction === "deplete") {
         await accountService.depleteVideoAccount(account.uid);
       } else if (lastDecision.accountAction === "disable") {
@@ -1801,6 +1896,10 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     if (result.body.id) {
       await saveVideoTask(result.body, existingTask?.accountUid, params.taskId);
     }
+    if (videoTaskIsTerminal(result.body.status)) {
+      releaseVideoT2vGate(params.taskId);
+      releaseVideoT2vGate(result.body.id);
+    }
     await sendProviderResult(reply, result);
   }
 
@@ -1832,11 +1931,17 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       }
 
       const headers = buildProviderAuthHeaders(account, options.providerAuthMode);
-      const result = await createImageGeneration(client, payload, headers, {
-        maxAttempts: runtimeConfig.imageMaxPollAttempts,
-        intervalMs: runtimeConfig.imagePollIntervalMs,
-        outputMode: defaultResponseFormat === "b64_json" ? "display" : undefined
-      });
+      const imageGateRelease = await imageGenerationGate.acquire();
+      let result: ProviderResult;
+      try {
+        result = await createImageGeneration(client, payload, headers, {
+          maxAttempts: runtimeConfig.imageMaxPollAttempts,
+          intervalMs: runtimeConfig.imagePollIntervalMs,
+          outputMode: defaultResponseFormat === "b64_json" ? "display" : undefined
+        });
+      } finally {
+        imageGateRelease();
+      }
       logProviderFailure({
         kind: "image",
         route: request.url,
