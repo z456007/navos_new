@@ -2346,7 +2346,7 @@ describe("server routes", () => {
     expect(await store.get("u2")).toMatchObject({ balanceRemaining: 100, leaseUntil: 0 });
   });
 
-  it("returns rate_limited when every image account is rate limited by the provider", async () => {
+  it("returns rate_limited when the first image account is rate limited by the provider", async () => {
     const store = new InMemoryAccountStore();
     await store.upsert({ uid: "u1", token: "t1", balanceRemaining: 200, balanceTotal: 200 });
     await store.upsert({ uid: "u2", token: "t2", balanceRemaining: 200, balanceTotal: 200 });
@@ -2383,8 +2383,9 @@ describe("server routes", () => {
     expect(response.statusCode).toBe(429);
     expect(response.json()).toMatchObject({ error: { type: "rate_limited" } });
     expect(response.json().error.message).toContain("\u8bf7\u6c42\u9891\u7387\u8d85\u8fc7\u9650\u5236");
+    expect(taskSeq).toBe(1);
     expect((await store.get("u1"))?.rateLimitedUntil).toBeGreaterThan(Date.now());
-    expect((await store.get("u2"))?.rateLimitedUntil).toBeGreaterThan(Date.now());
+    expect((await store.get("u2"))?.rateLimitedUntil).toBe(0);
   });
 
   it("does not fan out image retries across accounts when provider returns a rate limit", async () => {
@@ -3065,6 +3066,74 @@ describe("server routes", () => {
     expect((await store.get("u2"))).toMatchObject({ status: "active", balanceRemaining: 1500, leaseUntil: 0 });
   });
 
+  it("queues text-to-video task creation until an active Seedance task reaches a terminal state", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    await accountService.importAccount({ uid: "u1", token: "t1", balanceRemaining: 2000, balanceTotal: 2000 });
+    await accountService.importAccount({ uid: "u2", token: "t2", balanceRemaining: 2000, balanceTotal: 2000 });
+    let createCalls = 0;
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      videoT2vMaxInFlight: 1,
+      fetchImpl: async (url) => {
+        const path = new URL(String(url)).pathname;
+        if (path === "/api/tasks/navos-seedance-video-generation") {
+          createCalls += 1;
+          return Response.json({
+            task_id: `task_${createCalls}`,
+            status: "queued",
+            billing: { points_amount: 500, remaining_amount: 1500 }
+          });
+        }
+        if (path === "/api/tasks/video/task_1") {
+          return Response.json({
+            code: 200,
+            data: { task_id: "task_1", status: "succeeded", video_url: "https://cdn.test/task_1.mp4" }
+          });
+        }
+        return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+      }
+    });
+
+    const first = await app.inject({
+      method: "POST",
+      url: "/api/video/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "city skyline", durationSeconds: 5, resolution: "480P" }
+    });
+    expect(first.statusCode).toBe(200);
+    expect(first.json()).toMatchObject({ task_id: "task_1" });
+
+    let secondSettled = false;
+    const secondPromise = app.inject({
+      method: "POST",
+      url: "/api/video/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "forest river", durationSeconds: 5, resolution: "480P" }
+    }).then((response) => {
+      secondSettled = true;
+      return response;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(secondSettled).toBe(false);
+    expect(createCalls).toBe(1);
+
+    const polled = await app.inject({
+      method: "GET",
+      url: "/api/video/generations/task_1",
+      headers: { authorization: "Bearer sk-test" }
+    });
+    expect(polled.statusCode).toBe(200);
+
+    const second = await secondPromise;
+    expect(second.statusCode).toBe(200);
+    expect(second.json()).toMatchObject({ task_id: "task_2" });
+    expect(createCalls).toBe(2);
+  });
+
   it("retries video generation on the next leased account when the first account hits a transient provider failure", async () => {
     const store = new InMemoryAccountStore();
     const accountService = new AccountService(store);
@@ -3108,6 +3177,42 @@ describe("server routes", () => {
     expect(usedUids).toEqual(["u1", "u2"]);
     expect((await store.get("u1"))).toMatchObject({ status: "active", balanceRemaining: 2000, leaseUntil: 0 });
     expect((await store.get("u2"))).toMatchObject({ status: "active", balanceRemaining: 1500, leaseUntil: 0 });
+  });
+
+  it("does not fan out video retries across accounts when provider returns a rate limit", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    await accountService.importAccount({ uid: "u1", token: "t1", balanceRemaining: 2000, balanceTotal: 2000 });
+    await accountService.importAccount({ uid: "u2", token: "t2", balanceRemaining: 2000, balanceTotal: 2000 });
+    const usedUids: string[] = [];
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      fetchImpl: async (_url, init) => {
+        const authorization = String((init?.headers as Record<string, string>).authorization ?? "");
+        const uid = authorization.replace(/^Bearer\s+/, "").split(":")[0] ?? "";
+        usedUids.push(uid);
+        return Response.json({
+          error: { message: "\u8bf7\u6c42\u9891\u7387\u8d85\u8fc7\u9650\u5236", type: "server_error" }
+        }, { status: 500 });
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/video/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "city skyline", durationSeconds: 5, resolution: "480P" }
+    });
+
+    expect(response.statusCode).toBe(429);
+    expect(response.json()).toMatchObject({ error: { type: "rate_limited" } });
+    expect(usedUids).toEqual(["u1"]);
+    expect((await store.get("u1"))?.rateLimitedUntil).toBeGreaterThan(Date.now());
+    expect((await store.get("u2"))?.rateLimitedUntil).toBe(0);
+    expect((await store.get("u2"))?.leaseUntil).toBe(0);
   });
 
   it("refreshes the bound video account balance when polling a task returns billing state", async () => {

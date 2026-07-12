@@ -1731,6 +1731,10 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       } else {
         await accountService.releaseVideoAccount(account.uid, leaseId);
       }
+      if (lastDecision.kind === "rate_limited") {
+        await sendProviderResult(reply, externalProviderFailureResult(lastDecision));
+        return;
+      }
       if (!providerFailureIsAccountRetryable(lastDecision)) {
         await sendProviderResult(reply, result);
         return;
@@ -1858,6 +1862,11 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       if (lastDecision.accountAction === "deplete") {
         await accountService.depleteAccount(account.uid);
         continue;
+      }
+      if (lastDecision.kind === "rate_limited") {
+        await accountService.cooldownAccount(account.uid, lastDecision.retryAfterSeconds ?? 30);
+        await sendProviderResult(reply, externalProviderFailureResult(lastDecision));
+        return;
       }
       await accountService.releaseImageAccount(account.uid, leaseId);
       if (!imageResultIsRetryable(result)) {
