@@ -1498,6 +1498,13 @@ a.button {
     #ffffff;
 }
 
+.runtime-preset-help {
+  margin: 0 0 12px;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .runtime-preset-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1508,7 +1515,7 @@ a.button {
   display: grid;
   width: 100%;
   height: auto;
-  min-height: 78px;
+  min-height: 126px;
   align-items: start;
   justify-content: start;
   gap: 5px;
@@ -1525,6 +1532,11 @@ a.button {
   transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 }
 
+.runtime-preset.recommended {
+  border-color: rgba(47, 111, 235, 0.95);
+  box-shadow: 0 10px 24px rgba(47, 111, 235, 0.1);
+}
+
 .runtime-preset.ant-btn {
   display: grid;
   place-items: start stretch;
@@ -1534,6 +1546,26 @@ a.button {
   display: grid;
   gap: 5px;
   width: 100%;
+}
+
+.runtime-preset-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.runtime-preset-head em {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  background: rgba(47, 111, 235, 0.12);
+  color: #1d4ed8;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+  line-height: 1;
+  padding: 5px 8px;
 }
 
 .runtime-preset:hover {
@@ -1553,11 +1585,22 @@ a.button {
   line-height: 1.25;
 }
 
-.runtime-preset span {
+.runtime-preset-desc,
+.runtime-preset-impact,
+.runtime-preset small {
   color: #64748b;
   font-size: 12px;
   font-weight: 600;
   line-height: 1.5;
+}
+
+.runtime-preset-impact {
+  color: #334155;
+  font-weight: 800;
+}
+
+.runtime-preset small {
+  color: #2563eb;
 }
 
 .runtime-grid {

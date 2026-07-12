@@ -60,10 +60,20 @@ const defaultRuntimeConfig: RuntimeConfigView = {
   updatedAt: 0
 };
 
-const runtimePresets: Array<{ name: string; desc: string; patch: Partial<RuntimeConfigView> }> = [
+type RuntimePreset = {
+  name: string;
+  audience: string;
+  effect: string;
+  note?: string;
+  recommended?: boolean;
+  patch: Partial<RuntimeConfigView>;
+};
+
+const runtimePresets: RuntimePreset[] = [
   {
-    name: "安全默认",
-    desc: "小批量稳定运行，适合日常维护。",
+    name: "日常稳妥运行",
+    audience: "适合：平时小流量、账号维护、少量图片/视频任务。",
+    effect: "会调整：降低注册和检查强度，优先保护账号与上游稳定。",
     patch: {
       imageAccountWaitMs: 120000,
       imageMaxPollAttempts: 30,
@@ -83,8 +93,11 @@ const runtimePresets: Array<{ name: string; desc: string; patch: Partial<Runtime
     }
   },
   {
-    name: "100 并发验证",
-    desc: "本地 Sub2Api 全链路压测前的推荐档。",
+    name: "100 并发压测",
+    audience: "适合：本地 Sub2Api 全链路 100 并发。",
+    effect: "会调整：模型排队等待、图片等待、余额检查和注册吞吐。",
+    note: "推荐先用这档验证 Codex、Claude、图片、视频链路。",
+    recommended: true,
     patch: {
       modelAccountWaitMs: 60000,
       imageAccountWaitMs: 180000,
@@ -105,8 +118,10 @@ const runtimePresets: Array<{ name: string; desc: string; patch: Partial<Runtime
     }
   },
   {
-    name: "1000 账号池准备",
-    desc: "账号池维护和余额检查更积极，不代表直接上千压测。",
+    name: "千级账号池维护",
+    audience: "适合：批量导入、刷新、修复上千个账号。",
+    effect: "会调整：注册吞吐、余额检查批量、认证/轮询并发。",
+    note: "不是直接发起上千压测，只是让账号池维护更积极。",
     patch: {
       accountBalanceReconcileScope: "non_disabled",
       accountBalanceReconcileBatchSize: 2000,
@@ -124,8 +139,10 @@ const runtimePresets: Array<{ name: string; desc: string; patch: Partial<Runtime
     }
   },
   {
-    name: "长对话/长消耗",
-    desc: "提高模型账号等待和长任务窗口，适合长上下文压测。",
+    name: "长对话压测",
+    audience: "适合：GPT/Claude 长上下文、长耗时任务。",
+    effect: "会调整：模型拿号等待、账号租约、图片/视频长任务窗口。",
+    note: "减少 30 秒内拿不到账号就失败的情况。",
     patch: {
       modelAccountWaitMs: 120000,
       accountLeaseTtlMs: 1200000,
@@ -247,11 +264,22 @@ export function RuntimeConfigPanel({ apiKey }: { apiKey: string }) {
       </div>
 
       <Card className="runtime-card runtime-preset-card" title={<span className="runtime-card-title"><SlidersHorizontal size={16} />{zh.presets}</span>}>
+        <p className="runtime-preset-help">不知道选哪个：先点「100 并发压测」，保存后再跑测试。</p>
         <div className="runtime-preset-grid">
           {runtimePresets.map((preset) => (
-            <AntButton className="runtime-preset" key={preset.name} onClick={() => patchConfig(preset.patch)}>
-              <strong>{preset.name}</strong>
-              <span>{preset.desc}</span>
+            <AntButton
+              aria-label={`${preset.name}。${preset.audience}${preset.effect}${preset.note ? preset.note : ""}`}
+              className={`runtime-preset ${preset.recommended ? "recommended" : ""}`}
+              key={preset.name}
+              onClick={() => patchConfig(preset.patch)}
+            >
+              <span className="runtime-preset-head">
+                <strong>{preset.name}</strong>
+                {preset.recommended ? <em>推荐</em> : null}
+              </span>
+              <span className="runtime-preset-desc">{preset.audience}</span>
+              <span className="runtime-preset-impact">{preset.effect}</span>
+              {preset.note ? <small>{preset.note}</small> : null}
             </AntButton>
           ))}
         </div>

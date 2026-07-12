@@ -154,8 +154,14 @@ describe("admin app gate", () => {
     fireEvent.click(runtimeButton);
 
     expect(await screen.findByText("一键套用方案")).toBeInTheDocument();
-    expect(screen.getByText("100 并发验证")).toBeInTheDocument();
-    expect(screen.getByText("长对话/长消耗")).toBeInTheDocument();
+    expect(screen.getByText("不知道选哪个：先点「100 并发压测」，保存后再跑测试。")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /日常稳妥运行/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /100 并发压测/ })).toBeInTheDocument();
+    expect(screen.getByText("适合：本地 Sub2Api 全链路 100 并发。")).toBeInTheDocument();
+    expect(screen.getByText("会调整：模型排队等待、图片等待、余额检查和注册吞吐。")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /千级账号池维护/ })).toBeInTheDocument();
+    expect(screen.getByText("不是直接发起上千压测，只是让账号池维护更积极。")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /长对话压测/ })).toBeInTheDocument();
     expect(await screen.findByText("\u56fe\u7247/\u89c6\u9891\u4efb\u52a1")).toBeInTheDocument();
     expect(screen.getByText("图片账号等待")).toBeInTheDocument();
     expect(screen.getByText("\u4f59\u989d\u68c0\u67e5")).toBeInTheDocument();
