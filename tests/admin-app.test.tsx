@@ -103,6 +103,62 @@ describe("admin app gate", () => {
     expect(within(configNav).queryByRole("button", { name: /COS/ })).not.toBeInTheDocument();
   });
 
+
+  it("shows visual runtime configuration controls", async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });
+      const path = String(url);
+      if (path === "/api/accounts") {
+        return Response.json([]);
+      }
+      if (path === "/api/runtime-config" && init?.method === "GET") {
+        return Response.json({
+          imageAllowVideoReserveFallback: false,
+          imageAccountWaitMs: 120000,
+          imageMaxPollAttempts: 30,
+          imagePollIntervalMs: 4000,
+          imageSyncWaitBudgetMs: 120000,
+          videoCreateTimeoutMs: 30000,
+          videoPollTimeoutMs: 30000,
+          accountBalanceReconcileEnabled: true,
+          accountBalanceReconcileScope: "depleted",
+          accountBalanceReconcileIntervalMinutes: 30,
+          accountBalanceReconcileBatchSize: 1000,
+          accountBalanceReconcileConcurrency: 10,
+          registrationConcurrency: 2,
+          registrationMaxInFlight: 20,
+          registrationMailboxCreateConcurrency: 2,
+          registrationMailboxCreatePerSecond: 2,
+          registrationVipSendConcurrency: 6,
+          registrationPollConcurrency: 50,
+          registrationLoginConcurrency: 6,
+          registrationCertConcurrency: 6,
+          registrationYydsQuotaBlockSeconds: 300,
+          mysqlConnectionLimit: 100,
+          mysqlQueueLimit: 0,
+          restartRequiredKeys: ["mysqlConnectionLimit", "mysqlQueueLimit"],
+          updatedAt: 0
+        });
+      }
+      return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("Master API Key"), { target: { value: "sk-local" } });
+    fireEvent.click(screen.getByRole("button", { name: "\u8fdb\u5165\u63a7\u5236\u53f0" }));
+
+    const runtimeButton = await screen.findByRole("button", { name: "\u8fd0\u884c\u914d\u7f6e" });
+    fireEvent.click(runtimeButton);
+
+    expect(await screen.findByText("\u56fe\u7247/\u89c6\u9891\u4efb\u52a1")).toBeInTheDocument();
+    expect(screen.getByText("\u4f59\u989d\u68c0\u67e5")).toBeInTheDocument();
+    expect(screen.getByText("\u6ce8\u518c\u4e0e YYDS \u9650\u901f")).toBeInTheDocument();
+    expect(screen.getByText((content) => content.includes("\u91cd\u542f NavOS"))).toBeInTheDocument();
+  });
+
+
   it("generates images from the image workbench", async () => {
     const prompt = "白色机器人站在霓虹雨夜的天桥上";
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
@@ -478,7 +534,7 @@ describe("admin app gate", () => {
     await waitFor(() => {
       expect(screen.getAllByRole("heading", { name: "账号池" }).length).toBeGreaterThan(0);
     });
-    expect(screen.getByLabelText("任务并发")).toHaveAttribute("aria-valuemax", "20");
+    expect(screen.getByLabelText("任务并发")).toHaveAttribute("aria-valuemax", "100");
     fireEvent.click(screen.getByRole("button", { name: "启动单个注册" }));
 
     await waitFor(() => {
@@ -490,7 +546,7 @@ describe("admin app gate", () => {
     expect(screen.getByText(/token-full-1/)).toBeInTheDocument();
   });
 
-  it("distinguishes fill target from create count in account registration controls", async () => {
+  it("starts create registration as the primary account-pool action", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
       if (path === "/api/accounts") return Response.json([]);
@@ -501,10 +557,12 @@ describe("admin app gate", () => {
           id: "job-create",
           mode: "create",
           state: "succeeded",
-          count: 5,
-          concurrency: 4,
-          progress: { started: 5, completed: 5, failed: 0, total: 5 },
-          logs: []
+          count: 100,
+          concurrency: 6,
+          progress: { started: 100, completed: 100, failed: 0, total: 100 },
+          logs: [{ at: 1000, level: "info", message: "create registration completed" }],
+          createdAt: 1000,
+          finishedAt: 2000
         });
       }
       return Response.json({ ok: true });
@@ -523,12 +581,45 @@ describe("admin app gate", () => {
       />
     );
 
-    fireEvent.change(await screen.findByLabelText("新增数量"), { target: { value: "5" } });
-    fireEvent.change(screen.getByLabelText("任务并发"), { target: { value: "4" } });
+    fireEvent.change(await screen.findByLabelText("新增数量"), { target: { value: "100" } });
+    fireEvent.change(screen.getByLabelText("任务并发"), { target: { value: "6" } });
     fireEvent.click(screen.getByRole("button", { name: "新增注册" }));
 
     const postCall = fetchMock.mock.calls.find(([path, init]) => path === "/api/registration/jobs" && init?.method === "POST");
-    expect(JSON.parse(postCall?.[1]?.body as string)).toEqual({ mode: "create", count: 5, concurrency: 4 });
+    expect(JSON.parse(postCall?.[1]?.body as string)).toEqual({ mode: "create", count: 100, concurrency: 6 });
+    expect(screen.queryByRole("button", { name: "补齐账号池" })).not.toBeInTheDocument();
+  });
+
+  it("runs batch balance reconcile from the account panel", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === "/api/accounts") return Response.json([]);
+      if (path === "/api/registration/jobs" && init?.method === "GET") return Response.json([]);
+      if (path === "/api/accounts/balances/reconcile" && init?.method === "POST") {
+        return Response.json({ checked: 3, restored: 1, stillDepleted: 1, updatedActive: 1, disabledUpdated: 0, failed: 0, failures: [] });
+      }
+      return Response.json({ ok: true });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ConsoleShell
+        accounts={[]}
+        activePanel="accounts"
+        apiKey="sk-local"
+        onAccountsChange={vi.fn()}
+        onPanelChange={vi.fn()}
+        onRefreshAccounts={vi.fn(async () => [])}
+        onSignOut={vi.fn()}
+      />
+    );
+
+    fireEvent.change(await screen.findByLabelText("余额检查范围"), { target: { value: "non_disabled" } });
+    fireEvent.click(screen.getByRole("button", { name: "批量检查余额" }));
+
+    const call = fetchMock.mock.calls.find(([path, init]) => path === "/api/accounts/balances/reconcile" && init?.method === "POST");
+    expect(JSON.parse(call?.[1]?.body as string)).toMatchObject({ scope: "non_disabled", limit: 1000, concurrency: 10, reactivatePositive: true });
+    expect((await screen.findAllByText(/已检查 3 个账号/)).length).toBeGreaterThan(0);
   });
 
   it("does not restore completed registration jobs when the account pool reloads", async () => {
@@ -905,7 +996,7 @@ describe("admin app gate", () => {
     fireEvent.click(screen.getByRole("button", { name: /保存运行配置/ }));
 
     await waitFor(() => {
-      expect(savedPayload).toEqual({ imageAllowVideoReserveFallback: true });
+      expect(savedPayload).toMatchObject({ imageAllowVideoReserveFallback: true });
     });
     expect(fetchMock).toHaveBeenCalledWith("/api/runtime-config", expect.objectContaining({ method: "PUT" }));
   });

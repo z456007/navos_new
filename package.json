@@ -11,7 +11,9 @@
     "build:server": "tsc -p tsconfig.json",
     "build:web": "vite build",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p web/tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "load:fake-provider": "tsx scripts/load/fake-navos-provider.ts",
+    "load:sub2api-chain": "tsx scripts/load/sub2api-chain-load-test.ts"
   },
   "dependencies": {
     "antd": "^6.5.0",

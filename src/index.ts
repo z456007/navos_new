@@ -1,15 +1,21 @@
 import { createHash } from "node:crypto";
+import { Redis } from "ioredis";
 import { loadConfig } from "./config/env.js";
 import { YydsMailClient } from "./protocols/mail/yyds-mail.js";
 import { VipClient } from "./protocols/vip-client.js";
 import { createApp } from "./server/app.js";
-import { reconcileDepletedAccountBalances } from "./services/account-balance-reconciler.js";
+import { reconcileAccountBalances } from "./services/account-balance-reconciler.js";
 import { AccountService } from "./services/account-service.js";
 import { BullmqRegistrationQueue } from "./services/bullmq-registration-queue.js";
 import { RegistrationJobService } from "./services/registration-job-service.js";
+import {
+  RedisRegistrationMailboxLimiter,
+  type RegistrationMailboxLimiterRedis
+} from "./services/registration-mailbox-limiter.js";
 import { RegistrationService } from "./services/registration-service.js";
 import { createRegistrationWorker } from "./services/registration-worker.js";
 import { RuntimeConfigService } from "./services/runtime-config-service.js";
+import { runtimeConfigDefaultsFromAppConfig } from "./services/runtime-config-schema.js";
 import { normalizeYydsDomainPoolConfig, YydsDomainPool } from "./services/yyds-domain-pool.js";
 import { YydsMailConfigService } from "./services/yyds-mail-config-service.js";
 import { SecretBox } from "./security/secretbox.js";
@@ -49,9 +55,8 @@ if (config.defaultAccount) {
 }
 
 const accountService = new AccountService(accountStore);
-const runtimeConfigService = new RuntimeConfigService(runtimeConfigStore, {
-  imageAllowVideoReserveFallback: config.imageAllowVideoReserveFallback
-});
+const runtimeConfigService = new RuntimeConfigService(runtimeConfigStore, runtimeConfigDefaultsFromAppConfig(config));
+await runtimeConfigService.seedDefaultsIfEmpty();
 const yydsDomainPool = new YydsDomainPool({
   store: yydsDomainPoolStore,
   // Runtime registration only picks from persisted/admin-refreshed candidates.
@@ -70,6 +75,26 @@ const vipClient = new VipClient({
   hmacSecret: config.vipHmacSecret,
   fetchImpl: undefined
 });
+const initialRuntimeConfig = await runtimeConfigService.get();
+const limiterRedisClient = new Redis(config.redisUrl, { maxRetriesPerRequest: null });
+const limiterRedis: RegistrationMailboxLimiterRedis = {
+  get: async (key) => await limiterRedisClient.get(key),
+  set: async (key, value, nx, px, ttlMs) => {
+    const result = await limiterRedisClient.call("set", key, value, nx, px, String(ttlMs));
+    return result === "OK" ? "OK" : null;
+  },
+  incr: async (key) => await limiterRedisClient.incr(key),
+  decr: async (key) => await limiterRedisClient.decr(key),
+  expire: async (key, seconds) => await limiterRedisClient.expire(key, seconds),
+  pttl: async (key) => await limiterRedisClient.pttl(key)
+};
+const mailboxLimiter = new RedisRegistrationMailboxLimiter({
+  redis: limiterRedis,
+  keyPrefix: config.queuePrefix,
+  concurrency: initialRuntimeConfig.registrationMailboxCreateConcurrency,
+  perSecond: initialRuntimeConfig.registrationMailboxCreatePerSecond,
+  quotaBlockSeconds: initialRuntimeConfig.registrationYydsQuotaBlockSeconds
+});
 
 const registrationService = new RegistrationService({
   yydsClientProvider: async () => {
@@ -84,7 +109,9 @@ const registrationService = new RegistrationService({
   vipClient,
   accountService,
   domainPicker: async () => await yydsDomainPool.pickDomain(),
-  domainRecorder: yydsDomainPool
+  domainRecorder: yydsDomainPool,
+  mailboxLimiter,
+  mailboxMinIntervalMs: Math.ceil(1000 / Math.max(1, initialRuntimeConfig.registrationMailboxCreatePerSecond))
 });
 
 const registrationQueue = new BullmqRegistrationQueue({
@@ -122,11 +149,17 @@ async function runAccountBalanceReconcile(reason: "startup" | "interval"): Promi
   }
   accountBalanceReconcileRunning = true;
   try {
-    const result = await reconcileDepletedAccountBalances({
+    const runtimeConfig = await runtimeConfigService.get();
+    if (!runtimeConfig.accountBalanceReconcileEnabled) {
+      return;
+    }
+    const result = await reconcileAccountBalances({
       accountService,
       vipClient,
-      limit: config.accountBalanceReconcileBatchSize,
-      concurrency: config.accountBalanceReconcileConcurrency
+      scope: runtimeConfig.accountBalanceReconcileScope,
+      limit: runtimeConfig.accountBalanceReconcileBatchSize,
+      concurrency: runtimeConfig.accountBalanceReconcileConcurrency,
+      reactivatePositive: true
     });
     if (result.checked > 0 || result.failed > 0) {
       console.log(`account balance reconcile ${reason}: checked=${result.checked} restored=${result.restored} still_depleted=${result.stillDepleted} failed=${result.failed}`);
@@ -174,7 +207,11 @@ app.addHook("onClose", async () => {
   try {
     await registrationWorker.close();
   } finally {
-    await registrationQueue.close();
+    try {
+      await registrationQueue.close();
+    } finally {
+      await limiterRedisClient.quit();
+    }
   }
 });
 

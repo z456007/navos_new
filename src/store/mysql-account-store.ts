@@ -1,13 +1,6 @@
 import mysql, { type Pool, type ResultSetHeader, type RowDataPacket } from "mysql2/promise";
 import type { AccountImportInput, AccountRecord, AccountStatus, AccountStore } from "./account-store.js";
-
-export interface MysqlConfig {
-  host: string;
-  port: number;
-  user: string;
-  password: string;
-  database: string;
-}
+import { createMysqlPool, type MysqlConfig } from "./mysql-config.js";
 
 interface AccountRow extends RowDataPacket {
   uid: string;
@@ -29,16 +22,7 @@ export class MysqlAccountStore implements AccountStore {
   private readonly pool: Pool;
 
   constructor(config: MysqlConfig) {
-    this.pool = mysql.createPool({
-      host: config.host,
-      port: config.port,
-      user: config.user,
-      password: config.password,
-      database: config.database,
-      waitForConnections: true,
-      connectionLimit: 10,
-      namedPlaceholders: true
-    });
+    this.pool = createMysqlPool(config);
   }
 
   static async createDatabaseIfMissing(config: MysqlConfig): Promise<void> {
@@ -80,6 +64,14 @@ export class MysqlAccountStore implements AccountStore {
     `);
     await this.addColumnIfMissing("lease_id", "ALTER TABLE accounts ADD COLUMN lease_id VARCHAR(120) NULL");
     await this.addColumnIfMissing("lease_until", "ALTER TABLE accounts ADD COLUMN lease_until BIGINT NOT NULL DEFAULT 0");
+    await this.addIndexIfMissing(
+      "idx_accounts_lease_pick",
+      "CREATE INDEX idx_accounts_lease_pick ON accounts(status, rate_limited_until, lease_until, balance_remaining, last_used_at, created_at)"
+    );
+    await this.addIndexIfMissing(
+      "idx_accounts_health",
+      "CREATE INDEX idx_accounts_health ON accounts(status, last_balance_at, rate_limited_until)"
+    );
   }
 
   private async addColumnIfMissing(column: string, ddl: string): Promise<void> {
@@ -88,6 +80,18 @@ export class MysqlAccountStore implements AccountStore {
        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'accounts' AND COLUMN_NAME = :column
        LIMIT 1`,
       { column }
+    );
+    if (rows.length === 0) {
+      await this.pool.query(ddl);
+    }
+  }
+
+  private async addIndexIfMissing(indexName: string, ddl: string): Promise<void> {
+    const [rows] = await this.pool.execute<RowDataPacket[]>(
+      `SELECT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'accounts' AND INDEX_NAME = :indexName
+       LIMIT 1`,
+      { indexName }
     );
     if (rows.length === 0) {
       await this.pool.query(ddl);

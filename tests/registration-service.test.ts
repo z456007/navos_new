@@ -476,6 +476,34 @@ describe("RegistrationService", () => {
     expect(recorder.recordSuccess).not.toHaveBeenCalled();
   });
 
+  it("blocks the global mailbox limiter when YYDS quota is exhausted", async () => {
+    const mailFetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).includes("/accounts") && init?.method === "POST") {
+        return Response.json(
+          { success: false, error: "quota exhausted", errorCode: "quota_exhausted" },
+          { status: 429, headers: { "retry-after": "45" } }
+        );
+      }
+      return Response.json({ success: true, data: {} });
+    });
+    const mailboxLimiter = {
+      run: vi.fn(async <T>(work: () => Promise<T>) => await work()),
+      blockQuota: vi.fn(async () => undefined)
+    };
+    const service = buildService(vipFetchForPipeline({}), mailFetch, {
+      mailboxLimiter: mailboxLimiter as never,
+      maxMailboxCreateAttempts: 3,
+      mailboxRetryDelayMs: 1
+    });
+
+    const result = await service.registerOne();
+
+    expect(result.success).toBe(false);
+    expect(result.failureKind).toBe("quota_exhausted");
+    expect(mailboxLimiter.run).toHaveBeenCalledOnce();
+    expect(mailboxLimiter.blockQuota).toHaveBeenCalledWith(45);
+  });
+
   it("records YYDS mailbox creation failures with failure kind and retry count", async () => {
     const mailFetch = vi.fn(async (url: string, init?: RequestInit) => {
       if (String(url).includes("/accounts") && init?.method === "POST") {

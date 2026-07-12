@@ -9,7 +9,8 @@ import {
   KeyRound,
   LogOut,
   MessageSquare,
-  RefreshCw
+  RefreshCw,
+  Settings2
 } from "lucide-react";
 import { Metric } from "../components/metric";
 import { NavButton } from "../components/nav-button";
@@ -18,6 +19,7 @@ import { AccountsPanel } from "../panels/AccountsPanel";
 import { ChatPanel } from "../panels/ChatPanel";
 import { ImagePanel } from "../panels/ImagePanel";
 import { ProbePanel } from "../panels/ProbePanel";
+import { RuntimeConfigPanel } from "../panels/RuntimeConfigPanel";
 import { VideoPanel } from "../panels/VideoPanel";
 import { YydsMailConfigPanel } from "../panels/YydsMailConfigPanel";
 import type { AccountListItem, PanelId } from "../types";
@@ -69,9 +71,12 @@ export function ConsoleShell({
               代理测试
             </NavButton>
           </nav>
-          <nav className="nav-list config-nav" aria-label="配置菜单">
+          <nav className="nav-list config-nav" aria-label={"\u914d\u7f6e\u83dc\u5355"}>
+            <NavButton active={activePanel === "runtimeConfig"} icon={<Settings2 size={17} />} onClick={() => onPanelChange("runtimeConfig")}>
+              {"\u8fd0\u884c\u914d\u7f6e"}
+            </NavButton>
             <NavButton active={activePanel === "yydsConfig"} icon={<KeyRound size={17} />} onClick={() => onPanelChange("yydsConfig")}>
-              YYDS配置
+              {"YYDS\u914d\u7f6e"}
             </NavButton>
           </nav>
         </div>
@@ -108,6 +113,7 @@ export function ConsoleShell({
         )}
         {activePanel === "chat" && <ChatPanel apiKey={apiKey} />}
         {activePanel === "image" && <ImagePanel apiKey={apiKey} />}
+        {activePanel === "runtimeConfig" && <RuntimeConfigPanel apiKey={apiKey} />}
         {activePanel === "yydsConfig" && <YydsMailConfigPanel apiKey={apiKey} />}
         {activePanel === "video" && <VideoPanel apiKey={apiKey} />}
         {activePanel === "probe" && (

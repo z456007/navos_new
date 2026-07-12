@@ -9,9 +9,12 @@ import { ProviderHttpClient } from "../protocols/http.js";
 import {
   buildImageGenerationPayload,
   createImageGeneration,
+  imageResponseToDisplayResults,
   imageTaskPollPathForPayload,
+  normalizeOpenAIImageData,
   pollImageTask,
-  readImageTaskId
+  readImageTaskId,
+  type ImageResponseFormat
 } from "../protocols/image.js";
 import {
   forwardModelRequest,
@@ -35,9 +38,16 @@ import {
   type NormalizedVideoTask
 } from "../protocols/video.js";
 import { YydsMailClient, YydsMailError } from "../protocols/mail/yyds-mail.js";
-import { reconcileDepletedAccountBalances } from "../services/account-balance-reconciler.js";
+import { reconcileAccountBalances } from "../services/account-balance-reconciler.js";
 import { AccountService, IMAGE_ACCOUNT_COST } from "../services/account-service.js";
 import { RuntimeConfigService, type RuntimeConfigUpdateInput } from "../services/runtime-config-service.js";
+import {
+  classifyProviderException,
+  classifyProviderResult,
+  classifyProviderSseEvent,
+  type ProviderFailureDecision
+} from "../services/provider-failure-classifier.js";
+import { DEFAULT_RUNTIME_CONFIG, type AccountBalanceReconcileScope } from "../services/runtime-config-schema.js";
 import {
   assertYydsDomainPoolConfigInput,
   isValidYydsDomainPoolDomain,
@@ -114,13 +124,6 @@ interface ProviderAuthContext {
   headers: Record<string, string>;
 }
 
-type ProviderFailureKind = "quota" | "temporary" | "invalid";
-
-interface ProviderFailureDecision {
-  kind: ProviderFailureKind;
-  text: string;
-}
-
 const CORS_ALLOW_METHODS = "GET,POST,PUT,PATCH,DELETE,OPTIONS";
 const CORS_DEFAULT_ALLOW_HEADERS = "authorization,content-type,x-api-key";
 const CORS_MAX_AGE_SECONDS = "86400";
@@ -175,6 +178,12 @@ function positiveIntegerInput(value: unknown, fallback: number, max?: number): n
   return max === undefined ? normalized : Math.min(normalized, max);
 }
 
+function accountBalanceReconcileScopeInput(value: unknown): AccountBalanceReconcileScope {
+  return value === "active" || value === "non_disabled" || value === "all" || value === "depleted"
+    ? value
+    : "depleted";
+}
+
 async function sendProviderResult(reply: FastifyReply, result: ProviderResult): Promise<void> {
   copyProviderResponseHeaders(reply, result.headers);
   await reply.status(result.status).send(result.body);
@@ -207,99 +216,7 @@ function providerResultBodyText(result: ProviderResult): string {
 }
 
 function providerResultIndicatesQuotaExhausted(result: ProviderResult): boolean {
-  if (result.status === 402) {
-    return true;
-  }
-  return providerFailureDecisionFromText(providerResultErrorText(result))?.kind === "quota";
-}
-
-function providerResultIndicatesTemporaryFailure(result: ProviderResult): boolean {
-  const errorText = providerResultErrorText(result);
-  if (result.status === 403 && /access|permission|forbidden|model|not available/i.test(errorText)) {
-    return true;
-  }
-  if ([408, 409, 425, 429].includes(result.status) || result.status >= 500) {
-    return true;
-  }
-  return providerFailureDecisionFromText(errorText)?.kind === "temporary";
-}
-
-function providerResultIndicatesInvalidAccount(result: ProviderResult): boolean {
-  const errorText = providerResultErrorText(result);
-  if (result.status === 403) {
-    return /banned|disabled|invalid.*token|credential/i.test(errorText);
-  }
-  if (result.status === 401) {
-    return true;
-  }
-  return providerFailureDecisionFromText(errorText)?.kind === "invalid";
-}
-
-function providerResultErrorText(result: ProviderResult): string {
-  if (result.status >= 400) {
-    return providerResultBodyText(result);
-  }
-  return providerStructuredErrorText(result.body) ?? "";
-}
-
-function providerStructuredErrorText(value: unknown, forceErrorContext: boolean = false): string | undefined {
-  if (typeof value === "string") {
-    return forceErrorContext ? value : undefined;
-  }
-  if (!isPlainRecordValue(value)) {
-    return undefined;
-  }
-
-  const parts: string[] = [];
-  const explicitError = value.error;
-  if (typeof explicitError === "string") {
-    parts.push(explicitError);
-  } else if (isPlainRecordValue(explicitError)) {
-    parts.push(...errorRecordTextParts(explicitError));
-  }
-
-  const code = readProviderErrorNumber(value.code)
-    ?? readProviderErrorNumber(value.status)
-    ?? readProviderErrorNumber(value.status_code);
-  const type = readProviderErrorString(value.type);
-  const hasErrorContext = forceErrorContext
-    || parts.length > 0
-    || Boolean(type && /error|failed|failure/i.test(type))
-    || (code !== undefined && code !== 0 && code !== 200);
-
-  if (hasErrorContext) {
-    parts.push(...errorRecordTextParts(value));
-    if (isPlainRecordValue(value.data)) {
-      const nested = providerStructuredErrorText(value.data, true);
-      if (nested) {
-        parts.push(nested);
-      }
-    }
-  }
-
-  const uniqueParts = [...new Set(parts.map((part) => part.trim()).filter(Boolean))];
-  return uniqueParts.length > 0 ? uniqueParts.join(" ") : undefined;
-}
-
-function errorRecordTextParts(record: Record<string, unknown>): string[] {
-  const parts: string[] = [];
-  for (const key of ["message", "msg", "error_message", "type", "code", "error_code", "status", "status_code", "reason"]) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) {
-      parts.push(value);
-    } else if (typeof value === "number" && Number.isFinite(value)) {
-      parts.push(String(value));
-    }
-  }
-  return parts;
-}
-
-function readProviderErrorString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function readProviderErrorNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return classifyProviderResult(result).accountAction === "deplete";
 }
 
 function isPlainRecordValue(value: unknown): value is Record<string, unknown> {
@@ -308,22 +225,6 @@ function isPlainRecordValue(value: unknown): value is Record<string, unknown> {
   }
   const proto = Object.getPrototypeOf(value);
   return proto === Object.prototype || proto === null;
-}
-
-function providerFailureDecisionFromText(text: string | undefined): ProviderFailureDecision | undefined {
-  if (!text) {
-    return undefined;
-  }
-  if (/insufficient_balance|积分不足|余额不足/i.test(text)) {
-    return { kind: "quota", text };
-  }
-  if (/banned|disabled|invalid.*token|credential|unauthorized|authentication/i.test(text)) {
-    return { kind: "invalid", text };
-  }
-  if (/temporar|rate.?limit|too many|timeout|timed out|overload|upstream|access|permission|forbidden|model|not available/i.test(text)) {
-    return { kind: "temporary", text };
-  }
-  return undefined;
 }
 
 function isNodeReadable(value: unknown): value is NodeJS.ReadableStream {
@@ -395,7 +296,7 @@ function createProviderFailureDetectionStream(
 function firstProviderFailureDecisionFromSseEvents(events: string[] | string): ProviderFailureDecision | undefined {
   const list = typeof events === "string" ? [events] : events;
   for (const event of list) {
-    const decision = providerFailureDecisionFromSseEvent(event);
+    const decision = classifyProviderSseEvent(event);
     if (decision) {
       return decision;
     }
@@ -403,36 +304,14 @@ function firstProviderFailureDecisionFromSseEvents(events: string[] | string): P
   return undefined;
 }
 
-function providerFailureDecisionFromSseEvent(event: string): ProviderFailureDecision | undefined {
-  const lines = event.split(/\r?\n/);
-  const eventName = lines
-    .map((line) => /^event:\s*(.+)$/i.exec(line)?.[1]?.trim().toLowerCase())
-    .find(Boolean);
-  const data = lines
-    .map((line) => /^data:\s?(.*)$/i.exec(line)?.[1])
-    .filter((line): line is string => line !== undefined)
-    .join("\n")
-    .trim();
-
-  if (!data || data === "[DONE]") {
-    return undefined;
-  }
-
-  try {
-    const parsed = JSON.parse(data) as unknown;
-    return providerFailureDecisionFromText(providerStructuredErrorText(parsed, eventName === "error"));
-  } catch {
-    return eventName === "error" ? providerFailureDecisionFromText(data) : undefined;
-  }
-}
-
 function providerExceptionResult(error: unknown): ProviderResult {
+  const decision = classifyProviderException(error);
   return {
-    status: 502,
+    status: decision.externalStatus,
     body: {
       error: {
-        message: error instanceof Error ? error.message : "Upstream request failed",
-        type: "upstream_error"
+        message: decision.message,
+        type: decision.kind
       }
     },
     headers: new Headers()
@@ -586,7 +465,13 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
   const imageTaskStore = options.imageTaskStore ?? new InMemoryImageTaskStore();
   const runtimeConfigService = options.runtimeConfigService ?? new RuntimeConfigService(
     new InMemoryRuntimeConfigStore(),
-    { imageAllowVideoReserveFallback: options.imageAllowVideoReserveFallback ?? false }
+    {
+      ...DEFAULT_RUNTIME_CONFIG,
+      imageAllowVideoReserveFallback: options.imageAllowVideoReserveFallback ?? DEFAULT_RUNTIME_CONFIG.imageAllowVideoReserveFallback,
+      imageAccountWaitMs: options.imageAccountWaitMs ?? DEFAULT_RUNTIME_CONFIG.imageAccountWaitMs,
+      imageMaxPollAttempts: options.imageMaxPollAttempts ?? DEFAULT_RUNTIME_CONFIG.imageMaxPollAttempts,
+      imagePollIntervalMs: options.imagePollIntervalMs ?? DEFAULT_RUNTIME_CONFIG.imagePollIntervalMs
+    }
   );
   const client = new ProviderHttpClient(options.providerBaseUrl, options.fetchImpl);
   let providerRegistrationAttempt: Promise<boolean> | undefined;
@@ -664,15 +549,17 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
   }
 
   async function applyStreamedProviderFailure(uid: string, decision: ProviderFailureDecision): Promise<void> {
-    if (decision.kind === "quota") {
+    if (decision.accountAction === "deplete") {
       await accountService.depleteAccount(uid);
       return;
     }
-    if (decision.kind === "invalid") {
+    if (decision.accountAction === "disable") {
       await accountService.disableAccount(uid);
       return;
     }
-    await accountService.cooldownAccount(uid, MODEL_PROXY_RETRY_COOLDOWN_SECONDS);
+    if (decision.accountAction === "cooldown") {
+      await accountService.cooldownAccount(uid, decision.retryAfterSeconds ?? MODEL_PROXY_RETRY_COOLDOWN_SECONDS);
+    }
   }
 
   function wrapStreamingProviderResultForAccount(uid: string, leaseId: string | undefined, result: ProviderResult): ProviderResult {
@@ -795,11 +682,20 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     await accountService.releaseModelAccount(auth.account.uid, auth.leaseId);
   }
 
+  function externalProviderFailureResult(decision: ProviderFailureDecision): ProviderResult {
+    return {
+      status: decision.externalStatus,
+      body: { error: { message: decision.message, type: decision.kind } },
+      headers: new Headers()
+    };
+  }
+
   async function forwardModelRequestWithAccountRotation(
     path: "/v1/chat/completions" | "/v1/responses" | "/v1/messages",
     body: Record<string, unknown>
   ): Promise<ProviderResult> {
     let lastResult: ProviderResult | undefined;
+    let lastDecision: ProviderFailureDecision | undefined;
     let registeredDuringRequest = false;
 
     for (let attempt = 0; attempt < MODEL_PROXY_MAX_ATTEMPTS; attempt += 1) {
@@ -821,18 +717,23 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       }).catch(providerExceptionResult));
       lastResult = result;
 
-      if (providerResultIndicatesQuotaExhausted(result)) {
+      const decision = classifyProviderResult(result);
+      lastDecision = decision;
+      if (decision.accountAction === "deplete") {
         await accountService.depleteAccount(auth.account.uid);
         continue;
       }
 
-      if (providerResultIndicatesInvalidAccount(result)) {
+      if (decision.accountAction === "disable") {
         await accountService.disableAccount(auth.account.uid);
         continue;
       }
 
-      if (providerResultIndicatesTemporaryFailure(result)) {
-        await accountService.cooldownAccount(auth.account.uid, MODEL_PROXY_RETRY_COOLDOWN_SECONDS);
+      if (decision.accountAction === "cooldown") {
+        await accountService.cooldownAccount(
+          auth.account.uid,
+          decision.retryAfterSeconds ?? MODEL_PROXY_RETRY_COOLDOWN_SECONDS
+        );
         continue;
       }
 
@@ -840,7 +741,9 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       return result;
     }
 
-    return lastResult ?? {
+    return lastDecision && lastDecision.accountAction !== "release" && lastDecision.accountAction !== "none"
+      ? externalProviderFailureResult(lastDecision)
+      : lastResult ?? {
       status: 503,
       body: { error: { message: "No provider account configured", type: "account_unavailable" } },
       headers: new Headers()
@@ -926,10 +829,10 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     reply: FastifyReply,
     sendUnavailable: boolean = true
   ): Promise<AccountRecord | undefined> {
-    const waitMs = sendUnavailable ? Math.max(0, options.imageAccountWaitMs ?? DEFAULT_IMAGE_ACCOUNT_WAIT_MS) : 0;
+    const runtimeConfig = await runtimeConfigService.get();
+    const waitMs = sendUnavailable ? Math.max(0, runtimeConfig.imageAccountWaitMs ?? DEFAULT_IMAGE_ACCOUNT_WAIT_MS) : 0;
     const deadline = Date.now() + waitMs;
     let attemptedRegistration = false;
-    const runtimeConfig = await runtimeConfigService.get();
     do {
       const existingAccount = await accountService.leaseImageAccount(
         leaseId,
@@ -1101,24 +1004,70 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       .includes(task.status.toLowerCase());
   }
 
-  function cachedImageTaskResult(task: ImageTaskRecord): ProviderResult | undefined {
+  function cachedImageTaskResult(task: ImageTaskRecord, defaultResponseFormat: ImageResponseFormat): ProviderResult | undefined {
     if (!isTerminalImageTask(task)) {
       return undefined;
     }
     const status = task.status.toLowerCase();
-    const succeeded = status === "succeeded" || status === "success" || status === "completed";
+    const responseFormat = imageResponseFormatFromTask(task, defaultResponseFormat);
+    const displayMode = defaultResponseFormat === "b64_json";
+    const data = task.raw ? (displayMode ? imageResponseToDisplayResults(task.raw) : normalizeOpenAIImageData(task.raw, responseFormat)) : [];
+    const succeeded = data.length > 0 || status === "succeeded" || status === "success" || status === "completed";
     const body = task.raw ?? {
       created: Math.floor((task.completedAt ?? task.updatedAt) / 1000),
       status: succeeded ? "succeeded" : "failed",
       task_id: task.taskId,
       id: task.taskId,
+      response_format: responseFormat,
       data: succeeded && task.sourceUrl ? [{ url: task.sourceUrl }] : []
     };
+    if (data.length > 0 && body && typeof body === "object" && !Array.isArray(body)) {
+      (body as Record<string, unknown>).response_format = responseFormat;
+      (body as Record<string, unknown>).status = "succeeded";
+      (body as Record<string, unknown>).data = data;
+    }
     return {
       status: succeeded ? 200 : 500,
       body,
       headers: new Headers()
     };
+  }
+
+  function imageResponseFormatFromTask(task: ImageTaskRecord, fallback: ImageResponseFormat): ImageResponseFormat {
+    return readImageResponseFormat(task.raw) ?? fallback;
+  }
+
+  function readImageResponseFormat(value: unknown): ImageResponseFormat | undefined {
+    const responseFormat = readDeepImageString(value, ["response_format"]);
+    if (responseFormat === "url" || responseFormat === "b64_json") {
+      return responseFormat;
+    }
+    return imageDataShapeResponseFormat(value);
+  }
+
+  function imageDataShapeResponseFormat(value: unknown): ImageResponseFormat | undefined {
+    if (!value || typeof value !== "object") {
+      return undefined;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const format = imageDataShapeResponseFormat(item);
+        if (format) {
+          return format;
+        }
+      }
+      return undefined;
+    }
+    const record = value as Record<string, unknown>;
+    if (typeof record.b64_json === "string" && record.b64_json) {
+      return "b64_json";
+    }
+    if (typeof record.url === "string" && record.url) {
+      return "url";
+    }
+    return imageDataShapeResponseFormat(record.data)
+      ?? imageDataShapeResponseFormat(record.result)
+      ?? imageDataShapeResponseFormat(record.output);
   }
 
   function readFirstImageUrl(body: unknown): string | undefined {
@@ -1312,11 +1261,13 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
 
     try {
       const body = bodyRecord(request);
-      const result = await reconcileDepletedAccountBalances({
+      const result = await reconcileAccountBalances({
         accountService,
         vipClient,
+        scope: accountBalanceReconcileScopeInput(body.scope),
         limit: positiveIntegerInput(body.limit, 1000, 10_000),
-        concurrency: positiveIntegerInput(body.concurrency, 5, 20)
+        concurrency: positiveIntegerInput(body.concurrency, 5, 50),
+        reactivatePositive: body.reactivatePositive !== false
       });
       await reply.send(result);
     } catch (error) {
@@ -1669,16 +1620,21 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     await sendProviderResult(reply, result);
   }
 
-  async function handleImageGeneration(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  async function handleImageGeneration(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    defaultResponseFormat: ImageResponseFormat = "b64_json"
+  ): Promise<void> {
     let payload: Record<string, unknown>;
     try {
-      payload = buildImageGenerationPayload(bodyRecord(request));
+      payload = buildImageGenerationPayload(bodyRecord(request), defaultResponseFormat);
     } catch (error) {
       await sendBadRequest(reply, error);
       return;
     }
 
     const pollPath = imageTaskPollPathForPayload(payload);
+    const runtimeConfig = await runtimeConfigService.get();
     let lastResult: ProviderResult | undefined;
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const leaseId = `image:${randomUUID()}`;
@@ -1692,8 +1648,9 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
 
       const headers = buildProviderAuthHeaders(account, options.providerAuthMode);
       const result = await createImageGeneration(client, payload, headers, {
-        maxAttempts: options.imageMaxPollAttempts,
-        intervalMs: options.imagePollIntervalMs
+        maxAttempts: runtimeConfig.imageMaxPollAttempts,
+        intervalMs: runtimeConfig.imagePollIntervalMs,
+        outputMode: defaultResponseFormat === "b64_json" ? "display" : undefined
       });
       lastResult = result;
       if (result.status === 200) {
@@ -1726,7 +1683,11 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     });
   }
 
-  async function handleGetImageGeneration(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  async function handleGetImageGeneration(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    defaultResponseFormat: ImageResponseFormat = "b64_json"
+  ): Promise<void> {
     const params = request.params as { taskId?: string };
     if (!params.taskId) {
       await reply.status(400).send({ error: { message: "taskId is required" } });
@@ -1737,7 +1698,9 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       await reply.status(404).send({ error: { message: "Image task not found" } });
       return;
     }
-    const cachedResult = cachedImageTaskResult(existingTask);
+    const responseFormat = imageResponseFormatFromTask(existingTask, defaultResponseFormat);
+    const pollResponseFormat = defaultResponseFormat === "b64_json" ? "display" : responseFormat;
+    const cachedResult = cachedImageTaskResult(existingTask, defaultResponseFormat);
     if (cachedResult) {
       await sendProviderResult(reply, cachedResult);
       return;
@@ -1749,7 +1712,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     if (!headers) {
       return;
     }
-    const result = await pollImageTask(client, params.taskId, existingTask.pollPath, headers);
+    const result = await pollImageTask(client, params.taskId, existingTask.pollPath, headers, pollResponseFormat);
     const status = readImageResponseStatus(result.body, result.status);
     if (existingTask.accountUid && result.status === 200) {
       await accountService.consumeImageAccount(existingTask.accountUid, existingTask.leaseId, IMAGE_ACCOUNT_COST);
@@ -1762,6 +1725,9 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     }
     await saveImageTaskFromResult(result, existingTask.pollPath, existingTask.accountUid, existingTask.leaseId);
     if (status === "succeeded" || status === "failed") {
+      if (result.body && typeof result.body === "object" && !Array.isArray(result.body)) {
+        (result.body as Record<string, unknown>).response_format ??= responseFormat;
+      }
       await imageTaskStore.upsert({
         taskId: existingTask.taskId,
         accountUid: existingTask.accountUid,
@@ -1780,14 +1746,14 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     if (!requireLocalAuth(request, reply)) {
       return;
     }
-    await handleImageGeneration(request, reply);
+    await handleImageGeneration(request, reply, "b64_json");
   });
 
   app.get("/api/images/generations/:taskId", async (request, reply) => {
     if (!requireLocalAuth(request, reply)) {
       return;
     }
-    await handleGetImageGeneration(request, reply);
+    await handleGetImageGeneration(request, reply, "b64_json");
   });
 
   app.post("/v1/images/generations", async (request, reply) => {
@@ -1798,14 +1764,14 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       await sendModelNotAllowed(reply, "Only gpt-image-2 is allowed on this endpoint");
       return;
     }
-    await handleImageGeneration(request, reply);
+    await handleImageGeneration(request, reply, "url");
   });
 
   app.get("/v1/images/generations/:taskId", async (request, reply) => {
     if (!requirePublicProxyAuth(request, reply)) {
       return;
     }
-    await handleGetImageGeneration(request, reply);
+    await handleGetImageGeneration(request, reply, "url");
   });
 
   app.post("/api/video/generations", async (request, reply) => {

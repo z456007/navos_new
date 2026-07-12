@@ -6,6 +6,7 @@ import {
 } from "../protocols/mail/yyds-mail.js";
 import type { VipBalance, VipClient } from "../protocols/vip-client.js";
 import type { AccountService } from "./account-service.js";
+import type { RedisRegistrationMailboxLimiter } from "./registration-mailbox-limiter.js";
 
 export interface RegistrationDomainPick {
   domain: string;
@@ -33,6 +34,7 @@ export interface RegistrationServiceOptions {
   mailboxRetryDelayMs?: number;
   /** Minimum spacing between YYDS mailbox creation requests in this process. Default 1200. */
   mailboxMinIntervalMs?: number;
+  mailboxLimiter?: RedisRegistrationMailboxLimiter;
 }
 
 export interface RegistrationResult {
@@ -172,6 +174,7 @@ export class RegistrationService {
   private readonly maxMailboxCreateAttempts: number;
   private readonly mailboxRetryDelayMs: number;
   private readonly mailboxMinIntervalMs: number;
+  private readonly mailboxLimiter?: RedisRegistrationMailboxLimiter;
   private mailboxCreateGate: Promise<void> = Promise.resolve();
   private lastMailboxCreateStartedAt = 0;
 
@@ -187,6 +190,7 @@ export class RegistrationService {
     this.maxMailboxCreateAttempts = Math.max(1, options.maxMailboxCreateAttempts ?? 5);
     this.mailboxRetryDelayMs = Math.max(0, options.mailboxRetryDelayMs ?? 5000);
     this.mailboxMinIntervalMs = Math.max(0, options.mailboxMinIntervalMs ?? 1200);
+    this.mailboxLimiter = options.mailboxLimiter;
   }
 
   /** Full registration pipeline for a single account. */
@@ -429,6 +433,10 @@ export class RegistrationService {
         };
       } catch (error) {
         lastError = error;
+        if (error instanceof YydsMailError && error.failureKind === "quota_exhausted") {
+          await this.mailboxLimiter?.blockQuota(error.retryAfterSeconds ?? 300);
+          throw withMailboxCreateAttempts(error, attempt - 1);
+        }
         if (!isMailboxRateLimitError(error) || attempt >= this.maxMailboxCreateAttempts) {
           throw withMailboxCreateAttempts(error, attempt - 1);
         }
@@ -458,7 +466,8 @@ export class RegistrationService {
         await sleep(waitMs);
       }
       this.lastMailboxCreateStartedAt = Date.now();
-      return await (await this.resolveYydsClient()).createMailbox(domain ? { domain } : undefined);
+      const create = async () => await (await this.resolveYydsClient()).createMailbox(domain ? { domain } : undefined);
+      return this.mailboxLimiter ? await this.mailboxLimiter.run(create) : await create();
     } finally {
       releaseGate();
     }

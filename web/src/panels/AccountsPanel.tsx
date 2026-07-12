@@ -8,7 +8,14 @@ import { idleStatus } from "../app/defaults";
 import { formatTime, shortText } from "../lib/accounts";
 import { nextPollingDelay } from "../lib/polling";
 import { normalizeRegistrationJob, registrationJobIsTerminal } from "../lib/registration-job";
-import type { AccountListItem, RegistrationJobMode, RegistrationJobView, StatusState } from "../types";
+import type {
+  AccountListItem,
+  BalanceReconcileResult,
+  BalanceReconcileScope,
+  RegistrationJobMode,
+  RegistrationJobView,
+  StatusState
+} from "../types";
 
 export function AccountsPanel({
   accounts,
@@ -23,9 +30,13 @@ export function AccountsPanel({
 }) {
   const [status, setStatus] = useState<StatusState>(idleStatus);
   const [job, setJob] = useState<RegistrationJobView | undefined>();
-  const [fillTarget, setFillTarget] = useState(100);
-  const [createCount, setCreateCount] = useState(10);
+  const [createCount, setCreateCount] = useState(100);
   const [jobConcurrency, setJobConcurrency] = useState(6);
+  const [balanceScope, setBalanceScope] = useState<BalanceReconcileScope>("depleted");
+  const [balanceLimit, setBalanceLimit] = useState(1000);
+  const [balanceConcurrency, setBalanceConcurrency] = useState(10);
+  const [balanceReconcileResult, setBalanceReconcileResult] = useState<BalanceReconcileResult | undefined>();
+  const [batchBalanceRefreshing, setBatchBalanceRefreshing] = useState(false);
   const [refreshingBalanceUid, setRefreshingBalanceUid] = useState<string | undefined>();
   const pollTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const pollFailures = useRef(0);
@@ -90,12 +101,10 @@ export function AccountsPanel({
     pollFailures.current = 0;
     refreshedTerminalJobId.current = undefined;
     setStatus({ kind: "loading", message: "创建注册任务中" });
-    const payload = mode === "fill"
-      ? { mode: "fill" as const, target: fillTarget, concurrency: jobConcurrency }
-      : mode === "create"
+    const payload = mode === "create"
         ? { mode: "create" as const, count: createCount, concurrency: jobConcurrency }
         : { mode: "single" as const };
-    const total = mode === "fill" ? fillTarget : mode === "create" ? createCount : 1;
+    const total = mode === "create" ? createCount : 1;
 
     try {
       const response = await apiRequest<unknown>(apiKey, "/api/registration/jobs", {
@@ -111,7 +120,6 @@ export function AccountsPanel({
         id: jobId,
         mode,
         state: "queued",
-        target: mode === "fill" ? fillTarget : undefined,
         count: mode === "create" ? createCount : undefined,
         concurrency: mode === "single" ? undefined : jobConcurrency,
         progress: { started: 0, completed: 0, failed: 0, total },
@@ -238,6 +246,30 @@ export function AccountsPanel({
     }
   }
 
+  async function reconcileBalances() {
+    setBatchBalanceRefreshing(true);
+    setStatus({ kind: "loading", message: "批量检查余额中" });
+    try {
+      const result = await apiRequest<BalanceReconcileResult>(apiKey, "/api/accounts/balances/reconcile", {
+        method: "POST",
+        body: JSON.stringify({
+          scope: balanceScope,
+          limit: balanceLimit,
+          concurrency: balanceConcurrency,
+          reactivatePositive: true
+        })
+      });
+      setBalanceReconcileResult(result);
+      const loaded = await onRefresh();
+      onAccountsChange(loaded);
+      setStatus({ kind: "ok", message: `已检查 ${result.checked} 个账号，恢复 ${result.restored} 个，失败 ${result.failed} 个` });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) ?? "批量检查余额失败" });
+    } finally {
+      setBatchBalanceRefreshing(false);
+    }
+  }
+
   const accountColumns: TableColumnsType<AccountListItem> = [
     {
       title: "UID",
@@ -321,47 +353,34 @@ export function AccountsPanel({
       </div>
 
       <div className="registration-ops" aria-label="注册任务">
-        <div className="form-row three compact">
-          <label className="text-field ant-field">
-            <span>补齐到 active 数量</span>
-            <InputNumber
-              aria-label="补齐到 active 数量"
-              max={500}
-              min={1}
-              value={fillTarget}
-              onChange={(value) => setFillTarget(clampJobNumber(value, 1, 500))}
-            />
-          </label>
+        <div className="form-row two compact">
           <label className="text-field ant-field">
             <span>新增数量</span>
             <InputNumber
               aria-label="新增数量"
-              max={500}
+              max={10000}
               min={1}
               value={createCount}
-              onChange={(value) => setCreateCount(clampJobNumber(value, 1, 500))}
+              onChange={(value) => setCreateCount(clampJobNumber(value, 1, 10000))}
             />
           </label>
           <label className="text-field ant-field">
             <span>任务并发</span>
             <InputNumber
               aria-label="任务并发"
-              max={20}
+              max={100}
               min={1}
               value={jobConcurrency}
-              onChange={(value) => setJobConcurrency(clampJobNumber(value, 1, 20))}
+              onChange={(value) => setJobConcurrency(clampJobNumber(value, 1, 100))}
             />
           </label>
         </div>
         <div className="toolbar flush">
-          <AntButton icon={<Play size={16} />} type="primary" onClick={() => void startRegistrationJob("single")}>
-            启动单个注册
-          </AntButton>
-          <AntButton icon={<Play size={16} />} onClick={() => void startRegistrationJob("fill")}>
-            补齐账号池
-          </AntButton>
-          <AntButton icon={<Play size={16} />} onClick={() => void startRegistrationJob("create")}>
+          <AntButton icon={<Play size={16} />} type="primary" onClick={() => void startRegistrationJob("create")}>
             新增注册
+          </AntButton>
+          <AntButton icon={<Play size={16} />} onClick={() => void startRegistrationJob("single")}>
+            启动单个注册
           </AntButton>
           {job && !registrationJobIsTerminal(job) && (
             <AntButton icon={<Square size={16} />} onClick={() => void cancelRegistrationJob()}>
@@ -415,6 +434,55 @@ export function AccountsPanel({
           </>
         ) : (
           <p className="status">暂无注册任务</p>
+        )}
+      </div>
+
+      <div className="registration-ops" aria-label="批量余额检查">
+        <div className="form-row three compact">
+          <label className="text-field">
+            <span>余额检查范围</span>
+            <select
+              aria-label="余额检查范围"
+              value={balanceScope}
+              onChange={(event) => setBalanceScope(event.target.value as BalanceReconcileScope)}
+            >
+              <option value="depleted">只查耗尽</option>
+              <option value="active">只查 active</option>
+              <option value="non_disabled">查非停用</option>
+              <option value="all">查全部</option>
+            </select>
+          </label>
+          <label className="text-field ant-field">
+            <span>检查数量</span>
+            <InputNumber
+              aria-label="检查数量"
+              max={10000}
+              min={1}
+              value={balanceLimit}
+              onChange={(value) => setBalanceLimit(clampJobNumber(value, 1, 10000))}
+            />
+          </label>
+          <label className="text-field ant-field">
+            <span>检查并发</span>
+            <InputNumber
+              aria-label="检查并发"
+              max={50}
+              min={1}
+              value={balanceConcurrency}
+              onChange={(value) => setBalanceConcurrency(clampJobNumber(value, 1, 50))}
+            />
+          </label>
+        </div>
+        <div className="toolbar flush">
+          <AntButton icon={<RefreshCw size={16} />} loading={batchBalanceRefreshing} onClick={() => void reconcileBalances()}>
+            批量检查余额
+          </AntButton>
+        </div>
+        {balanceReconcileResult && (
+          <p className="status">
+            已检查 {balanceReconcileResult.checked} 个账号，恢复 {balanceReconcileResult.restored} 个，仍耗尽 {balanceReconcileResult.stillDepleted} 个，
+            active 更新 {balanceReconcileResult.updatedActive} 个，disabled 更新 {balanceReconcileResult.disabledUpdated} 个，失败 {balanceReconcileResult.failed} 个
+          </p>
         )}
       </div>
 

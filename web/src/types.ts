@@ -49,7 +49,7 @@ export interface RegistrationJobView {
   finishedAt?: number;
 }
 
-export type PanelId = "accounts" | "chat" | "image" | "probe" | "video" | "yydsConfig";
+export type PanelId = "accounts" | "chat" | "image" | "probe" | "video" | "yydsConfig" | "runtimeConfig";
 
 export interface YydsMailConfig {
   id?: number;
@@ -60,8 +60,47 @@ export interface YydsMailConfig {
   updatedAt?: number;
 }
 
+export type AccountBalanceReconcileScope = "depleted" | "active" | "non_disabled" | "all";
+
+export type BalanceReconcileScope = AccountBalanceReconcileScope;
+
+export interface BalanceReconcileResult {
+  checked: number;
+  restored: number;
+  stillDepleted: number;
+  updatedActive: number;
+  disabledUpdated: number;
+  failed: number;
+  failures: Array<{ uid: string; message: string }>;
+}
+
 export interface RuntimeConfigView {
   imageAllowVideoReserveFallback: boolean;
+  imageAccountWaitMs: number;
+  imageMaxPollAttempts: number;
+  imagePollIntervalMs: number;
+  imageSyncWaitBudgetMs: number;
+  videoCreateTimeoutMs: number;
+  videoPollTimeoutMs: number;
+  modelAccountWaitMs: number;
+  accountLeaseTtlMs: number;
+  accountBalanceReconcileEnabled: boolean;
+  accountBalanceReconcileIntervalMinutes: number;
+  accountBalanceReconcileBatchSize: number;
+  accountBalanceReconcileConcurrency: number;
+  accountBalanceReconcileScope: AccountBalanceReconcileScope;
+  registrationConcurrency: number;
+  registrationMaxInFlight: number;
+  registrationMailboxCreateConcurrency: number;
+  registrationMailboxCreatePerSecond: number;
+  registrationVipSendConcurrency: number;
+  registrationPollConcurrency: number;
+  registrationLoginConcurrency: number;
+  registrationCertConcurrency: number;
+  registrationYydsQuotaBlockSeconds: number;
+  mysqlConnectionLimit: number;
+  mysqlQueueLimit: number;
+  restartRequiredKeys?: string[];
   updatedAt?: number;
 }
 

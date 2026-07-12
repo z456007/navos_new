@@ -1,6 +1,6 @@
-import mysql, { type Pool, type RowDataPacket } from "mysql2/promise";
-import type { RuntimeConfigView } from "../services/runtime-config-service.js";
-import type { MysqlConfig } from "./mysql-account-store.js";
+import type { Pool, RowDataPacket } from "mysql2/promise";
+import type { RuntimeConfigView } from "../services/runtime-config-schema.js";
+import { createMysqlPool, type MysqlConfig } from "./mysql-config.js";
 
 export interface RuntimeConfigStore {
   ensureSchema?(): Promise<void>;
@@ -33,16 +33,7 @@ export class MysqlRuntimeConfigStore implements RuntimeConfigStore {
   private readonly pool: Pool;
 
   constructor(config: MysqlConfig) {
-    this.pool = mysql.createPool({
-      host: config.host,
-      port: config.port,
-      user: config.user,
-      password: config.password,
-      database: config.database,
-      waitForConnections: true,
-      connectionLimit: 10,
-      namedPlaceholders: true
-    });
+    this.pool = createMysqlPool(config);
   }
 
   async ensureSchema(): Promise<void> {
@@ -72,7 +63,7 @@ export class MysqlRuntimeConfigStore implements RuntimeConfigStore {
         updated_at = VALUES(updated_at)`,
       {
         scope: DEFAULT_SCOPE,
-        valueJson: JSON.stringify({ imageAllowVideoReserveFallback: config.imageAllowVideoReserveFallback }),
+        valueJson: JSON.stringify(config),
         updatedAt: config.updatedAt
       }
     );
@@ -83,9 +74,9 @@ export class MysqlRuntimeConfigStore implements RuntimeConfigStore {
 function fromRow(row: RuntimeConfigRow): RuntimeConfigView {
   const parsed = parseValueJson(row.value_json);
   return {
-    imageAllowVideoReserveFallback: parsed.imageAllowVideoReserveFallback === true,
+    ...parsed,
     updatedAt: Number(row.updated_at)
-  };
+  } as RuntimeConfigView;
 }
 
 function parseValueJson(value: unknown): Record<string, unknown> {

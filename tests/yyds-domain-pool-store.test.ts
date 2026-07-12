@@ -32,7 +32,9 @@ const mysqlConfig = {
   port: 3306,
   user: "root",
   password: "secret",
-  database: "navos_test"
+  database: "navos_test",
+  connectionLimit: 100,
+  queueLimit: 0
 };
 
 describe("InMemoryYydsDomainPoolStore", () => {
@@ -118,10 +120,11 @@ describe("MysqlYydsDomainPoolStore", () => {
     expect(mysqlMocks.createPool).toHaveBeenCalledWith({
       ...mysqlConfig,
       waitForConnections: true,
-      connectionLimit: 10,
+      connectionLimit: 100,
+      queueLimit: 0,
       namedPlaceholders: true
     });
-    expect(mysqlMocks.pool.query).toHaveBeenCalledTimes(3);
+    expect(mysqlMocks.pool.query).toHaveBeenCalledTimes(4);
     expect(mysqlMocks.pool.query.mock.calls[0]?.[0]).toContain("CREATE TABLE IF NOT EXISTS yyds_domain_pool_config");
     expect(mysqlMocks.pool.query.mock.calls[1]?.[0]).toContain("CREATE TABLE IF NOT EXISTS yyds_domain_health");
     expect(mysqlMocks.pool.query.mock.calls[1]?.[0]).toContain("last_auto_checked_at");
@@ -129,6 +132,12 @@ describe("MysqlYydsDomainPoolStore", () => {
     expect(mysqlMocks.pool.execute.mock.calls[0]?.[1]).toEqual({ column: "last_auto_checked_at" });
     expect(mysqlMocks.pool.query.mock.calls[2]?.[0]).toContain("ADD COLUMN last_auto_checked_at");
     expect(mysqlMocks.pool.query.mock.calls[2]?.[0]).not.toContain("IF NOT EXISTS");
+    expect(mysqlMocks.pool.execute.mock.calls[1]?.[0]).toContain("INFORMATION_SCHEMA.STATISTICS");
+    expect(mysqlMocks.pool.execute.mock.calls[1]?.[1]).toEqual({
+      tableName: "yyds_domain_health",
+      indexName: "idx_yyds_domain_health_pick"
+    });
+    expect(mysqlMocks.pool.query.mock.calls[3]?.[0]).toContain("CREATE INDEX idx_yyds_domain_health_pick");
   });
 
   it("does not alter yyds domain health when last_auto_checked_at already exists", async () => {
@@ -158,8 +167,9 @@ describe("MysqlYydsDomainPoolStore", () => {
 
     await expect(store.ensureSchema()).resolves.toBeUndefined();
 
-    expect(mysqlMocks.pool.query).toHaveBeenCalledTimes(3);
+    expect(mysqlMocks.pool.query).toHaveBeenCalledTimes(4);
     expect(mysqlMocks.pool.query.mock.calls[2]?.[0]).toContain("ADD COLUMN last_auto_checked_at");
+    expect(mysqlMocks.pool.query.mock.calls[3]?.[0]).toContain("CREATE INDEX idx_yyds_domain_health_pick");
   });
 
   it("returns default config when no config row exists", async () => {

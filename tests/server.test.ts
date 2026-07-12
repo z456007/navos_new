@@ -8,6 +8,7 @@ import {
 } from "../src/services/registration-job-service.js";
 import { createApp } from "../src/server/app.js";
 import { InMemoryAccountStore } from "../src/store/account-store.js";
+import { InMemoryImageTaskStore } from "../src/store/image-task-store.js";
 import { InMemoryYydsMailConfigStore } from "../src/store/yyds-mail-config-store.js";
 import { SecretBox } from "../src/security/secretbox.js";
 import { InMemoryVideoTaskStore } from "../src/store/video-task-store.js";
@@ -1567,6 +1568,8 @@ describe("server routes", () => {
       checked: 2,
       restored: 1,
       stillDepleted: 1,
+      updatedActive: 0,
+      disabledUpdated: 0,
       failed: 0,
       failures: []
     });
@@ -1595,7 +1598,7 @@ describe("server routes", () => {
           return Response.json({ code: 200, data: { task_id: "img_task_1", status: "queued" } });
         }
         if (path === "/api/tasks/image/generations/img_task_1") {
-          return Response.json({ code: 200, data: { status: "succeeded", url: "https://cdn.test/image.png" } });
+          return Response.json({ code: 200, data: { status: "succeeded", b64_json: "aGVsbG8=", sizeBytes: 5, sha256: "hash-1" } });
         }
         return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
       }
@@ -1612,7 +1615,7 @@ describe("server routes", () => {
     expect(response.json()).toMatchObject({
       status: "succeeded",
       task_id: "img_task_1",
-      data: [{ url: "https://cdn.test/image.png" }]
+      data: [{ url: "data:image/png;base64,aGVsbG8=", sizeBytes: 5, sha256: "hash-1" }]
     });
     expect(forwardedAuth).toBe("Bearer u1:t1");
     expect(paths).toEqual([
@@ -1637,6 +1640,7 @@ describe("server routes", () => {
 
   it("exposes public OpenAI-compatible image generations only for gpt-image-2", async () => {
     const paths: string[] = [];
+    let forwardedBody: Record<string, unknown> | undefined;
     const store = new InMemoryAccountStore();
     await store.upsert({ uid: "u1", token: "t1", balanceRemaining: 200, balanceTotal: 200 });
     const app = createApp({
@@ -1649,6 +1653,7 @@ describe("server routes", () => {
         const path = new URL(String(url)).pathname;
         paths.push(`${init?.method ?? "GET"} ${path}`);
         if (path === "/api/tasks/navos-gpt-image-t2i") {
+          forwardedBody = JSON.parse(String(init?.body));
           return Response.json({ code: 200, data: { task_id: "img_task_public", status: "queued" } });
         }
         if (path === "/api/tasks/image/generations/img_task_public") {
@@ -1670,6 +1675,12 @@ describe("server routes", () => {
       task_id: "img_task_public",
       data: [{ url: "https://cdn.test/public.png" }]
     });
+    expect(generated.json().data[0].url).not.toMatch(/^data:image\//);
+    expect(generated.json().data[0]).not.toHaveProperty("cosUrl");
+    expect(generated.json().data[0]).not.toHaveProperty("cosKey");
+    expect(generated.json().data[0]).not.toHaveProperty("archiveStatus");
+    expect(generated.json().data[0]).not.toHaveProperty("archiveError");
+    expect(forwardedBody).toMatchObject({ response_format: "url" });
     expect(paths).toEqual([
       "POST /api/tasks/navos-gpt-image-t2i",
       "GET /api/tasks/image/generations/img_task_public"
@@ -1685,6 +1696,49 @@ describe("server routes", () => {
     expect(blocked.statusCode).toBe(400);
     expect(blocked.json()).toMatchObject({ error: { type: "model_not_allowed" } });
     expect(paths).toHaveLength(2);
+  });
+
+  it("keeps explicit public b64_json image responses OpenAI-compatible", async () => {
+    let forwardedBody: Record<string, unknown> | undefined;
+    const store = new InMemoryAccountStore();
+    await store.upsert({ uid: "u1", token: "t1", balanceRemaining: 200, balanceTotal: 200 });
+    const app = createApp({
+      masterApiKey: "sk-master",
+      publicProxyApiKeys: ["sk-public"],
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(store),
+      fetchImpl: async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        if (path === "/api/tasks/navos-gpt-image-t2i") {
+          forwardedBody = JSON.parse(String(init?.body));
+          return Response.json({ code: 200, data: { task_id: "img_task_b64", status: "queued" } });
+        }
+        if (path === "/api/tasks/image/generations/img_task_b64") {
+          return Response.json({ code: 200, data: { status: "succeeded", b64_json: "aGVsbG8=", sizeBytes: 5, sha256: "hash-1" } });
+        }
+        return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+      }
+    });
+
+    const generated = await app.inject({
+      method: "POST",
+      url: "/v1/images/generations",
+      headers: { authorization: "Bearer sk-public" },
+      payload: { model: "gpt-image-2", prompt: "white robot", response_format: "b64_json" }
+    });
+
+    expect(generated.statusCode).toBe(200);
+    expect(forwardedBody).toMatchObject({ response_format: "b64_json" });
+    expect(generated.json()).toMatchObject({
+      task_id: "img_task_b64",
+      data: [{ b64_json: "aGVsbG8=", sizeBytes: 5, sha256: "hash-1" }]
+    });
+    expect(generated.json().data[0]).not.toHaveProperty("url");
+    expect(generated.json().data[0]).not.toHaveProperty("cosUrl");
+    expect(generated.json().data[0]).not.toHaveProperty("cosKey");
+    expect(generated.json().data[0]).not.toHaveProperty("archiveStatus");
+    expect(generated.json().data[0]).not.toHaveProperty("archiveError");
   });
 
   it("lets runtime config protect video-reserve accounts from image fallback", async () => {
@@ -2008,6 +2062,82 @@ describe("server routes", () => {
     });
     expect(pollCount).toBe(2);
     expect(await store.get("u1")).toMatchObject({ balanceRemaining: 200, leaseUntil: 0 });
+  });
+
+  it("returns cached public b64_json task data by inferring legacy raw output shape", async () => {
+    const imageTaskStore = new InMemoryImageTaskStore();
+    await imageTaskStore.upsert({
+      taskId: "img_cached_b64_legacy",
+      pollPath: "/api/tasks/image/generations",
+      status: "succeeded",
+      raw: {
+        status: "succeeded",
+        task_id: "img_cached_b64_legacy",
+        data: [{ b64_json: "aGVsbG8=", sizeBytes: 5, sha256: "hash-b64" }]
+      }
+    });
+    const app = createApp({
+      masterApiKey: "sk-master",
+      publicProxyApiKeys: ["sk-public"],
+      providerBaseUrl: "https://upstream.test",
+      imageTaskStore,
+      fetchImpl: async () => {
+        throw new Error("cached task should not poll upstream");
+      }
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/images/generations/img_cached_b64_legacy",
+      headers: { authorization: "Bearer sk-public" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      status: "succeeded",
+      response_format: "b64_json",
+      task_id: "img_cached_b64_legacy",
+      data: [{ b64_json: "aGVsbG8=", sizeBytes: 5, sha256: "hash-b64" }]
+    });
+    expect(response.json().data[0]).not.toHaveProperty("url");
+  });
+
+  it("returns cached failed image tasks as succeeded when raw output is usable", async () => {
+    const imageTaskStore = new InMemoryImageTaskStore();
+    await imageTaskStore.upsert({
+      taskId: "img_cached_failed_with_output",
+      pollPath: "/api/tasks/image/generations",
+      status: "failed",
+      raw: {
+        status: "failed",
+        task_id: "img_cached_failed_with_output",
+        error: "late status drift",
+        data: [{ url: "https://cdn.test/recovered-cached.png" }]
+      }
+    });
+    const app = createApp({
+      masterApiKey: "sk-master",
+      publicProxyApiKeys: ["sk-public"],
+      providerBaseUrl: "https://upstream.test",
+      imageTaskStore,
+      fetchImpl: async () => {
+        throw new Error("cached task should not poll upstream");
+      }
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/images/generations/img_cached_failed_with_output",
+      headers: { authorization: "Bearer sk-public" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      status: "succeeded",
+      response_format: "url",
+      task_id: "img_cached_failed_with_output",
+      data: [{ url: "https://cdn.test/recovered-cached.png" }]
+    });
   });
 
   it("waits briefly for a busy image account instead of immediately failing concurrent image requests", async () => {
@@ -2997,7 +3127,7 @@ describe("server routes", () => {
       }
     });
 
-    expect(response.statusCode).toBe(402);
+    expect(response.statusCode).toBe(503);
     expect((await store.get("u1"))?.status).toBe("depleted");
     expect((await store.get("u1"))?.rateLimitedUntil).toBe(0);
   });
@@ -3483,7 +3613,7 @@ describe("server routes", () => {
       }
     });
 
-    expect(response.statusCode).toBe(503);
+    expect(response.statusCode).toBe(429);
     expect(registrationService.registerOne).toHaveBeenCalledOnce();
   });
 
