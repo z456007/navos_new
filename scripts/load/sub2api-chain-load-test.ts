@@ -57,10 +57,16 @@ const timeoutMs = Number(process.env.LOAD_TIMEOUT_MS ?? 180000);
 const reportTimeZone = process.env.LOAD_REPORT_TIME_ZONE ?? "Asia/Shanghai";
 const requestsPerScenario = positiveInt(process.env.LOAD_REQUESTS_PER_SCENARIO, 0);
 const includeMixedAll = process.env.LOAD_MIXED_ALL !== "false";
+const production100 = process.env.LOAD_PRODUCTION_100 === "true";
+const runScenariosInParallel = process.env.LOAD_SCENARIO_PARALLEL === "true" || production100;
 const referenceImageUrl = process.env.LOAD_REFERENCE_IMAGE_URL
   ?? "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+const referenceVideoUrl = process.env.LOAD_REFERENCE_VIDEO_URL;
+const referenceAudioUrl = process.env.LOAD_REFERENCE_AUDIO_URL;
 const chatModel = process.env.LOAD_CHAT_MODEL ?? "gpt-5.5";
-const deepseekModel = process.env.LOAD_DEEPSEEK_MODEL ?? "deepseek-chat";
+const codexModel = process.env.LOAD_CODEX_MODEL ?? "codex";
+const claudeCodeModel = process.env.LOAD_CLAUDE_CODE_MODEL ?? "claude-sonnet-4-6";
+const deepseekModel = process.env.LOAD_DEEPSEEK_MODEL ?? "deepseek-v4-pro";
 const imageModel = process.env.LOAD_IMAGE_MODEL ?? "gpt-image-2";
 const videoModel = process.env.LOAD_VIDEO_MODEL ?? "seedance-1.0-pro";
 const concurrencyCsv = (process.env.LOAD_CONCURRENCY ?? "100")
@@ -145,7 +151,7 @@ const recipes: ScenarioRecipe[] = [
   {
     name: "seedance-t2v",
     build: (index) => ({
-      path: "/video/generations",
+      path: "/videos/generations",
       body: {
         model: videoModel,
         prompt: `load test text-to-video ${index}`,
@@ -158,7 +164,7 @@ const recipes: ScenarioRecipe[] = [
   {
     name: "seedance-reference",
     build: (index) => ({
-      path: "/video/generations",
+      path: "/videos/generations",
       body: {
         model: videoModel,
         prompt: `load test reference-to-video ${index}`,
@@ -174,6 +180,16 @@ const recipes: ScenarioRecipe[] = [
 
 const scenarios: Scenario[] = concurrencyCsv.flatMap((concurrency) => {
   const perScenarioRequests = requestsPerScenario > 0 ? requestsPerScenario : concurrency;
+  if (production100) {
+    const target = requestsPerScenario > 0 ? requestsPerScenario : 100;
+    return [
+      { name: `codex-chat-${target}`, concurrency: target, requests: target, build: buildCodexConversation },
+      { name: `claude-code-vision-chat-${target}`, concurrency: target, requests: target, build: buildClaudeCodeVisionConversation },
+      { name: `deepseek-chat-${target}`, concurrency: target, requests: target, build: recipeByName("deepseek-chat").build },
+      { name: `gpt-image-2-mixed-${target}`, concurrency: target, requests: target, build: buildGptImage2MixedGeneration },
+      { name: `seedance-reference-video-${target}`, concurrency: target, requests: target, build: buildSeedanceReferenceVideo }
+    ];
+  }
   const individual: Scenario[] = [
     { name: `chat-${concurrency}`, concurrency, requests: perScenarioRequests, build: recipeByName("chat").build },
     { name: `long-chat-${concurrency}`, concurrency, requests: perScenarioRequests, build: recipeByName("long-chat").build },
@@ -292,8 +308,12 @@ async function runScenario(scenario: Scenario): Promise<ScenarioResult> {
 }
 
 const results: ScenarioResult[] = [];
-for (const scenario of scenarios) {
-  results.push(await runScenario(scenario));
+if (runScenariosInParallel) {
+  results.push(...await Promise.all(scenarios.map((scenario) => runScenario(scenario))));
+} else {
+  for (const scenario of scenarios) {
+    results.push(await runScenario(scenario));
+  }
 }
 
 await mkdir("docs/diagnostics", { recursive: true });
@@ -305,8 +325,12 @@ const markdown = [
   `Mode: ${mode}`,
   `Timeout: ${timeoutMs} ms`,
   `Report timezone: ${reportTimeZone}`,
+  `LOAD_PRODUCTION_100: ${production100}`,
+  `LOAD_SCENARIO_PARALLEL: ${runScenariosInParallel}`,
   `LOAD_MIXED_ALL: ${includeMixedAll}`,
   `Reference image: ${referenceImageUrl.startsWith("data:") ? "data-url" : referenceImageUrl}`,
+  `Reference video: ${referenceVideoUrl ? "configured" : "not configured"}`,
+  `Reference audio: ${referenceAudioUrl ? "configured" : "not configured"}`,
   "",
   "| scenario | total | success | 4xx | 5xx | timeout | network error | rps | p50 ms | p95 ms | p99 ms |",
   "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
@@ -340,6 +364,122 @@ function longConversation(index: number): Array<{ role: "system" | "user" | "ass
   }
   turns.push({ role: "user", content: `Summarize markers for case ${index} in one paragraph.` });
   return turns;
+}
+
+function buildCodexConversation(index: number): LoadRequest {
+  return {
+    path: "/responses",
+    body: {
+      model: codexModel,
+      input: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: [
+                `Codex real load case ${index}.`,
+                "This is a production concurrency test through Sub2Api.",
+                "Keep the answer short and include the word codex-ok."
+              ].join(" ")
+            }
+          ]
+        }
+      ],
+      max_output_tokens: 256,
+      stream: false
+    }
+  };
+}
+
+function buildClaudeCodeVisionConversation(index: number): LoadRequest {
+  const toolUseId = `toolu_load_${index}`;
+  return {
+    path: "/messages",
+    body: {
+      model: claudeCodeModel,
+      max_tokens: 512,
+      stream: false,
+      messages: [
+        {
+          role: "assistant",
+          content: [{
+            type: "tool_use",
+            id: toolUseId,
+            name: "Read",
+            input: { file_path: `reference-${index}.png` }
+          }]
+        },
+        {
+          role: "user",
+          content: [{
+            type: "tool_result",
+            tool_use_id: toolUseId,
+            content: [
+              {
+                type: "text",
+                text: "Claude Code real load vision check. I attached a reference image from a tool result. Tell me whether you can actually inspect the image, and describe what you see in one short Chinese sentence."
+              },
+              {
+                type: "image",
+                source: anthropicImageSource(referenceImageUrl)
+              }
+            ]
+          }]
+        }
+      ]
+    }
+  };
+}
+
+function buildGptImage2MixedGeneration(index: number): LoadRequest {
+  const withReference = index % 2 === 1;
+  return {
+    path: "/images/generations",
+    body: {
+      model: imageModel,
+      prompt: withReference
+        ? `real load gpt-image-2 reference image generation case ${index}: transform the attached reference into a clean product poster`
+        : `real load gpt-image-2 text-to-image generation case ${index}: futuristic server rack in blue green light`,
+      response_format: "url",
+      size: "1024x1024",
+      ...(withReference ? { images: [referenceImageUrl] } : {})
+    }
+  };
+}
+
+function buildSeedanceReferenceVideo(index: number): LoadRequest {
+  const body: Record<string, unknown> = {
+    model: videoModel,
+    prompt: `real load seedance reference video case ${index}: camera pushes through a neon AI operations room, smooth cinematic motion`,
+    images: [referenceImageUrl],
+    imageRoles: ["first_frame"],
+    duration: 5,
+    aspect_ratio: "16:9",
+    resolution: "720P",
+    response_format: "url"
+  };
+  if (referenceVideoUrl) {
+    body.videos = [referenceVideoUrl];
+    body.videoRoles = ["reference_video"];
+  }
+  if (referenceAudioUrl) {
+    body.audioRef = referenceAudioUrl;
+    body.audioRoles = ["reference_audio"];
+  }
+  return { path: "/videos/generations", body };
+}
+
+function anthropicImageSource(url: string): Record<string, unknown> {
+  const match = /^data:([^;,]+);base64,(.+)$/i.exec(url);
+  if (match) {
+    return {
+      type: "base64",
+      media_type: match[1] ?? "image/png",
+      data: match[2] ?? ""
+    };
+  }
+  return { type: "url", url };
 }
 
 function isAbortError(error: unknown): boolean {
