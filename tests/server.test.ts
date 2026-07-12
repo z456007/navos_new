@@ -2894,18 +2894,15 @@ describe("server routes", () => {
       aspectRatio: "16:9",
       resolution: "720P",
       audio: true,
+      generate_audio: true,
+      size: "16:9",
       mode: "omni_reference",
       generation_mode: "omni_reference",
-      image: "https://cdn.test/upload-1.bin",
-      imageRoles: ["first_frame"],
-      videos: ["https://cdn.test/upload-2.bin"],
-      videoRoles: ["reference_video"],
-      audioRef: "https://assets.test/music.mp3",
-      audioRoles: ["reference_audio"],
+      image_with_roles: [{ url: "https://cdn.test/upload-1.bin", role: "first_frame" }],
+      image_urls: ["https://assets.test/style.png"],
+      video_urls: ["https://cdn.test/upload-2.bin"],
+      audio_urls: ["https://assets.test/music.mp3"],
       metadata: {
-        reference_images: ["https://assets.test/style.png"],
-        reference_videos: ["https://cdn.test/upload-2.bin"],
-        reference_audios: ["https://assets.test/music.mp3"],
         generate_audio: true
       }
     });

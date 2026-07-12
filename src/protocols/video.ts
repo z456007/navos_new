@@ -203,15 +203,7 @@ export function normalizeSeedanceVideoPayload(body: Record<string, unknown>): Re
       .filter((image) => !isFrameRole(image.role))
       .map((image) => image.source)
   );
-  if (referenceImages.length > 0) {
-    metadata.reference_images = referenceImages;
-  }
-  if (videos.length > 0) {
-    metadata.reference_videos = videos.map((video) => video.source);
-  }
-  if (audioRefs.length > 0) {
-    metadata.reference_audios = audioRefs.map((audio) => audio.source);
-  }
+  const frameImages = images.filter((image) => isFrameRole(image.role));
   for (const key of ["negative_prompt", "style", "quality_level"]) {
     const value = firstDefined(body[key], sourceMetadata[key]);
     if (value) {
@@ -232,39 +224,29 @@ export function normalizeSeedanceVideoPayload(body: Record<string, unknown>): Re
     watermark: Boolean(firstDefined(body.watermark, false)),
     timeoutMs: firstDefined(body.timeoutMs, body.timeout_ms),
     response_format: firstDefined(body.response_format, "url"),
+    generate_audio: audioEnabled,
+    size: firstDefined(body.size, aspectRatio),
     metadata
   };
 
   copyIfPresent(payload, body, "mode");
   copyIfPresent(payload, body, "generation_mode");
-  if (images.length > 0) {
-    const firstFrame = images.find((image) => isFirstFrameRole(image.role));
-    if (firstFrame) {
-      payload.image = firstFrame.source;
-      payload.imageRoles = [firstFrame.role || "first_frame"];
-    }
-    const lastFrame = images.find((image) => isLastFrameRole(image.role));
-    if (lastFrame) {
-      payload.last_frame_image = lastFrame.source;
-      payload.image_tail_url = lastFrame.source;
-    }
+  if (referenceImages.length > 0) {
+    payload.image_urls = referenceImages;
+  }
+  if (frameImages.length > 0) {
+    payload.image_with_roles = frameImages.map((image) => ({
+      url: image.source,
+      role: image.role
+    }));
   }
   if (videos.length > 0) {
-    payload.videos = videos.map((video) => video.source);
-    payload.videoRoles = videos.map((video) => video.role || "reference_video");
+    payload.video_urls = videos.map((video) => video.source);
   }
   if (audioRefs.length > 0) {
-    payload.audioRef = audioRefs[0]?.source;
-    if (audioRefs.length > 1) {
-      payload.audioRefs = audioRefs.slice(1).map((audio) => audio.source);
-    }
-    payload.audioRoles = audioRefs.map((audio) => audio.role || "reference_audio");
+    payload.audio_urls = audioRefs.map((audio) => audio.source);
   }
-  if (body.size) {
-    payload.size = body.size;
-  } else {
-    Object.assign(payload, seedanceDimensions(aspectRatio, resolution));
-  }
+  Object.assign(payload, seedanceDimensions(aspectRatio, resolution));
   copyIfPresent(payload, body, "fps");
 
   const providerOptions = isRecord(body.providerOptions) ? { ...body.providerOptions } : {};
@@ -348,6 +330,25 @@ async function uploadVideoPayloadLocalAssets(
   await uploadList("videos", "video/mp4");
   await uploadList("audioRef", "audio/mpeg");
   await uploadList("audioRefs", "audio/mpeg");
+  await uploadList("image_urls", "image/png");
+  const roleImages = result.image_with_roles;
+  if (Array.isArray(roleImages)) {
+    result.image_with_roles = await Promise.all(roleImages.map(async (item) => {
+      if (!isRecord(item)) {
+        return item;
+      }
+      const source = readStringValue(firstDefined(item.url, item.image_url, item.source, item.src));
+      if (!source) {
+        return item;
+      }
+      return {
+        ...item,
+        url: await uploadOne(source, "image/png")
+      };
+    }));
+  }
+  await uploadList("video_urls", "video/mp4");
+  await uploadList("audio_urls", "audio/mpeg");
 
   const metadata = result.metadata;
   if (isRecord(metadata)) {
