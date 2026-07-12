@@ -129,6 +129,22 @@ describe("video protocol", () => {
     });
   });
 
+  it("keeps explicit generic reference images in metadata instead of promoting them to the first frame field", () => {
+    const payload = normalizeSeedanceVideoPayload({
+      prompt: "animate this style reference",
+      images: ["https://assets.test/style.png"],
+      imageRoles: ["reference_image"]
+    });
+
+    expect(payload).not.toHaveProperty("image");
+    expect(payload).not.toHaveProperty("imageRoles");
+    expect(payload).toMatchObject({
+      metadata: {
+        reference_images: ["https://assets.test/style.png"]
+      }
+    });
+  });
+
   it("uploads local data URL references before creating a video payload", async () => {
     const paths: string[] = [];
     const client = new ProviderHttpClient("https://upstream.test", async (url) => {

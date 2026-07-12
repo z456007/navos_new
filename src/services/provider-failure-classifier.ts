@@ -19,7 +19,7 @@ type ClassifiedKind = Exclude<ProviderFailureKind, "none">;
 
 const QUOTA_PATTERN = /insufficient[_ -]?balance|quota[_ -]?(exhausted|exceeded)|积分不足|余额不足|额度不足/i;
 const INVALID_ACCOUNT_PATTERN = /invalid.*token|token.*invalid|credential|unauthorized|authentication|banned|account.*disabled/i;
-const RATE_LIMIT_PATTERN = /rate.?limit|too many|temporarily unavailable|try again later/i;
+const RATE_LIMIT_PATTERN = /rate.?limit|too many|temporarily unavailable|try again later|频率.*限制|请求频率|限流|稍后再试/i;
 const USER_ERROR_PATTERN = /invalid|bad request|unsupported|policy|content|prompt|image_url|parameter|参数/i;
 
 export function classifyProviderResult(result: ProviderClassifierResultInput): ProviderFailureDecision {
@@ -201,10 +201,12 @@ function collectErrorTextParts(record: Record<string, unknown>, forceErrorContex
   const explicitError = record.error;
   const hasExplicitError = explicitError !== undefined && explicitError !== null;
   const type = stringPart(record.type);
-  const code = stringPart(record.code) ?? stringPart(record.error_code) ?? stringPart(record.status) ?? stringPart(record.status_code);
+  const code = stringPart(record.code) ?? stringPart(record.error_code) ?? stringPart(record.status_code);
+  const status = stringPart(record.status);
   const hasErrorContext = forceErrorContext
     || hasExplicitError
     || Boolean(type && /error|failed|failure/i.test(type))
+    || Boolean(status && statusIndicatesError(status))
     || Boolean(code && code !== "0" && code !== "200");
 
   if (typeof explicitError === "string") {
@@ -230,13 +232,21 @@ function collectErrorTextParts(record: Record<string, unknown>, forceErrorContex
 
 function errorRecordTextParts(record: Record<string, unknown>): string[] {
   const parts: string[] = [];
-  for (const key of ["message", "msg", "error_message", "type", "code", "error_code", "status", "status_code", "reason"]) {
+  for (const key of ["message", "msg", "error_message", "type", "code", "error_code", "status_code", "reason"]) {
     const part = stringPart(record[key]);
     if (part) {
       parts.push(part);
     }
   }
+  const status = stringPart(record.status);
+  if (status && statusIndicatesError(status)) {
+    parts.push(status);
+  }
   return parts;
+}
+
+function statusIndicatesError(status: string): boolean {
+  return /fail|error|cancel|reject|denied|invalid|expired/i.test(status);
 }
 
 function stringPart(value: unknown): string | undefined {

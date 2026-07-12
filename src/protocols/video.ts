@@ -199,7 +199,7 @@ export function normalizeSeedanceVideoPayload(body: Record<string, unknown>): Re
   };
 
   const referenceImages = dedupeStrings(
-    images.slice(1)
+    images
       .filter((image) => !isFrameRole(image.role))
       .map((image) => image.source)
   );
@@ -238,9 +238,12 @@ export function normalizeSeedanceVideoPayload(body: Record<string, unknown>): Re
   copyIfPresent(payload, body, "mode");
   copyIfPresent(payload, body, "generation_mode");
   if (images.length > 0) {
-    payload.image = images[0]?.source;
-    payload.imageRoles = [images[0]?.role || "reference_image"];
-    const lastFrame = images.slice(1).find((image) => isLastFrameRole(image.role));
+    const firstFrame = images.find((image) => isFirstFrameRole(image.role));
+    if (firstFrame) {
+      payload.image = firstFrame.source;
+      payload.imageRoles = [firstFrame.role || "first_frame"];
+    }
+    const lastFrame = images.find((image) => isLastFrameRole(image.role));
     if (lastFrame) {
       payload.last_frame_image = lastFrame.source;
       payload.image_tail_url = lastFrame.source;
@@ -510,6 +513,10 @@ function normalizeVideoModel(model: string): string {
 
 function isFrameRole(role: string): boolean {
   return ["first_frame", "first_frame_image", "last_frame", "last_frame_image"].includes(role);
+}
+
+function isFirstFrameRole(role: string): boolean {
+  return ["first_frame", "first_frame_image"].includes(role);
 }
 
 function isLastFrameRole(role: string): boolean {

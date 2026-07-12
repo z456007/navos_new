@@ -2346,6 +2346,47 @@ describe("server routes", () => {
     expect(await store.get("u2")).toMatchObject({ balanceRemaining: 100, leaseUntil: 0 });
   });
 
+  it("returns rate_limited when every image account is rate limited by the provider", async () => {
+    const store = new InMemoryAccountStore();
+    await store.upsert({ uid: "u1", token: "t1", balanceRemaining: 200, balanceTotal: 200 });
+    await store.upsert({ uid: "u2", token: "t2", balanceRemaining: 200, balanceTotal: 200 });
+    let taskSeq = 0;
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(store),
+      fetchImpl: async (url) => {
+        const path = new URL(String(url)).pathname;
+        if (path === "/api/tasks/navos-gpt-image-t2i") {
+          taskSeq += 1;
+          return Response.json({ code: 200, msg: "success", data: { task_id: `img_rate_${taskSeq}`, status: "queued" } });
+        }
+        if (path.startsWith("/api/tasks/image/generations/img_rate_")) {
+          return Response.json({
+            code: 200,
+            msg: "success",
+            data: { status: "failed", error: "\u8bf7\u6c42\u9891\u7387\u8d85\u8fc7\u9650\u5236" }
+          });
+        }
+        return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/images/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { model: "gpt-image-2", prompt: "white robot", n: 1, quality: "low", size: "1024x1024" }
+    });
+
+    expect(response.statusCode).toBe(429);
+    expect(response.json()).toMatchObject({ error: { type: "rate_limited" } });
+    expect(response.json().error.message).toContain("\u8bf7\u6c42\u9891\u7387\u8d85\u8fc7\u9650\u5236");
+    expect((await store.get("u1"))?.rateLimitedUntil).toBeGreaterThan(Date.now());
+    expect((await store.get("u2"))?.rateLimitedUntil).toBeGreaterThan(Date.now());
+  });
+
   it("exposes v1 video generation compatibility routes", async () => {
     const paths: string[] = [];
     const accountService = new AccountService(new InMemoryAccountStore());

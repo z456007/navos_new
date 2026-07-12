@@ -13,29 +13,23 @@ Reference audio: not configured
 
 | scenario | total | success | 4xx | 5xx | timeout | network error | rps | p50 ms | p95 ms | p99 ms |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| codex-chat-10 | 10 | 0 | 0 | 10 | 0 | 0 | 0.43 | 21285 | 23068 | 23068 |
-| claude-code-vision-chat-10 | 10 | 10 | 0 | 0 | 0 | 0 | 0.86 | 11234 | 11692 | 11692 |
-| deepseek-chat-10 | 10 | 10 | 0 | 0 | 0 | 0 | 0.9 | 10069 | 11110 | 11110 |
-| gpt-image-2-mixed-10 | 10 | 4 | 0 | 6 | 0 | 0 | 0.11 | 25752 | 89913 | 89913 |
-| seedance-reference-video-10 | 10 | 0 | 0 | 10 | 0 | 0 | 0.8 | 10709 | 12570 | 12570 |
+| codex-chat-10 | 10 | 10 | 0 | 0 | 0 | 0 | 0.98 | 8616 | 10225 | 10225 |
+| claude-code-vision-chat-10 | 10 | 10 | 0 | 0 | 0 | 0 | 0.73 | 10487 | 13742 | 13742 |
+| deepseek-chat-10 | 10 | 10 | 0 | 0 | 0 | 0 | 1.07 | 8884 | 9316 | 9316 |
+| gpt-image-2-mixed-10 | 10 | 2 | 0 | 8 | 0 | 0 | 0.14 | 23838 | 71924 | 71924 |
+| seedance-reference-video-10 | 10 | 0 | 0 | 10 | 0 | 0 | 0.71 | 9105 | 14149 | 14149 |
 
 ## Error Summary
 
 | scenario | category | count |
 |---|---|---:|
-| codex-chat-10 | server_error | 10 |
-| gpt-image-2-mixed-10 | server_error | 6 |
+| gpt-image-2-mixed-10 | server_error | 8 |
 | seedance-reference-video-10 | server_error | 10 |
 
 ## Failure Samples
 
 | scenario | status | category | path | body snippet |
 |---|---:|---|---|---|
-| codex-chat-10 | 502 | server_error | /responses | {"error":{"message":"Upstream service temporarily unavailable","type":"upstream_error"}} |
-| codex-chat-10 | 502 | server_error | /responses | {"error":{"message":"Upstream service temporarily unavailable","type":"upstream_error"}} |
-| codex-chat-10 | 502 | server_error | /responses | {"error":{"message":"Upstream service temporarily unavailable","type":"upstream_error"}} |
-| codex-chat-10 | 502 | server_error | /responses | {"error":{"message":"Upstream service temporarily unavailable","type":"upstream_error"}} |
-| codex-chat-10 | 502 | server_error | /responses | {"error":{"message":"Upstream service temporarily unavailable","type":"upstream_error"}} |
 | gpt-image-2-mixed-10 | 502 | server_error | /images/generations | {"error":{"message":"Upstream service temporarily unavailable","type":"upstream_error"}} |
 | gpt-image-2-mixed-10 | 502 | server_error | /images/generations | {"error":{"message":"Upstream service temporarily unavailable","type":"upstream_error"}} |
 | gpt-image-2-mixed-10 | 502 | server_error | /images/generations | {"error":{"message":"Upstream service temporarily unavailable","type":"upstream_error"}} |

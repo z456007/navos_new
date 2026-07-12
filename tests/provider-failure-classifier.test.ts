@@ -60,6 +60,12 @@ describe("provider failure classifier", () => {
       accountAction: "cooldown",
       externalStatus: 429
     });
+
+    expect(decisionFor(500, { error: { message: "请求频率超过限制" } })).toMatchObject({
+      kind: "rate_limited",
+      accountAction: "cooldown",
+      externalStatus: 429
+    });
   });
 
   it("maps user prompt parameter content policy image_url bad request failures to release with original 4xx", () => {
@@ -96,6 +102,18 @@ describe("provider failure classifier", () => {
     expect(decisionFor(200, {
       id: "chatcmpl_1",
       choices: [{ message: { content: "The text insufficient_balance appears in docs." } }]
+    })).toEqual({
+      kind: "none",
+      accountAction: "none",
+      externalStatus: 200,
+      message: "success"
+    });
+
+    expect(decisionFor(200, {
+      id: "resp_1",
+      object: "response",
+      status: "completed",
+      output: [{ type: "message", content: [{ type: "output_text", text: "ok" }] }]
     })).toEqual({
       kind: "none",
       accountAction: "none",

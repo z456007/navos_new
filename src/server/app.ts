@@ -733,6 +733,15 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     };
   }
 
+  function exhaustedAccountRetryFailureResult(
+    lastResult: ProviderResult,
+    lastDecision: ProviderFailureDecision | undefined
+  ): ProviderResult {
+    return lastDecision?.kind === "rate_limited"
+      ? externalProviderFailureResult(lastDecision)
+      : lastResult;
+  }
+
   async function forwardModelRequestWithAccountRotation(
     path: "/v1/chat/completions" | "/v1/responses" | "/v1/messages",
     body: Record<string, unknown>
@@ -1709,12 +1718,13 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     const pollPath = imageTaskPollPathForPayload(payload);
     const runtimeConfig = await runtimeConfigService.get();
     let lastResult: ProviderResult | undefined;
+    let lastDecision: ProviderFailureDecision | undefined;
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const leaseId = `image:${randomUUID()}`;
       const account = await leaseImageAccountOrRegister(leaseId, reply, !lastResult);
       if (!account) {
         if (lastResult) {
-          await sendProviderResult(reply, lastResult);
+          await sendProviderResult(reply, exhaustedAccountRetryFailureResult(lastResult, lastDecision));
         }
         return;
       }
@@ -1735,6 +1745,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
         attempt: attempt + 1
       });
       lastResult = result;
+      lastDecision = classifyProviderResult(result);
       if (result.status === 200) {
         await accountService.consumeImageAccount(account.uid, leaseId, IMAGE_ACCOUNT_COST);
         await saveImageTaskFromResult(result, pollPath, account.uid, leaseId);
@@ -1746,7 +1757,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
         await sendProviderResult(reply, result);
         return;
       }
-      if (providerResultIndicatesQuotaExhausted(result)) {
+      if (lastDecision.accountAction === "deplete") {
         await accountService.depleteAccount(account.uid);
         continue;
       }
@@ -1758,7 +1769,9 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       await accountService.cooldownAccount(account.uid, 30);
     }
 
-    await sendProviderResult(reply, lastResult ?? {
+    await sendProviderResult(reply, lastResult
+      ? exhaustedAccountRetryFailureResult(lastResult, lastDecision)
+      : {
       status: 503,
       body: { error: { message: "All image accounts attempted — none succeeded", type: "server_error" } },
       headers: new Headers()
