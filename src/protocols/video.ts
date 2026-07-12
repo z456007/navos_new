@@ -116,7 +116,7 @@ function mapStatus(status: string | undefined): NormalizedVideoStatus {
   if (["queued", "pending", "created"].includes(normalized)) {
     return "queued";
   }
-  if (["deducted", "running", "processing", "generating", "in_progress"].includes(normalized)) {
+  if (["asset_pending", "deducted", "running", "processing", "generating", "in_progress"].includes(normalized)) {
     return "running";
   }
   if (["success", "succeeded", "completed", "done"].includes(normalized)) {

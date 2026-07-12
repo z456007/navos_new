@@ -66,6 +66,9 @@ const requestsPerScenario = positiveInt(process.env.LOAD_REQUESTS_PER_SCENARIO, 
 const includeMixedAll = process.env.LOAD_MIXED_ALL !== "false";
 const production100 = process.env.LOAD_PRODUCTION_100 === "true";
 const runScenariosInParallel = process.env.LOAD_SCENARIO_PARALLEL === "true" || production100;
+const pollMedia = process.env.LOAD_POLL_MEDIA !== "false";
+const mediaPollIntervalMs = nonNegativeInt(process.env.LOAD_MEDIA_POLL_INTERVAL_MS, 5000);
+const mediaPollMaxAttempts = positiveInt(process.env.LOAD_MEDIA_POLL_MAX_ATTEMPTS, 60);
 const DEFAULT_REFERENCE_IMAGE_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAUAAAADICAIAAAAWZq/8AAAEL0lEQVR42u3dsU0DQRCGUXcAGRWQUIc7oRLKoiYCIiQCAsiRrPP5fDf/zJO+Ciw/rXb3dvf09f0jKbSTn0ACWBLAkgCWAJYEsCSAJQEsASwJYEkASwBLAlgSwJIAlgCWBLAkgCUBLAEsCWBJAEsASwJYEsCSAJYAlgSwJIAlASwBLAlgSQBLAEsC+FLPrx9al3+tAAZYAAMMsAAWwAIYYAEMMMACGGCABbAAFsAAC2CAAT6kz/MZVIABrq50XQADDHAYWpgBBriP28mSAQa4j9uBkgEGuCfdIYwBBrgz3faMAQZ4hN6uhgEGeATdrowBBniW3maGAQZ4Ft1mjAEGeKjeHoYBBniu3gaGAQZ4tN50wwADPF1vtGGAAaY32DDAANMbbBhggOkNNpwB+OHpZUgRgBvrjTMMMMD0BhsGGGCAAQZ4BuAheoMMAwwwvcGGAQYYYIAB7g54oN4Iw/aB7QPTG2wYYIABBhjgvoCH6y1uGGCAAQYY4KaA0S1uGGCAAQYYYIABBlilAENb3zDAAAMMMMAAAwyw6gDGNcIwwAADDDDAAAMMsAAG2HHCyEOCpQCDmmIYYIABBhhggAEGGGCAAQYYYIABBhhgAQwwwADbBxbAAAMMMMAAA9wbMKJBhgEGmGEjMMAAAwywAAYYYIABBhhggAUwwAADDLAABhhggAEGGGCAAQYYRXdi0QswwP96fH/7C2CAAQ4GfCNjVgEG+HjAqyWzCjDAhQCvYIyrt5EArgX4KsbEAgxwRcALGRMLMMCHbSMtZHxZMrSV9QI8Yh/4FsbcAgxwiQ851jHmFmCAC32JtYIxumX1Ajz0U8qrGNMLMMAVv4VevspFL8AA1z3MgDHAAMefRsI4Ti/AAGMcrBdggE2PAQa444F+A3J9vQADjHGwXoABxhhggGcAnsM4RS/AAFvlCtYLMMC33nrXjHGWXoAB3ubmyh6M4/QCDPCW10dHM07UCzDA218Bnzg9DtULMMB3fMYhhXGuXoABvvtTLMUZR+sFGOCdnlOqyThdL8AAD2XcgC7AAB/zsuHhq1xt9AIM8JEPlO7PuBNdgAEu8cjwboz76QUY4BGMW9IFGOBUxsslN6YLMMBtB+T2bgEGuOEq1xy3AAPcbfd4oF6AAc6wveGjxwADDHDATSAAAwxwvGSAAQYYY4ABBhjjToAl02OApdEDMsDCGGAJY4AljAGWpqxyASySgxkDLIyDGQMsjIMZAywFT48BloIHZIClYMYAS8GMAZaCGQMsBa9yASwFD8gAS8GMAZaCGQMsBU+PAZaCB2SApWDGAEvBjAGWghkDLB3MGGApWDLAUjBjgKVgxgBLwYwBloYGsASwJIAlASwBLAlgSQBLAlgCWBLAkgCWAJYEsCSAJQEsASwJYEkASwJYAlgSwJIAlgCWBLAkgCUBLPXtF1CSxZ6X3shOAAAAAElFTkSuQmCC";
 const referenceImageUrl = process.env.LOAD_REFERENCE_IMAGE_URL ?? DEFAULT_REFERENCE_IMAGE_URL;
 const referenceVideoUrl = process.env.LOAD_REFERENCE_VIDEO_URL;
@@ -287,13 +290,28 @@ async function runScenario(scenario: Scenario): Promise<ScenarioResult> {
           signal: controller.signal
         });
         const responseBody = await response.text();
-        if (response.status >= 200 && response.status < 400) success += 1;
-        else if (response.status >= 400 && response.status < 500) {
-          clientError += 1;
-          recordFailure(response.status, classifyFailureBody(response.status, responseBody), path, responseBody);
+        const mediaOutcome = response.status >= 200 && response.status < 400 && pollMedia
+          ? await pollMediaTask(path, requestApiKey, response.status, responseBody, controller.signal)
+          : undefined;
+        if (mediaOutcome?.timedOut) {
+          timeout += 1;
+          recordFailure("timeout", "timeout", mediaOutcome.path, mediaOutcome.bodyText);
+        } else if (mediaOutcome?.networkError) {
+          networkError += 1;
+          recordFailure("network", "network_error", mediaOutcome.path, mediaOutcome.bodyText);
         } else {
-          serverError += 1;
-          recordFailure(response.status, classifyFailureBody(response.status, responseBody), path, responseBody);
+          const finalStatus = mediaOutcome?.status ?? response.status;
+          const finalBody = mediaOutcome?.bodyText ?? responseBody;
+          const finalPath = mediaOutcome?.path ?? path;
+          const mediaFailed = mediaBodyIndicatesFailure(finalBody);
+          if (finalStatus >= 200 && finalStatus < 400 && !mediaFailed) success += 1;
+          else if (finalStatus >= 400 && finalStatus < 500) {
+            clientError += 1;
+            recordFailure(finalStatus, classifyFailureBody(finalStatus, finalBody), finalPath, finalBody);
+          } else {
+            serverError += 1;
+            recordFailure(finalStatus >= 200 && finalStatus < 400 ? 500 : finalStatus, classifyFailureBody(finalStatus, finalBody), finalPath, finalBody);
+          }
         }
         latencies.push(performance.now() - start);
       } catch (error) {
@@ -345,6 +363,65 @@ async function runScenario(scenario: Scenario): Promise<ScenarioResult> {
   };
 }
 
+interface MediaPollOutcome {
+  status: number;
+  path: string;
+  bodyText: string;
+  timedOut?: boolean;
+  networkError?: boolean;
+}
+
+async function pollMediaTask(
+  path: string,
+  apiKey: string,
+  createStatus: number,
+  createBodyText: string,
+  signal: AbortSignal
+): Promise<MediaPollOutcome | undefined> {
+  const taskId = readMediaTaskId(createBodyText);
+  if (!taskId || mediaBodyIsTerminal(createBodyText)) {
+    return undefined;
+  }
+
+  let pollPath: string | undefined;
+  if (path.startsWith("/videos/generations")) {
+    pollPath = `/videos/${encodeURIComponent(taskId)}`;
+  } else if (path.startsWith("/images/generations") && createStatus === 202) {
+    pollPath = `/images/generations/${encodeURIComponent(taskId)}`;
+  }
+  if (!pollPath) {
+    return undefined;
+  }
+
+  for (let attempt = 0; attempt < mediaPollMaxAttempts; attempt += 1) {
+    if (attempt > 0 && mediaPollIntervalMs > 0) {
+      await sleep(mediaPollIntervalMs, signal);
+    }
+    try {
+      const response = await fetch(`${baseUrl}${pollPath}`, {
+        method: "GET",
+        headers: { authorization: `Bearer ${apiKey}` },
+        signal
+      });
+      const bodyText = await response.text();
+      if (response.status < 200 || response.status >= 400 || mediaBodyIsTerminal(bodyText)) {
+        return { status: response.status, path: pollPath, bodyText };
+      }
+    } catch (error) {
+      return isAbortError(error)
+        ? { status: 0, path: pollPath, bodyText: errorMessage(error), timedOut: true }
+        : { status: 0, path: pollPath, bodyText: errorMessage(error), networkError: true };
+    }
+  }
+
+  return {
+    status: 0,
+    path: pollPath,
+    bodyText: `media task ${taskId} did not reach a terminal state after ${mediaPollMaxAttempts} polls`,
+    timedOut: true
+  };
+}
+
 const results: ScenarioResult[] = [];
 if (runScenariosInParallel) {
   results.push(...await Promise.all(scenarios.map((scenario) => runScenario(scenario))));
@@ -366,6 +443,7 @@ const markdown = [
   `LOAD_PRODUCTION_100: ${production100}`,
   `LOAD_SCENARIO_PARALLEL: ${runScenariosInParallel}`,
   `LOAD_MIXED_ALL: ${includeMixedAll}`,
+  `LOAD_POLL_MEDIA: ${pollMedia}`,
   `Reference image: ${referenceImageUrl.startsWith("data:") ? "data-url" : referenceImageUrl}`,
   `Reference video: ${referenceVideoUrl ? "configured" : "not configured"}`,
   `Reference audio: ${referenceAudioUrl ? "configured" : "not configured"}`,
@@ -523,6 +601,99 @@ function anthropicImageSource(url: string): Record<string, unknown> {
   return { type: "url", url };
 }
 
+async function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  if (ms <= 0) {
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException("The operation was aborted", "AbortError"));
+    };
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function readMediaTaskId(bodyText: string): string | undefined {
+  const parsed = parseJsonObject(bodyText);
+  return parsed ? firstStringAtPaths(parsed, [
+    ["task_id"],
+    ["taskId"],
+    ["id"],
+    ["data", "task_id"],
+    ["data", "taskId"],
+    ["data", "id"],
+    ["raw", "data", "task_id"],
+    ["raw", "data", "id"]
+  ]) : undefined;
+}
+
+function mediaBodyIsTerminal(bodyText: string): boolean {
+  const status = mediaStatus(bodyText);
+  return ["succeeded", "success", "completed", "done", "failed", "fail", "error", "cancelled", "canceled"].includes(status);
+}
+
+function mediaBodyIndicatesFailure(bodyText: string): boolean {
+  const status = mediaStatus(bodyText);
+  if (["failed", "fail", "error", "cancelled", "canceled"].includes(status)) {
+    return true;
+  }
+  const parsed = parseJsonObject(bodyText);
+  return Boolean(parsed && firstStringAtPaths(parsed, [
+    ["error", "message"],
+    ["data", "error", "message"],
+    ["raw", "error", "message"],
+    ["raw", "data", "error", "message"]
+  ]));
+}
+
+function mediaStatus(bodyText: string): string {
+  const parsed = parseJsonObject(bodyText);
+  return (parsed ? firstStringAtPaths(parsed, [
+    ["status"],
+    ["state"],
+    ["data", "status"],
+    ["data", "state"],
+    ["raw", "status"],
+    ["raw", "data", "status"],
+    ["raw", "data", "state"]
+  ]) : undefined)?.trim().toLowerCase() ?? "";
+}
+
+function parseJsonObject(bodyText: string): Record<string, unknown> | undefined {
+  try {
+    const parsed = JSON.parse(bodyText) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function firstStringAtPaths(record: Record<string, unknown>, paths: string[][]): string | undefined {
+  for (const path of paths) {
+    let value: unknown = record;
+    for (const key of path) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        value = undefined;
+        break;
+      }
+      value = (value as Record<string, unknown>)[key];
+    }
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return String(value);
+    }
+  }
+  return undefined;
+}
+
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
@@ -535,7 +706,7 @@ function classifyFailureBody(status: number, bodyText: string): FailureCategory 
   if (/disable|cooldown|deplete|release|rate_limited_until/i.test(bodyText)) {
     return "account_action";
   }
-  if (status === 429 || /rate[_ -]?limit|too many requests|temporarily limited/i.test(bodyText)) {
+  if (status === 429 || /rate[_ -]?limit|too many requests|temporarily limited|频率.*限制|请求频率|限流|稍后再试/i.test(bodyText)) {
     return "rate_limit";
   }
   if (/timeout|timed out|abort/i.test(text)) {

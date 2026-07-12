@@ -45,6 +45,7 @@ import {
   classifyProviderException,
   classifyProviderResult,
   classifyProviderSseEvent,
+  providerFailureIsAccountRetryable,
   type ProviderFailureDecision
 } from "../services/provider-failure-classifier.js";
 import { DEFAULT_RUNTIME_CONFIG, type AccountBalanceReconcileScope } from "../services/runtime-config-schema.js";
@@ -536,7 +537,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
   }
 
   type RequestAuthGuard = (request: FastifyRequest, reply: FastifyReply) => boolean;
-  type VideoAccountLeaseOptions = { exposeRegistrationErrors?: boolean };
+  type VideoAccountLeaseOptions = { exposeRegistrationErrors?: boolean; sendUnavailable?: boolean };
   type VideoCreateOptions = { exposeRegistrationErrors?: boolean };
   type VideoTaskLookupOptions = { requireKnownTask?: boolean };
 
@@ -823,17 +824,22 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
 
     const registrationService = options.registrationService;
     if (!registrationService) {
-      await reply.status(503).send({
-        error: {
-          message: "No available account for video generation",
-          type: "account_unavailable"
-        }
-      });
+      if (leaseOptions.sendUnavailable ?? true) {
+        await reply.status(503).send({
+          error: {
+            message: "No available account for video generation",
+            type: "account_unavailable"
+          }
+        });
+      }
       return undefined;
     }
 
     const exposeRegistrationErrors = leaseOptions.exposeRegistrationErrors ?? true;
     const sendVideoRegistrationFailed = async (message?: string): Promise<void> => {
+      if (!(leaseOptions.sendUnavailable ?? true)) {
+        return;
+      }
       await reply.status(503).send({
         error: {
           message: exposeRegistrationErrors
@@ -1016,8 +1022,59 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       status: task.status,
       sourceUrl: task.videoUrl,
       raw: task.raw,
-      completedAt: task.status === "succeeded" ? Date.now() : undefined
+      completedAt: task.status === "succeeded" || task.status === "failed" ? Date.now() : undefined
     });
+  }
+
+  async function settleVideoAccountFromBilling(uid: string, leaseId: string | undefined, body: unknown): Promise<void> {
+    const remaining = readVideoBillingNumber(body, ["remaining_amount", "remainingAmount", "available_balance", "availableBalance"]);
+    const total = readVideoBillingNumber(body, ["total_amount", "totalAmount", "balance_total", "balanceTotal"]);
+    if (remaining !== undefined) {
+      await accountService.releaseVideoAccount(uid, leaseId);
+      await accountService.updateBalance(uid, remaining, total);
+      return;
+    }
+    await accountService.releaseVideoAccount(uid, leaseId);
+  }
+
+  function readVideoBillingNumber(body: unknown, keys: string[]): number | undefined {
+    for (const record of collectVideoBillingRecords(body)) {
+      for (const key of keys) {
+        const parsed = numericVideoBillingValue(record[key]);
+        if (parsed !== undefined) {
+          return parsed;
+        }
+      }
+    }
+    return undefined;
+  }
+
+  function collectVideoBillingRecords(value: unknown, depth = 0): Array<Record<string, unknown>> {
+    if (!value || typeof value !== "object" || Array.isArray(value) || depth > 4) {
+      return [];
+    }
+    const record = value as Record<string, unknown>;
+    const records: Array<Record<string, unknown>> = [];
+    if (record.billing && typeof record.billing === "object" && !Array.isArray(record.billing)) {
+      records.push(record.billing as Record<string, unknown>);
+    }
+    for (const key of ["raw", "data", "result", "output"] as const) {
+      records.push(...collectVideoBillingRecords(record[key], depth + 1));
+    }
+    return records;
+  }
+
+  function numericVideoBillingValue(value: unknown): number | undefined {
+    if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+      return Math.trunc(value);
+    }
+    if (typeof value === "string" && value.trim()) {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed) && parsed >= 0) {
+        return Math.trunc(parsed);
+      }
+    }
+    return undefined;
   }
 
   async function saveImageTaskFromResult(
@@ -1609,50 +1666,79 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       return;
     }
 
-    const leaseId = `video:${randomUUID()}`;
-    const account = await leaseVideoAccountOrRegister(leaseId, reply, {
-      exposeRegistrationErrors: createOptions.exposeRegistrationErrors
-    });
-    if (!account) {
-      return;
-    }
-
-    const headers = buildProviderAuthHeaders(account, options.providerAuthMode);
-    let taskPayload: Record<string, unknown>;
-    try {
-      taskPayload = await prepareVideoTaskPayload(client, body, headers);
-    } catch (error) {
-      await accountService.releaseVideoAccount(account.uid, leaseId);
-      await reply.status(502).send({
-        error: {
-          message: error instanceof Error ? error.message : "Video reference upload failed",
-          type: "video_reference_upload_failed"
-        }
+    let lastResult: ProviderResult | undefined;
+    let lastDecision: ProviderFailureDecision | undefined;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const leaseId = `video:${randomUUID()}`;
+      const account = await leaseVideoAccountOrRegister(leaseId, reply, {
+        exposeRegistrationErrors: createOptions.exposeRegistrationErrors,
+        sendUnavailable: !lastResult
       });
-      return;
+      if (!account) {
+        if (lastResult) {
+          await sendProviderResult(reply, exhaustedAccountRetryFailureResult(lastResult, lastDecision));
+        }
+        return;
+      }
+
+      const headers = buildProviderAuthHeaders(account, options.providerAuthMode);
+      let taskPayload: Record<string, unknown>;
+      try {
+        taskPayload = await prepareVideoTaskPayload(client, body, headers);
+      } catch (error) {
+        await accountService.releaseVideoAccount(account.uid, leaseId);
+        await reply.status(502).send({
+          error: {
+            message: error instanceof Error ? error.message : "Video reference upload failed",
+            type: "video_reference_upload_failed"
+          }
+        });
+        return;
+      }
+
+      const result = await createVideoTask(client, taskPayload, headers);
+      logProviderFailure({
+        kind: "video",
+        route: request.url,
+        model: readBodyModel(body),
+        accountUid: account.uid,
+        status: result.status,
+        body: result.body,
+        attempt: attempt + 1
+      });
+      lastResult = result;
+      lastDecision = classifyProviderResult(result);
+      if (result.status >= 200 && result.status < 300) {
+        await settleVideoAccountFromBilling(account.uid, leaseId, result.body);
+        const createdTask = normalizeVideoTaskStatus(result.body);
+        if (createdTask.id) {
+          await saveVideoTask(createdTask, account.uid);
+        }
+        await sendProviderResult(reply, result);
+        return;
+      }
+      if (lastDecision.accountAction === "deplete") {
+        await accountService.depleteVideoAccount(account.uid);
+      } else if (lastDecision.accountAction === "disable") {
+        await accountService.disableAccount(account.uid);
+      } else if (lastDecision.accountAction === "cooldown") {
+        await accountService.cooldownAccount(account.uid, lastDecision.retryAfterSeconds ?? MODEL_PROXY_RETRY_COOLDOWN_SECONDS);
+      } else {
+        await accountService.releaseVideoAccount(account.uid, leaseId);
+      }
+      if (!providerFailureIsAccountRetryable(lastDecision)) {
+        await sendProviderResult(reply, result);
+        return;
+      }
     }
 
-    const result = await createVideoTask(client, taskPayload, headers);
-    logProviderFailure({
-      kind: "video",
-      route: request.url,
-      model: readBodyModel(body),
-      accountUid: account.uid,
-      status: result.status,
-      body: result.body
+    await sendProviderResult(reply, lastResult
+      ? exhaustedAccountRetryFailureResult(lastResult, lastDecision)
+      : {
+      status: 503,
+      body: { error: { message: "All video accounts attempted; none succeeded", type: "server_error" } },
+      headers: new Headers()
     });
-    if (result.status >= 200 && result.status < 300) {
-      await accountService.depleteVideoAccount(account.uid);
-      const createdTask = normalizeVideoTaskStatus(result.body);
-      if (createdTask.id) {
-        await saveVideoTask(createdTask, account.uid);
-      }
-    } else if (providerResultIndicatesQuotaExhausted(result)) {
-      await accountService.depleteVideoAccount(account.uid);
-    } else {
-      await accountService.releaseVideoAccount(account.uid, leaseId);
-    }
-    await sendProviderResult(reply, result);
   }
 
   async function handleGetVideoTask(
@@ -1696,6 +1782,9 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       return;
     }
     const result = await getVideoTask(client, params.taskId, headers);
+    if (existingTask?.accountUid && result.status === 200) {
+      await settleVideoAccountFromBilling(existingTask.accountUid, undefined, result.body);
+    }
     if (result.body.id) {
       await saveVideoTask(result.body, existingTask?.accountUid);
     }
