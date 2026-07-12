@@ -2172,6 +2172,7 @@ describe("server routes", () => {
       accountService: new AccountService(store),
       imageAccountWaitMs: 1000,
       imagePollIntervalMs: 1,
+      imageGatePostTaskCooldownMs: 0,
       fetchImpl: async (url) => {
         const path = new URL(String(url)).pathname;
         if (path === "/api/tasks/navos-gpt-image-t2i") {
@@ -2346,7 +2347,7 @@ describe("server routes", () => {
     expect(await store.get("u2")).toMatchObject({ balanceRemaining: 100, leaseUntil: 0 });
   });
 
-  it("returns rate_limited when the first image account is rate limited by the provider", async () => {
+  it("returns rate_limited when controlled image rate-limit retries are exhausted", async () => {
     const store = new InMemoryAccountStore();
     await store.upsert({ uid: "u1", token: "t1", balanceRemaining: 200, balanceTotal: 200 });
     await store.upsert({ uid: "u2", token: "t2", balanceRemaining: 200, balanceTotal: 200 });
@@ -2356,6 +2357,8 @@ describe("server routes", () => {
       providerBaseUrl: "https://upstream.test",
       providerAuthMode: "uid-token",
       accountService: new AccountService(store),
+      imageAccountWaitMs: 1,
+      mediaRateLimitGateCooldownMs: 1,
       fetchImpl: async (url) => {
         const path = new URL(String(url)).pathname;
         if (path === "/api/tasks/navos-gpt-image-t2i") {
@@ -2383,12 +2386,12 @@ describe("server routes", () => {
     expect(response.statusCode).toBe(429);
     expect(response.json()).toMatchObject({ error: { type: "rate_limited" } });
     expect(response.json().error.message).toContain("\u8bf7\u6c42\u9891\u7387\u8d85\u8fc7\u9650\u5236");
-    expect(taskSeq).toBe(1);
+    expect(taskSeq).toBe(2);
     expect((await store.get("u1"))?.rateLimitedUntil).toBeGreaterThan(Date.now());
-    expect((await store.get("u2"))?.rateLimitedUntil).toBe(0);
+    expect((await store.get("u2"))?.rateLimitedUntil).toBeGreaterThan(Date.now());
   });
 
-  it("does not fan out image retries across accounts when provider returns a rate limit", async () => {
+  it("does not fan out image rate-limit retries before the upstream gate cooldown", async () => {
     const store = new InMemoryAccountStore();
     await store.upsert({ uid: "u1", token: "t1", balanceRemaining: 200, balanceTotal: 200 });
     await store.upsert({ uid: "u2", token: "t2", balanceRemaining: 200, balanceTotal: 200 });
@@ -2399,36 +2402,50 @@ describe("server routes", () => {
       providerBaseUrl: "https://upstream.test",
       providerAuthMode: "uid-token",
       accountService: new AccountService(store),
+      mediaRateLimitGateCooldownMs: 80,
       fetchImpl: async (url, init) => {
         const authorization = String((init?.headers as Record<string, string>).authorization ?? "");
         usedAuthHeaders.push(authorization);
         const path = new URL(String(url)).pathname;
         if (path === "/api/tasks/navos-gpt-image-t2i") {
           createCalls += 1;
-          return Response.json({ code: 200, msg: "success", data: { task_id: "img_rate_once", status: "queued" } });
+          return Response.json({ code: 200, msg: "success", data: { task_id: `img_rate_${createCalls}`, status: "queued" } });
         }
-        if (path === "/api/tasks/image/generations/img_rate_once") {
+        if (path === "/api/tasks/image/generations/img_rate_1") {
           return Response.json({
             code: 200,
             msg: "success",
             data: { status: "failed", error: "\u8bf7\u6c42\u9891\u7387\u8d85\u8fc7\u9650\u5236" }
           });
         }
+        if (path === "/api/tasks/image/generations/img_rate_2") {
+          return Response.json({ code: 200, msg: "success", data: { status: "succeeded", url: "https://cdn.test/retried.png" } });
+        }
         return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
       }
     });
 
-    const response = await app.inject({
+    let settled = false;
+    const responsePromise = app.inject({
       method: "POST",
       url: "/v1/images/generations",
       headers: { authorization: "Bearer sk-test" },
       payload: { model: "gpt-image-2", prompt: "white robot", n: 1, quality: "low", size: "1024x1024" }
+    }).then((response) => {
+      settled = true;
+      return response;
     });
 
-    expect(response.statusCode).toBe(429);
-    expect(response.json()).toMatchObject({ error: { type: "rate_limited" } });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(settled).toBe(false);
     expect(createCalls).toBe(1);
     expect(usedAuthHeaders).toEqual(["Bearer u1:t1", "Bearer u1:t1"]);
+
+    const response = await responsePromise;
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ data: [{ url: "https://cdn.test/retried.png" }] });
+    expect(createCalls).toBe(2);
+    expect(usedAuthHeaders).toEqual(["Bearer u1:t1", "Bearer u1:t1", "Bearer u2:t2", "Bearer u2:t2"]);
     expect((await store.get("u1"))?.rateLimitedUntil).toBeGreaterThan(Date.now());
     expect((await store.get("u2"))?.rateLimitedUntil).toBe(0);
   });
@@ -2448,6 +2465,7 @@ describe("server routes", () => {
       providerAuthMode: "uid-token",
       accountService: new AccountService(store),
       imageMaxInFlight: 1,
+      imageGatePostTaskCooldownMs: 0,
       fetchImpl: async (url) => {
         const path = new URL(String(url)).pathname;
         if (path === "/api/tasks/navos-gpt-image-t2i") {
@@ -2493,6 +2511,114 @@ describe("server routes", () => {
     const second = await secondPromise;
 
     expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    expect(createCalls).toBe(2);
+  });
+
+  it("retries the same image request after a provider rate-limit gate cooldown", async () => {
+    const store = new InMemoryAccountStore();
+    await store.upsert({ uid: "u1", token: "t1", balanceRemaining: 200, balanceTotal: 200 });
+    await store.upsert({ uid: "u2", token: "t2", balanceRemaining: 200, balanceTotal: 200 });
+    let createCalls = 0;
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(store),
+      imageMaxInFlight: 1,
+      mediaRateLimitGateCooldownMs: 80,
+      fetchImpl: async (url) => {
+        const path = new URL(String(url)).pathname;
+        if (path === "/api/tasks/navos-gpt-image-t2i") {
+          createCalls += 1;
+          return Response.json({ code: 200, msg: "success", data: { task_id: `img_${createCalls}`, status: "queued" } });
+        }
+        if (path === "/api/tasks/image/generations/img_1") {
+          return Response.json({
+            code: 200,
+            msg: "success",
+            data: { status: "failed", error: "\u8bf7\u6c42\u9891\u7387\u8d85\u8fc7\u9650\u5236" }
+          });
+        }
+        if (path === "/api/tasks/image/generations/img_2") {
+          return Response.json({ code: 200, msg: "success", data: { status: "succeeded", url: "https://cdn.test/img_2.png" } });
+        }
+        return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+      }
+    });
+
+    let settled = false;
+    const responsePromise = app.inject({
+      method: "POST",
+      url: "/api/images/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "white robot", n: 1, quality: "low", size: "1024x1024" }
+    }).then((response) => {
+      settled = true;
+      return response;
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(settled).toBe(false);
+    expect(createCalls).toBe(1);
+
+    const response = await responsePromise;
+    expect(response.statusCode).toBe(200);
+    expect(createCalls).toBe(2);
+  });
+
+  it("keeps the image gate closed briefly after a successful image task", async () => {
+    const store = new InMemoryAccountStore();
+    await store.upsert({ uid: "u1", token: "t1", balanceRemaining: 200, balanceTotal: 200 });
+    await store.upsert({ uid: "u2", token: "t2", balanceRemaining: 200, balanceTotal: 200 });
+    let createCalls = 0;
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(store),
+      imageMaxInFlight: 1,
+      imageGatePostTaskCooldownMs: 80,
+      fetchImpl: async (url) => {
+        const path = new URL(String(url)).pathname;
+        if (path === "/api/tasks/navos-gpt-image-t2i") {
+          createCalls += 1;
+          return Response.json({ code: 200, msg: "success", data: { task_id: `img_success_${createCalls}`, status: "queued" } });
+        }
+        if (path === "/api/tasks/image/generations/img_success_1") {
+          return Response.json({ code: 200, msg: "success", data: { status: "succeeded", url: "https://cdn.test/img_success_1.png" } });
+        }
+        if (path === "/api/tasks/image/generations/img_success_2") {
+          return Response.json({ code: 200, msg: "success", data: { status: "succeeded", url: "https://cdn.test/img_success_2.png" } });
+        }
+        return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+      }
+    });
+
+    const first = await app.inject({
+      method: "POST",
+      url: "/api/images/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "white robot", n: 1, quality: "low", size: "1024x1024" }
+    });
+    expect(first.statusCode).toBe(200);
+    expect(createCalls).toBe(1);
+
+    let secondSettled = false;
+    const secondPromise = app.inject({
+      method: "POST",
+      url: "/api/images/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "black robot", n: 1, quality: "low", size: "1024x1024" }
+    }).then((response) => {
+      secondSettled = true;
+      return response;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(secondSettled).toBe(false);
+    expect(createCalls).toBe(1);
+
+    const second = await secondPromise;
     expect(second.statusCode).toBe(200);
     expect(createCalls).toBe(2);
   });
@@ -3198,6 +3324,89 @@ describe("server routes", () => {
     expect(createCalls).toBe(2);
   });
 
+  it("keeps the text-to-video gate closed briefly after a terminal provider rate limit", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    await accountService.importAccount({ uid: "u1", token: "t1", balanceRemaining: 2000, balanceTotal: 2000 });
+    await accountService.importAccount({ uid: "u2", token: "t2", balanceRemaining: 2000, balanceTotal: 2000 });
+    let createCalls = 0;
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      videoT2vMaxInFlight: 1,
+      mediaRateLimitGateCooldownMs: 80,
+      fetchImpl: async (url) => {
+        const path = new URL(String(url)).pathname;
+        if (path === "/api/tasks/navos-seedance-video-generation") {
+          createCalls += 1;
+          return Response.json({
+            task_id: `task_${createCalls}`,
+            status: "queued",
+            billing: { points_amount: 500, remaining_amount: 1500 }
+          });
+        }
+        if (path === "/api/tasks/video/generations/task_1") {
+          return Response.json({
+            code: 200,
+            data: {
+              task_id: "task_1",
+              status: "failed",
+              error: { message: "\u8bf7\u6c42\u9891\u7387\u8d85\u8fc7\u9650\u5236" },
+              billing: { status: "refunded", remaining_amount: 2000 }
+            }
+          });
+        }
+        if (path === "/api/tasks/video/generations/task_2") {
+          return Response.json({
+            code: 200,
+            data: { task_id: "task_2", status: "succeeded", video_url: "https://cdn.test/task_2.mp4" }
+          });
+        }
+        return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+      }
+    });
+
+    const first = await app.inject({
+      method: "POST",
+      url: "/api/video/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "city skyline", durationSeconds: 5, resolution: "480P" }
+    });
+    expect(first.statusCode).toBe(200);
+    expect(first.json()).toMatchObject({ task_id: "task_1" });
+
+    let secondSettled = false;
+    const secondPromise = app.inject({
+      method: "POST",
+      url: "/api/video/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "forest river", durationSeconds: 5, resolution: "480P" }
+    }).then((response) => {
+      secondSettled = true;
+      return response;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(secondSettled).toBe(false);
+    expect(createCalls).toBe(1);
+
+    const polled = await app.inject({
+      method: "GET",
+      url: "/api/video/generations/task_1",
+      headers: { authorization: "Bearer sk-test" }
+    });
+    expect(polled.statusCode).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(secondSettled).toBe(false);
+    expect(createCalls).toBe(1);
+
+    const second = await secondPromise;
+    expect(second.statusCode).toBe(200);
+    expect(second.json()).toMatchObject({ task_id: "task_2" });
+    expect(createCalls).toBe(2);
+  });
+
   it("retries video generation on the next leased account when the first account hits a transient provider failure", async () => {
     const store = new InMemoryAccountStore();
     const accountService = new AccountService(store);
@@ -3707,6 +3916,199 @@ describe("server routes", () => {
     expect(usedUids).toEqual(["u1", "u2"]);
     expect(firstAccount?.status).toBe("active");
     expect(firstAccount?.rateLimitedUntil).toBeGreaterThan(Date.now());
+  });
+
+  it("does not fan out GPT-5.5 model rate-limit retries before the model gate cooldown", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    await accountService.importAccount({ uid: "u1", token: "t1" });
+    await accountService.importAccount({ uid: "u2", token: "t2" });
+    const usedUids: string[] = [];
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      modelRateLimitGateCooldownMs: 80,
+      fetchImpl: async (_url, init) => {
+        const authorization = String((init?.headers as Record<string, string>).authorization ?? "");
+        const uid = authorization.replace(/^Bearer\s+/, "").split(":")[0];
+        usedUids.push(uid);
+        if (uid === "u1") {
+          return Response.json(
+            { error: { message: "\u8bf7\u6c42\u9891\u7387\u8d85\u8fc7\u9650\u5236" } },
+            { status: 429 }
+          );
+        }
+        return Response.json({
+          id: "chatcmpl_1",
+          object: "chat.completion",
+          choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }]
+        });
+      }
+    });
+
+    let settled = false;
+    const responsePromise = app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: { authorization: "Bearer sk-test" },
+      payload: {
+        model: "gpt-5.5",
+        messages: [{ role: "user", content: "hello" }]
+      }
+    }).then((response) => {
+      settled = true;
+      return response;
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(settled).toBe(false);
+    expect(usedUids).toEqual(["u1"]);
+
+    const response = await responsePromise;
+    expect(response.statusCode).toBe(200);
+    expect(usedUids).toEqual(["u1", "u2"]);
+    expect((await store.get("u1"))?.rateLimitedUntil).toBeGreaterThan(Date.now());
+    expect((await store.get("u2"))?.status).toBe("active");
+  });
+
+  it("does not fan out Claude Opus messages rate-limit retries before the model gate cooldown", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    await accountService.importAccount({ uid: "u1", token: "t1" });
+    await accountService.importAccount({ uid: "u2", token: "t2" });
+    const usedUids: string[] = [];
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      modelRateLimitGateCooldownMs: 80,
+      fetchImpl: async (_url, init) => {
+        const authorization = String((init?.headers as Record<string, string>).authorization ?? "");
+        const uid = authorization.replace(/^Bearer\s+/, "").split(":")[0];
+        usedUids.push(uid);
+        if (uid === "u1") {
+          return Response.json(
+            { error: { message: "rate limit exceeded; try again later" } },
+            { status: 429 }
+          );
+        }
+        return Response.json({
+          id: "msg_1",
+          type: "message",
+          role: "assistant",
+          content: [{ type: "text", text: "OK" }]
+        });
+      }
+    });
+
+    let settled = false;
+    const responsePromise = app.inject({
+      method: "POST",
+      url: "/v1/messages",
+      headers: { authorization: "Bearer sk-test" },
+      payload: {
+        model: "claude-opus-4-8",
+        max_tokens: 64,
+        messages: [{ role: "user", content: "hello" }]
+      }
+    }).then((response) => {
+      settled = true;
+      return response;
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(settled).toBe(false);
+    expect(usedUids).toEqual(["u1"]);
+
+    const response = await responsePromise;
+    expect(response.statusCode).toBe(200);
+    expect(usedUids).toEqual(["u1", "u2"]);
+    expect((await store.get("u1"))?.rateLimitedUntil).toBeGreaterThan(Date.now());
+    expect((await store.get("u2"))?.status).toBe("active");
+  });
+
+  it("keeps Codex requests behind the model gate after a streamed rate-limit error", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    await accountService.importAccount({ uid: "u1", token: "t1", balanceRemaining: 1000, balanceTotal: 1000 });
+    await accountService.importAccount({ uid: "u2", token: "t2", balanceRemaining: 1000, balanceTotal: 1000 });
+    const encoder = new TextEncoder();
+    const usedUids: string[] = [];
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      modelRateLimitGateCooldownMs: 80,
+      fetchImpl: async (_url, init) => {
+        const authorization = String((init?.headers as Record<string, string>).authorization ?? "");
+        const uid = authorization.replace(/^Bearer\s+/, "").split(":")[0];
+        usedUids.push(uid);
+        if (uid === "u1") {
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.enqueue(encoder.encode('event: error\ndata: {"error":{"message":"rate limit exceeded"}}\n\n'));
+                controller.close();
+              }
+            }),
+            { status: 200, headers: { "content-type": "text/event-stream" } }
+          );
+        }
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(encoder.encode('data: {"type":"response.output_text.delta","delta":"OK"}\n\ndata: [DONE]\n\n'));
+              controller.close();
+            }
+          }),
+          { status: 200, headers: { "content-type": "text/event-stream" } }
+        );
+      }
+    });
+
+    const first = await app.inject({
+      method: "POST",
+      url: "/v1/responses",
+      headers: { authorization: "Bearer sk-test" },
+      payload: {
+        model: "codex",
+        stream: true,
+        input: "hello"
+      }
+    });
+    expect(first.statusCode).toBe(200);
+    expect(first.body).toContain("rate limit exceeded");
+    await vi.waitFor(async () => {
+      expect((await store.get("u1"))?.rateLimitedUntil).toBeGreaterThan(Date.now());
+    });
+
+    let secondSettled = false;
+    const secondPromise = app.inject({
+      method: "POST",
+      url: "/v1/responses",
+      headers: { authorization: "Bearer sk-test" },
+      payload: {
+        model: "codex",
+        stream: true,
+        input: "hello again"
+      }
+    }).then((response) => {
+      secondSettled = true;
+      return response;
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(secondSettled).toBe(false);
+    expect(usedUids).toEqual(["u1"]);
+
+    const second = await secondPromise;
+    expect(second.statusCode).toBe(200);
+    expect(second.body).toContain("OK");
+    expect(usedUids).toEqual(["u1", "u2"]);
   });
 
   it("depletes exhausted model accounts and retries with the next account", async () => {

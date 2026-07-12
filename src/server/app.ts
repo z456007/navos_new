@@ -103,9 +103,12 @@ export interface CreateAppOptions {
   imageAllowVideoReserveFallback?: boolean;
   runtimeConfigService?: RuntimeConfigService;
   modelAccountWaitMs?: number;
+  modelRateLimitGateCooldownMs?: number;
   imageMaxInFlight?: number;
+  imageGatePostTaskCooldownMs?: number;
   videoT2vMaxInFlight?: number;
   videoT2vGateTtlMs?: number;
+  mediaRateLimitGateCooldownMs?: number;
 }
 
 interface UploadRequestBody {
@@ -135,13 +138,17 @@ const JSON_BODY_LIMIT_BYTES = 64 * 1024 * 1024;
 const MODEL_PROXY_MAX_ATTEMPTS = 5;
 const MODEL_PROXY_RETRY_COOLDOWN_SECONDS = 30;
 const DEFAULT_IMAGE_ACCOUNT_WAIT_MS = 120_000;
-const DEFAULT_IMAGE_MAX_IN_FLIGHT = 2;
+const DEFAULT_IMAGE_MAX_IN_FLIGHT = 1;
+const DEFAULT_IMAGE_GATE_POST_TASK_COOLDOWN_MS = 60_000;
 const DEFAULT_MODEL_ACCOUNT_WAIT_MS = 30_000;
+const DEFAULT_MODEL_RATE_LIMIT_GATE_COOLDOWN_MS = 60_000;
 const DEFAULT_VIDEO_T2V_MAX_IN_FLIGHT = 2;
 const DEFAULT_VIDEO_T2V_GATE_TTL_MS = 10 * 60 * 1000;
+const DEFAULT_MEDIA_RATE_LIMIT_GATE_COOLDOWN_MS = 180_000;
 const ACCOUNT_WAIT_POLL_INTERVAL_MS = 100;
 const DEFAULT_YYDS_DOMAINS_URL = "https://maliapi.215.im/v1/domains";
 const YYDS_DOMAIN_FETCH_TIMEOUT_MS = 10_000;
+const MODEL_RATE_LIMIT_GATE_TEXT_PATTERN = /rate.?limit|too many|频率.*限制|请求频率|限流|稍后再试|try again later/i;
 
 class AsyncSemaphore {
   private active = 0;
@@ -550,9 +557,23 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     }
   );
   const client = new ProviderHttpClient(options.providerBaseUrl, options.fetchImpl);
+  const modelRateLimitGateCooldownMs = Math.max(
+    0,
+    Math.trunc(options.modelRateLimitGateCooldownMs ?? DEFAULT_MODEL_RATE_LIMIT_GATE_COOLDOWN_MS)
+  );
+  const modelRateLimitGateUntil = new Map<string, number>();
+  const modelRateLimitGateTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const imageGenerationGate = new AsyncSemaphore(Math.max(1, Math.trunc(options.imageMaxInFlight ?? DEFAULT_IMAGE_MAX_IN_FLIGHT)));
+  const imageGatePostTaskCooldownMs = Math.max(
+    0,
+    Math.trunc(options.imageGatePostTaskCooldownMs ?? DEFAULT_IMAGE_GATE_POST_TASK_COOLDOWN_MS)
+  );
   const videoT2vGate = new AsyncSemaphore(Math.max(1, Math.trunc(options.videoT2vMaxInFlight ?? DEFAULT_VIDEO_T2V_MAX_IN_FLIGHT)));
   const videoT2vGateTtlMs = Math.max(1_000, Math.trunc(options.videoT2vGateTtlMs ?? DEFAULT_VIDEO_T2V_GATE_TTL_MS));
+  const mediaRateLimitGateCooldownMs = Math.max(
+    0,
+    Math.trunc(options.mediaRateLimitGateCooldownMs ?? DEFAULT_MEDIA_RATE_LIMIT_GATE_COOLDOWN_MS)
+  );
   const videoT2vGateReleases = new Map<string, () => void>();
   const videoT2vGateTimers = new Map<string, ReturnType<typeof setTimeout>>();
   let providerRegistrationAttempt: Promise<boolean> | undefined;
@@ -593,12 +614,108 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     return status === "succeeded" || status === "failed";
   }
 
-  function holdVideoT2vGate(taskId: string | undefined, status: string | undefined, release: (() => void) | undefined): void {
+  function gateReleaseDelayForDecision(decision: ProviderFailureDecision | undefined): number {
+    return decision?.kind === "rate_limited" ? mediaRateLimitGateCooldownMs : 0;
+  }
+
+  function imageGateReleaseDelay(result: ProviderResult, decision: ProviderFailureDecision | undefined): number {
+    const rateLimitDelay = gateReleaseDelayForDecision(decision);
+    if (rateLimitDelay > 0) {
+      return rateLimitDelay;
+    }
+    return result.status === 200 || result.status === 202 ? imageGatePostTaskCooldownMs : 0;
+  }
+
+  function modelRateLimitKeyForRequest(
+    path: "/v1/chat/completions" | "/v1/responses" | "/v1/messages",
+    body: Record<string, unknown>
+  ): string {
+    const rawModel = readBodyModel(body);
+    if (!rawModel) {
+      return `route:${path}`;
+    }
+    const normalized = (normalizePublicProxyModelId(rawModel) ?? rawModel).toLowerCase();
+    if (normalized === "codex" || normalized.includes("codex")) {
+      return "model:codex";
+    }
+    return `model:${normalized}`;
+  }
+
+  function shouldHoldModelRateLimitGate(
+    decision: ProviderFailureDecision,
+    result?: ProviderResult
+  ): boolean {
+    if (decision.kind !== "rate_limited") {
+      return false;
+    }
+    return decision.retryAfterSeconds !== undefined
+      || result?.status === 429
+      || MODEL_RATE_LIMIT_GATE_TEXT_PATTERN.test(decision.message);
+  }
+
+  function modelRateLimitGateDelayMs(decision: ProviderFailureDecision): number {
+    const retryAfterMs = decision.retryAfterSeconds ? decision.retryAfterSeconds * 1000 : 0;
+    return Math.max(modelRateLimitGateCooldownMs, retryAfterMs);
+  }
+
+  async function waitForModelRateLimitGate(key: string): Promise<void> {
+    while (true) {
+      const delayMs = (modelRateLimitGateUntil.get(key) ?? 0) - Date.now();
+      if (delayMs <= 0) {
+        return;
+      }
+      await delay(delayMs);
+    }
+  }
+
+  function holdModelRateLimitGate(key: string | undefined, decision: ProviderFailureDecision, result?: ProviderResult): void {
+    if (!key || !shouldHoldModelRateLimitGate(decision, result)) {
+      return;
+    }
+    const delayMs = modelRateLimitGateDelayMs(decision);
+    if (delayMs <= 0) {
+      return;
+    }
+    const until = Date.now() + delayMs;
+    const currentUntil = modelRateLimitGateUntil.get(key) ?? 0;
+    if (until <= currentUntil) {
+      return;
+    }
+    const existingTimer = modelRateLimitGateTimers.get(key);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+    modelRateLimitGateUntil.set(key, until);
+    const timer = setTimeout(() => {
+      if ((modelRateLimitGateUntil.get(key) ?? 0) <= until) {
+        modelRateLimitGateUntil.delete(key);
+        modelRateLimitGateTimers.delete(key);
+      }
+    }, delayMs);
+    timer.unref?.();
+    modelRateLimitGateTimers.set(key, timer);
+  }
+
+  function releaseMediaGate(release: () => void, delayMs = 0): void {
+    if (delayMs <= 0) {
+      release();
+      return;
+    }
+    const timer = setTimeout(release, delayMs);
+    timer.unref?.();
+  }
+
+  function holdVideoT2vGate(
+    taskId: string | undefined,
+    status: string | undefined,
+    release: (() => void) | undefined,
+    decision?: ProviderFailureDecision
+  ): void {
     if (!release) {
       return;
     }
     if (!taskId || videoTaskIsTerminal(status)) {
-      release();
+      releaseMediaGate(release, gateReleaseDelayForDecision(decision));
       return;
     }
     releaseVideoT2vGate(taskId);
@@ -608,8 +725,12 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     videoT2vGateTimers.set(taskId, timer);
   }
 
-  function releaseVideoT2vGate(taskId: string | undefined): void {
+  function releaseVideoT2vGate(taskId: string | undefined, delayMs = 0): void {
     if (!taskId) {
+      return;
+    }
+    const release = videoT2vGateReleases.get(taskId);
+    if (!release) {
       return;
     }
     const timer = videoT2vGateTimers.get(taskId);
@@ -617,8 +738,10 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       clearTimeout(timer);
       videoT2vGateTimers.delete(taskId);
     }
-    const release = videoT2vGateReleases.get(taskId);
-    if (!release) {
+    if (delayMs > 0) {
+      const delayedTimer = setTimeout(() => releaseVideoT2vGate(taskId), delayMs);
+      delayedTimer.unref?.();
+      videoT2vGateTimers.set(taskId, delayedTimer);
       return;
     }
     videoT2vGateReleases.delete(taskId);
@@ -676,7 +799,12 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     }
   }
 
-  async function applyStreamedProviderFailure(uid: string, decision: ProviderFailureDecision): Promise<void> {
+  async function applyStreamedProviderFailure(
+    uid: string,
+    decision: ProviderFailureDecision,
+    modelRateLimitKey?: string
+  ): Promise<void> {
+    holdModelRateLimitGate(modelRateLimitKey, decision);
     if (decision.accountAction === "deplete") {
       await accountService.depleteAccount(uid);
       return;
@@ -690,7 +818,12 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     }
   }
 
-  function wrapStreamingProviderResultForAccount(uid: string, leaseId: string | undefined, result: ProviderResult): ProviderResult {
+  function wrapStreamingProviderResultForAccount(
+    uid: string,
+    leaseId: string | undefined,
+    result: ProviderResult,
+    modelRateLimitKey?: string
+  ): ProviderResult {
     const contentType = result.headers.get("content-type") ?? "";
     if (!contentType.includes("text/event-stream") || !isNodeReadable(result.body)) {
       return result;
@@ -698,7 +831,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     let failed = false;
     const detector = createProviderFailureDetectionStream(async (decision) => {
       failed = true;
-      await applyStreamedProviderFailure(uid, decision);
+      await applyStreamedProviderFailure(uid, decision, modelRateLimitKey);
     });
     detector.once("finish", () => {
       if (!failed && leaseId) {
@@ -834,8 +967,10 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     let lastResult: ProviderResult | undefined;
     let lastDecision: ProviderFailureDecision | undefined;
     let registeredDuringRequest = false;
+    const modelRateLimitKey = modelRateLimitKeyForRequest(path, body);
 
     for (let attempt = 0; attempt < MODEL_PROXY_MAX_ATTEMPTS; attempt += 1) {
+      await waitForModelRateLimitGate(modelRateLimitKey);
       const leaseId = `model:${randomUUID()}`;
       const nextAuth = await modelAuthOrWait(leaseId, !registeredDuringRequest);
       if (nextAuth.registered) {
@@ -851,7 +986,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
         path,
         body,
         headers: auth.headers
-      }).catch(providerExceptionResult));
+      }).catch(providerExceptionResult), modelRateLimitKey);
       logProviderFailure({
         kind: "model",
         route: path,
@@ -876,6 +1011,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       }
 
       if (decision.accountAction === "cooldown") {
+        holdModelRateLimitGate(modelRateLimitKey, decision, result);
         await accountService.cooldownAccount(
           auth.account.uid,
           decision.retryAfterSeconds ?? MODEL_PROXY_RETRY_COOLDOWN_SECONDS
@@ -1812,7 +1948,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
         if (createdTask.id) {
           await saveVideoTask(createdTask, account.uid);
         }
-        holdVideoT2vGate(createdTask.id, createdTask.status, videoGateRelease);
+        holdVideoT2vGate(createdTask.id, createdTask.status, videoGateRelease, lastDecision);
         await sendProviderResult(reply, result);
         return;
       }
@@ -1897,8 +2033,10 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       await saveVideoTask(result.body, existingTask?.accountUid, params.taskId);
     }
     if (videoTaskIsTerminal(result.body.status)) {
-      releaseVideoT2vGate(params.taskId);
-      releaseVideoT2vGate(result.body.id);
+      const decision = classifyProviderResult({ ...result, body: result.body.raw ?? result.body });
+      const delayMs = gateReleaseDelayForDecision(decision);
+      releaseVideoT2vGate(params.taskId, delayMs);
+      releaseVideoT2vGate(result.body.id, delayMs);
     }
     await sendProviderResult(reply, result);
   }
@@ -1931,7 +2069,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       }
 
       const headers = buildProviderAuthHeaders(account, options.providerAuthMode);
-      const imageGateRelease = await imageGenerationGate.acquire();
+      let imageGateRelease: (() => void) | undefined = await imageGenerationGate.acquire();
       let result: ProviderResult;
       try {
         result = await createImageGeneration(client, payload, headers, {
@@ -1939,8 +2077,10 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
           intervalMs: runtimeConfig.imagePollIntervalMs,
           outputMode: defaultResponseFormat === "b64_json" ? "display" : undefined
         });
-      } finally {
+      } catch (error) {
         imageGateRelease();
+        imageGateRelease = undefined;
+        throw error;
       }
       logProviderFailure({
         kind: "image",
@@ -1953,23 +2093,41 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       });
       lastResult = result;
       lastDecision = classifyProviderResult(result);
+      const releaseImageGate = (delayMs = 0) => {
+        if (!imageGateRelease) {
+          return;
+        }
+        const release = imageGateRelease;
+        imageGateRelease = undefined;
+        releaseMediaGate(release, delayMs);
+      };
       if (result.status === 200) {
+        releaseImageGate(imageGateReleaseDelay(result, lastDecision));
         await accountService.consumeImageAccount(account.uid, leaseId, IMAGE_ACCOUNT_COST);
         await saveImageTaskFromResult(result, pollPath, account.uid, leaseId);
         await sendProviderResult(reply, result);
         return;
       }
       if (result.status === 202) {
+        releaseImageGate(imageGateReleaseDelay(result, lastDecision));
         await saveImageTaskFromResult(result, pollPath, account.uid, leaseId);
         await sendProviderResult(reply, result);
         return;
       }
+      const failedGateDelayMs = imageGateReleaseDelay(result, lastDecision);
+      releaseImageGate(failedGateDelayMs);
       if (lastDecision.accountAction === "deplete") {
         await accountService.depleteAccount(account.uid);
         continue;
       }
       if (lastDecision.kind === "rate_limited") {
         await accountService.cooldownAccount(account.uid, lastDecision.retryAfterSeconds ?? 30);
+        if (attempt < MODEL_PROXY_MAX_ATTEMPTS - 1) {
+          if (failedGateDelayMs > 0) {
+            await delay(failedGateDelayMs);
+          }
+          continue;
+        }
         await sendProviderResult(reply, externalProviderFailureResult(lastDecision));
         return;
       }
