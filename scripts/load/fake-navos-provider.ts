@@ -4,6 +4,7 @@ const app = Fastify({ logger: true });
 const port = Number(process.env.FAKE_PROVIDER_PORT ?? 19088);
 const delayMs = Number(process.env.FAKE_PROVIDER_DELAY_MS ?? 80);
 const imagePolls = new Map<string, number>();
+const videoPolls = new Map<string, number>();
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -65,6 +66,49 @@ app.post("/api/tasks/navos-gpt-image-i2i", async (_request, reply) => {
 app.get("/api/tasks/image/edits/:taskId", async (request, reply) => {
   const taskId = (request.params as { taskId: string }).taskId;
   await reply.send({ status: "succeeded", data: [{ url: `https://fake-oss.local/${taskId}.png` }] });
+});
+
+app.post("/api/tasks/navos-seedance-video-generation", async (_request, reply) => {
+  const id = `vid_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  videoPolls.set(id, 0);
+  await sleep(delayMs);
+  await reply.send({ code: 200, data: { task_id: id, status: "running" } });
+});
+
+app.post("/api/video/generations", async (_request, reply) => {
+  const id = `vid_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  videoPolls.set(id, 1);
+  await sleep(delayMs);
+  await reply.send({
+    id,
+    task_id: id,
+    status: "succeeded",
+    videoUrl: `https://fake-oss.local/${id}.mp4`,
+    video_url: `https://fake-oss.local/${id}.mp4`
+  });
+});
+
+app.get("/api/tasks/video/generations/:taskId", async (request, reply) => {
+  const taskId = (request.params as { taskId: string }).taskId;
+  const count = (videoPolls.get(taskId) ?? 0) + 1;
+  videoPolls.set(taskId, count);
+  await sleep(delayMs);
+  if (count < 2) {
+    await reply.send({ task_id: taskId, status: "running", data: { task_id: taskId, status: "running" } });
+    return;
+  }
+  await reply.send({
+    task_id: taskId,
+    status: "success",
+    videoUrl: `https://fake-oss.local/${taskId}.mp4`,
+    video_url: `https://fake-oss.local/${taskId}.mp4`,
+    data: {
+      task_id: taskId,
+      status: "success",
+      videoUrl: `https://fake-oss.local/${taskId}.mp4`,
+      video_url: `https://fake-oss.local/${taskId}.mp4`
+    }
+  });
 });
 
 await app.listen({ host: "127.0.0.1", port });

@@ -18,6 +18,23 @@ interface Scenario {
   build: (index: number) => LoadRequest;
 }
 
+type FailureCategory =
+  | "quota_or_depleted"
+  | "account_action"
+  | "rate_limit"
+  | "timeout"
+  | "client_error"
+  | "server_error"
+  | "network_error"
+  | "unknown";
+
+interface FailureSample {
+  status: number | "timeout" | "network";
+  category: FailureCategory;
+  path: string;
+  bodySnippet: string;
+}
+
 interface ScenarioResult {
   name: string;
   total: number;
@@ -30,6 +47,8 @@ interface ScenarioResult {
   p50: number;
   p95: number;
   p99: number;
+  errorSummary: Record<string, number>;
+  failureSamples: FailureSample[];
 }
 
 const baseUrl = (process.env.SUB2API_BASE_URL ?? "http://127.0.0.1:18080/v1").replace(/\/+$/, "");
@@ -184,12 +203,31 @@ function recipeByName(name: string): ScenarioRecipe {
 
 async function runScenario(scenario: Scenario): Promise<ScenarioResult> {
   const latencies: number[] = [];
+  const errorSummary: Record<string, number> = {};
+  const failureSamples: FailureSample[] = [];
   let success = 0;
   let clientError = 0;
   let serverError = 0;
   let timeout = 0;
   let networkError = 0;
   let next = 0;
+
+  function recordFailure(
+    status: number | "timeout" | "network",
+    category: FailureCategory,
+    path: string,
+    bodyText: string
+  ): void {
+    errorSummary[category] = (errorSummary[category] ?? 0) + 1;
+    if (failureSamples.length < 5) {
+      failureSamples.push({
+        status,
+        category,
+        path,
+        bodySnippet: snippet(bodyText)
+      });
+    }
+  }
 
   async function worker(): Promise<void> {
     while (next < scenario.requests) {
@@ -206,14 +244,24 @@ async function runScenario(scenario: Scenario): Promise<ScenarioResult> {
           body: JSON.stringify(body),
           signal: controller.signal
         });
-        await response.arrayBuffer();
+        const responseBody = await response.text();
         if (response.status >= 200 && response.status < 400) success += 1;
-        else if (response.status >= 400 && response.status < 500) clientError += 1;
-        else serverError += 1;
+        else if (response.status >= 400 && response.status < 500) {
+          clientError += 1;
+          recordFailure(response.status, classifyFailureBody(response.status, responseBody), path, responseBody);
+        } else {
+          serverError += 1;
+          recordFailure(response.status, classifyFailureBody(response.status, responseBody), path, responseBody);
+        }
         latencies.push(performance.now() - start);
       } catch (error) {
-        if (isAbortError(error)) timeout += 1;
-        else networkError += 1;
+        if (isAbortError(error)) {
+          timeout += 1;
+          recordFailure("timeout", "timeout", path, errorMessage(error));
+        } else {
+          networkError += 1;
+          recordFailure("network", "network_error", path, errorMessage(error));
+        }
         latencies.push(performance.now() - start);
       } finally {
         clearTimeout(timer);
@@ -237,7 +285,9 @@ async function runScenario(scenario: Scenario): Promise<ScenarioResult> {
     rps: Number((scenario.requests / Math.max(0.001, elapsedMs / 1000)).toFixed(2)),
     p50: Math.round(percentile(0.50)),
     p95: Math.round(percentile(0.95)),
-    p99: Math.round(percentile(0.99))
+    p99: Math.round(percentile(0.99)),
+    errorSummary,
+    failureSamples
   };
 }
 
@@ -260,7 +310,19 @@ const markdown = [
   "",
   "| scenario | total | success | 4xx | 5xx | timeout | network error | rps | p50 ms | p95 ms | p99 ms |",
   "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
-  ...results.map((r) => `| ${r.name} | ${r.total} | ${r.success} | ${r.clientError} | ${r.serverError} | ${r.timeout} | ${r.networkError} | ${r.rps} | ${r.p50} | ${r.p95} | ${r.p99} |`)
+  ...results.map((r) => `| ${r.name} | ${r.total} | ${r.success} | ${r.clientError} | ${r.serverError} | ${r.timeout} | ${r.networkError} | ${r.rps} | ${r.p50} | ${r.p95} | ${r.p99} |`),
+  "",
+  "## Error Summary",
+  "",
+  "| scenario | category | count |",
+  "|---|---|---:|",
+  ...errorSummaryRows(results),
+  "",
+  "## Failure Samples",
+  "",
+  "| scenario | status | category | path | body snippet |",
+  "|---|---:|---|---|---|",
+  ...failureSampleRows(results)
 ].join("\n");
 
 const path = `docs/diagnostics/${date}-sub2api-chain-load-report.md`;
@@ -282,6 +344,60 @@ function longConversation(index: number): Array<{ role: "system" | "user" | "ass
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
+}
+
+function classifyFailureBody(status: number, bodyText: string): FailureCategory {
+  const text = bodyText.toLowerCase();
+  if (/quota_exhausted|insufficient_balance|depleted|account_unavailable|no available account/i.test(bodyText)) {
+    return "quota_or_depleted";
+  }
+  if (/disable|cooldown|deplete|release|rate_limited_until/i.test(bodyText)) {
+    return "account_action";
+  }
+  if (status === 429 || /rate[_ -]?limit|too many requests|temporarily limited/i.test(bodyText)) {
+    return "rate_limit";
+  }
+  if (/timeout|timed out|abort/i.test(text)) {
+    return "timeout";
+  }
+  if (status >= 400 && status < 500) {
+    return "client_error";
+  }
+  if (status >= 500) {
+    return "server_error";
+  }
+  return "unknown";
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+}
+
+function snippet(value: string): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > 240 ? `${normalized.slice(0, 237)}...` : normalized;
+}
+
+function markdownCell(value: unknown): string {
+  return String(value)
+    .replace(/\|/g, "\\|")
+    .replace(/\r?\n/g, " ")
+    .trim();
+}
+
+function errorSummaryRows(results: ScenarioResult[]): string[] {
+  const rows = results.flatMap((result) => {
+    const entries = Object.entries(result.errorSummary).sort(([left], [right]) => left.localeCompare(right));
+    return entries.map(([category, count]) => `| ${markdownCell(result.name)} | ${markdownCell(category)} | ${count} |`);
+  });
+  return rows.length > 0 ? rows : ["| none | none | 0 |"];
+}
+
+function failureSampleRows(results: ScenarioResult[]): string[] {
+  const rows = results.flatMap((result) => result.failureSamples.map((sample) => (
+    `| ${markdownCell(result.name)} | ${markdownCell(sample.status)} | ${markdownCell(sample.category)} | ${markdownCell(sample.path)} | ${markdownCell(sample.bodySnippet)} |`
+  )));
+  return rows.length > 0 ? rows : ["| none | 0 | none | none | none |"];
 }
 
 function positiveInt(value: string | undefined, fallback: number): number {
