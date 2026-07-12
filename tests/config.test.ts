@@ -361,7 +361,7 @@ describe("loadConfig", () => {
     ]) {
       expect(source).not.toContain(key);
     }
-    expect(source).toContain("# ????? Web ?????");
+    expect(source).toContain("# 运行参数在 Web 控制台调整");
   });
 
 });
