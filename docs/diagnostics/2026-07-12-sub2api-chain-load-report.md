@@ -13,30 +13,28 @@ Reference audio: not configured
 
 | scenario | total | success | 4xx | 5xx | timeout | network error | rps | p50 ms | p95 ms | p99 ms |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| codex-chat-10 | 10 | 10 | 0 | 0 | 0 | 0 | 0.98 | 8616 | 10225 | 10225 |
-| claude-code-vision-chat-10 | 10 | 10 | 0 | 0 | 0 | 0 | 0.73 | 10487 | 13742 | 13742 |
-| deepseek-chat-10 | 10 | 10 | 0 | 0 | 0 | 0 | 1.07 | 8884 | 9316 | 9316 |
-| gpt-image-2-mixed-10 | 10 | 2 | 0 | 8 | 0 | 0 | 0.14 | 23838 | 71924 | 71924 |
-| seedance-reference-video-10 | 10 | 0 | 0 | 10 | 0 | 0 | 0.71 | 9105 | 14149 | 14149 |
+| codex-chat-10 | 10 | 10 | 0 | 0 | 0 | 0 | 0.9 | 9713 | 11121 | 11121 |
+| claude-code-vision-chat-10 | 10 | 10 | 0 | 0 | 0 | 0 | 0.83 | 11699 | 11978 | 11978 |
+| deepseek-chat-10 | 10 | 10 | 0 | 0 | 0 | 0 | 1 | 9530 | 10030 | 10030 |
+| gpt-image-2-mixed-10 | 10 | 2 | 8 | 0 | 0 | 0 | 0.19 | 16623 | 54043 | 54043 |
+| seedance-reference-video-10 | 10 | 7 | 0 | 3 | 0 | 0 | 0.12 | 9674 | 83014 | 83014 |
 
 ## Error Summary
 
 | scenario | category | count |
 |---|---|---:|
-| gpt-image-2-mixed-10 | server_error | 8 |
-| seedance-reference-video-10 | server_error | 10 |
+| gpt-image-2-mixed-10 | rate_limit | 8 |
+| seedance-reference-video-10 | server_error | 3 |
 
 ## Failure Samples
 
 | scenario | status | category | path | body snippet |
 |---|---:|---|---|---|
-| gpt-image-2-mixed-10 | 502 | server_error | /images/generations | {"error":{"message":"Upstream service temporarily unavailable","type":"upstream_error"}} |
-| gpt-image-2-mixed-10 | 502 | server_error | /images/generations | {"error":{"message":"Upstream service temporarily unavailable","type":"upstream_error"}} |
-| gpt-image-2-mixed-10 | 502 | server_error | /images/generations | {"error":{"message":"Upstream service temporarily unavailable","type":"upstream_error"}} |
-| gpt-image-2-mixed-10 | 502 | server_error | /images/generations | {"error":{"message":"Upstream service temporarily unavailable","type":"upstream_error"}} |
-| gpt-image-2-mixed-10 | 502 | server_error | /images/generations | {"error":{"message":"Upstream service temporarily unavailable","type":"upstream_error"}} |
-| seedance-reference-video-10 | 502 | server_error | /videos/generations | {"error":{"message":"Upstream service temporarily unavailable","type":"upstream_error"}} |
-| seedance-reference-video-10 | 502 | server_error | /videos/generations | {"error":{"message":"Upstream service temporarily unavailable","type":"upstream_error"}} |
+| gpt-image-2-mixed-10 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limit_error"}} |
+| gpt-image-2-mixed-10 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limit_error"}} |
+| gpt-image-2-mixed-10 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limit_error"}} |
+| gpt-image-2-mixed-10 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limit_error"}} |
+| gpt-image-2-mixed-10 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limit_error"}} |
 | seedance-reference-video-10 | 502 | server_error | /videos/generations | {"error":{"message":"Upstream service temporarily unavailable","type":"upstream_error"}} |
 | seedance-reference-video-10 | 502 | server_error | /videos/generations | {"error":{"message":"Upstream service temporarily unavailable","type":"upstream_error"}} |
 | seedance-reference-video-10 | 502 | server_error | /videos/generations | {"error":{"message":"Upstream service temporarily unavailable","type":"upstream_error"}} |

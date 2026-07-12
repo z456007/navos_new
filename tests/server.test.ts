@@ -2451,7 +2451,7 @@ describe("server routes", () => {
       fetchImpl: async (url, init) => {
         paths.push(`${init?.method ?? "GET"} ${new URL(String(url)).pathname}`);
         if (String(url).endsWith("/api/tasks/navos-seedance-video-generation")) {
-          return Response.json({ task_id: "task_public", status: "queued" });
+          return Response.json({ task_id: "task_public", status: "queued", billing: { points_amount: 500, remaining_amount: 1500 } });
         }
         return Response.json({ task_id: "task_public", status: "success", video_url: "https://cdn.test/public.mp4" });
       }
@@ -2486,7 +2486,11 @@ describe("server routes", () => {
       "POST /api/tasks/navos-seedance-video-generation",
       "GET /api/tasks/video/generations/task_public"
     ]);
-    expect((await store.get("video-public"))?.status).toBe("depleted");
+    expect((await store.get("video-public"))).toMatchObject({
+      status: "active",
+      balanceRemaining: 1500,
+      leaseUntil: 0
+    });
   });
 
   it("rejects public proxy keys on the api video task route without calling upstream", async () => {
@@ -2966,7 +2970,7 @@ describe("server routes", () => {
     });
   });
 
-  it("uses one leased account per concurrent video create and depletes successful accounts", async () => {
+  it("uses one leased account per concurrent video create and only deducts reported video billing", async () => {
     const store = new InMemoryAccountStore();
     const accountService = new AccountService(store);
     await accountService.importAccount({ uid: "u1", token: "t1", balanceRemaining: 2000, balanceTotal: 2000 });
@@ -2980,7 +2984,11 @@ describe("server routes", () => {
       fetchImpl: async (_url, init) => {
         const authorization = String((init?.headers as Record<string, string>).authorization ?? "");
         usedUids.push(authorization.replace(/^Bearer\s+/, "").split(":")[0]);
-        return Response.json({ task_id: `task_${usedUids.length}`, status: "queued" });
+        return Response.json({
+          task_id: `task_${usedUids.length}`,
+          status: "queued",
+          billing: { points_amount: 500, remaining_amount: 1500 }
+        });
       }
     });
 
@@ -3008,8 +3016,102 @@ describe("server routes", () => {
     expect([first.statusCode, second.statusCode].sort()).toEqual([200, 200]);
     expect(third.statusCode).toBe(503);
     expect(usedUids.sort()).toEqual(["u1", "u2"]);
-    expect((await store.get("u1"))?.status).toBe("depleted");
-    expect((await store.get("u2"))?.status).toBe("depleted");
+    expect((await store.get("u1"))).toMatchObject({ status: "active", balanceRemaining: 1500, leaseUntil: 0 });
+    expect((await store.get("u2"))).toMatchObject({ status: "active", balanceRemaining: 1500, leaseUntil: 0 });
+  });
+
+  it("retries video generation on the next leased account when the first account hits a transient provider failure", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    await accountService.importAccount({ uid: "u1", token: "t1", balanceRemaining: 2000, balanceTotal: 2000 });
+    await accountService.importAccount({ uid: "u2", token: "t2", balanceRemaining: 2000, balanceTotal: 2000 });
+    const usedUids: string[] = [];
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      fetchImpl: async (_url, init) => {
+        const authorization = String((init?.headers as Record<string, string>).authorization ?? "");
+        const uid = authorization.replace(/^Bearer\s+/, "").split(":")[0] ?? "";
+        usedUids.push(uid);
+        if (usedUids.length === 1) {
+          return Response.json({
+            code: 502,
+            msg: "[502100] video reference image asset upload failed",
+            error_code: 502100,
+            details: { error_scope: "video_reference_asset", retryable: true }
+          }, { status: 502 });
+        }
+        return Response.json({
+          task_id: "task_retry_ok",
+          status: "asset_pending",
+          billing: { points_amount: 500, remaining_amount: 1500 }
+        });
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/video/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "city skyline", images: ["https://assets.test/ref.png"], imageRoles: ["reference_image"], durationSeconds: 5, resolution: "480P" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ task_id: "task_retry_ok" });
+    expect(usedUids).toEqual(["u1", "u2"]);
+    expect((await store.get("u1"))).toMatchObject({ status: "active", balanceRemaining: 2000, leaseUntil: 0 });
+    expect((await store.get("u2"))).toMatchObject({ status: "active", balanceRemaining: 1500, leaseUntil: 0 });
+  });
+
+  it("refreshes the bound video account balance when polling a task returns billing state", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    await accountService.importAccount({ uid: "u1", token: "t1", balanceRemaining: 2000, balanceTotal: 2000 });
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      fetchImpl: async (url) => {
+        if (String(url).endsWith("/api/tasks/navos-seedance-video-generation")) {
+          return Response.json({
+            task_id: "task_refund",
+            status: "asset_pending",
+            billing: { points_amount: 500, remaining_amount: 1500 }
+          });
+        }
+        return Response.json({
+          code: 200,
+          data: {
+            task_id: "task_refund",
+            status: "failed",
+            error: { message: "请求频率超过限制" },
+            billing: { status: "refunded", remaining_amount: 2000 }
+          }
+        });
+      }
+    });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/video/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "city skyline", durationSeconds: 5, resolution: "480P" }
+    });
+    expect(created.statusCode).toBe(200);
+    expect(await store.get("u1")).toMatchObject({ status: "active", balanceRemaining: 1500 });
+
+    const polled = await app.inject({
+      method: "GET",
+      url: "/api/video/generations/task_refund",
+      headers: { authorization: "Bearer sk-test" }
+    });
+
+    expect(polled.statusCode).toBe(200);
+    expect(polled.json()).toMatchObject({ id: "task_refund", status: "failed" });
+    expect(await store.get("u1")).toMatchObject({ status: "active", balanceRemaining: 2000 });
   });
 
   it("uses an existing 2000-credit video account before registering a new one", async () => {
@@ -3035,7 +3137,7 @@ describe("server routes", () => {
       fetchImpl: async (_url, init) => {
         const authorization = String((init?.headers as Record<string, string>).authorization ?? "");
         usedUids.push(authorization.replace(/^Bearer\s+/, "").split(":")[0]);
-        return Response.json({ task_id: "task_ready", status: "queued" });
+        return Response.json({ task_id: "task_ready", status: "queued", billing: { points_amount: 500, remaining_amount: 1500 } });
       }
     });
 
@@ -3051,7 +3153,7 @@ describe("server routes", () => {
     expect(usedUids).toEqual(["ready"]);
     expect((await store.get("low"))?.status).toBe("active");
     expect((await store.get("low"))?.leaseId).toBeUndefined();
-    expect((await store.get("ready"))?.status).toBe("depleted");
+    expect((await store.get("ready"))).toMatchObject({ status: "active", balanceRemaining: 1500 });
   });
 
   it("auto-registers for video when existing accounts are below 2000 credits", async () => {
@@ -3088,7 +3190,7 @@ describe("server routes", () => {
       registrationService: registrationService as never,
       fetchImpl: async (_url, init) => {
         usedHeaders.push(String((init?.headers as Record<string, string>).authorization ?? ""));
-        return Response.json({ task_id: "task_auto_2k", status: "queued" });
+        return Response.json({ task_id: "task_auto_2k", status: "queued", billing: { points_amount: 500, remaining_amount: 1500 } });
       }
     });
 
@@ -3103,7 +3205,7 @@ describe("server routes", () => {
     expect(registrationService.registerOne).toHaveBeenCalledOnce();
     expect(usedHeaders).toEqual(["Bearer auto-video-2k:auto-token-2k"]);
     expect((await store.get("low"))?.status).toBe("active");
-    expect((await store.get("auto-video-2k"))?.status).toBe("depleted");
+    expect((await store.get("auto-video-2k"))).toMatchObject({ status: "active", balanceRemaining: 1500 });
   });
 
   it("auto-registers a one-shot video account when the pool has no available account", async () => {
@@ -3139,7 +3241,7 @@ describe("server routes", () => {
       registrationService: registrationService as never,
       fetchImpl: async (_url, init) => {
         usedHeaders.push(String((init?.headers as Record<string, string>).authorization ?? ""));
-        return Response.json({ task_id: "task_auto", status: "queued" });
+        return Response.json({ task_id: "task_auto", status: "queued", billing: { points_amount: 500, remaining_amount: 1500 } });
       }
     });
 
@@ -3153,7 +3255,7 @@ describe("server routes", () => {
     expect(created.statusCode).toBe(200);
     expect(registrationService.registerOne).toHaveBeenCalledOnce();
     expect(usedHeaders).toEqual(["Bearer auto-video-1:auto-token-1"]);
-    expect((await store.get("auto-video-1"))?.status).toBe("depleted");
+    expect((await store.get("auto-video-1"))).toMatchObject({ status: "active", balanceRemaining: 1500 });
   });
 
   it("depletes a chat account when upstream reports insufficient balance", async () => {

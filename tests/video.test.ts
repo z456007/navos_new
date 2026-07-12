@@ -19,6 +19,10 @@ describe("video protocol", () => {
     });
     expect(normalizeVideoTaskStatus({ status: "failed", error: "bad prompt" }).status).toBe("failed");
     expect(normalizeVideoTaskStatus({ status: "running" }).status).toBe("running");
+    expect(normalizeVideoTaskStatus({ data: { task_id: "task_asset", status: "asset_pending" } })).toMatchObject({
+      id: "task_asset",
+      status: "running"
+    });
   });
 
   it("normalizes nested navos task responses", () => {

@@ -52,6 +52,17 @@ describe("sub2api chain load script", () => {
     expect(source).toContain("setInterval");
   });
 
+  it("polls async media tasks through Sub2Api before counting them successful", async () => {
+    const source = await readFile("scripts/load/sub2api-chain-load-test.ts", "utf8");
+
+    expect(source).toContain("LOAD_POLL_MEDIA");
+    expect(source).toContain("pollMediaTask");
+    expect(source).toContain('path.startsWith("/videos/generations")');
+    expect(source).toContain('path.startsWith("/images/generations")');
+    expect(source).toContain('`/videos/${encodeURIComponent(taskId)}`');
+    expect(source).toContain('`/images/generations/${encodeURIComponent(taskId)}`');
+  });
+
   it("can route each real platform through its own Sub2Api API key while sharing the same base URL", async () => {
     const source = await readFile("scripts/load/sub2api-chain-load-test.ts", "utf8");
     const wrapper = await readFile("scripts/load/run-local-sub2api-chain.ps1", "utf8");
