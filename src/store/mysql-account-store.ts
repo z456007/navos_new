@@ -140,6 +140,11 @@ export class MysqlAccountStore implements AccountStore {
     return rows[0] ? fromRow(rows[0]) : undefined;
   }
 
+  async delete(uid: string): Promise<boolean> {
+    const [result] = await this.pool.execute<ResultSetHeader>("DELETE FROM accounts WHERE uid = :uid", { uid });
+    return result.affectedRows > 0;
+  }
+
   async pickActive(nowMs: number = Date.now()): Promise<AccountRecord | undefined> {
     const [rows] = await this.pool.execute<AccountRow[]>(
       `SELECT * FROM accounts

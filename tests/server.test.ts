@@ -1480,6 +1480,22 @@ describe("server routes", () => {
       expect.objectContaining({ uid: "u1", tokenPreview: "token-ab..." })
     ]);
     expect(listed.json()[0]).not.toHaveProperty("token");
+
+    const deleted = await app.inject({
+      method: "DELETE",
+      url: "/api/accounts/u1",
+      headers: { authorization: "Bearer sk-test" }
+    });
+    expect(deleted.statusCode).toBe(200);
+    expect(deleted.json()).toEqual({ deleted: true });
+
+    const listedAfterDelete = await app.inject({
+      method: "GET",
+      url: "/api/accounts",
+      headers: { authorization: "Bearer sk-test" }
+    });
+    expect(listedAfterDelete.statusCode).toBe(200);
+    expect(listedAfterDelete.json()).toEqual([]);
   });
 
   it("refreshes an account balance through the VIP balance protocol", async () => {

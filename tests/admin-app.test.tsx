@@ -5,6 +5,7 @@ import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../web/src/App";
 import { ConsoleShell } from "../web/src/app/ConsoleShell";
+import { RuntimeConfigPanel } from "../web/src/panels/RuntimeConfigPanel";
 import { YydsMailConfigPanel } from "../web/src/panels/YydsMailConfigPanel";
 
 describe("admin app gate", () => {
@@ -152,10 +153,19 @@ describe("admin app gate", () => {
     const runtimeButton = await screen.findByRole("button", { name: "\u8fd0\u884c\u914d\u7f6e" });
     fireEvent.click(runtimeButton);
 
+    expect(await screen.findByText("运行预设")).toBeInTheDocument();
+    expect(screen.getByText("100 并发验证")).toBeInTheDocument();
+    expect(screen.getByText("长对话/长消耗")).toBeInTheDocument();
     expect(await screen.findByText("\u56fe\u7247/\u89c6\u9891\u4efb\u52a1")).toBeInTheDocument();
+    expect(screen.getByText("图片账号等待")).toBeInTheDocument();
     expect(screen.getByText("\u4f59\u989d\u68c0\u67e5")).toBeInTheDocument();
-    expect(screen.getByText("\u6ce8\u518c\u4e0e YYDS \u9650\u901f")).toBeInTheDocument();
+    expect(screen.getByText("注册吞吐")).toBeInTheDocument();
+    expect(screen.getByText("强力注册")).toBeInTheDocument();
+    expect(screen.queryByText("注册队列上限")).not.toBeInTheDocument();
+    expect(screen.queryByText("邮箱每秒创建")).not.toBeInTheDocument();
     expect(screen.getByText((content) => content.includes("\u91cd\u542f NavOS"))).toBeInTheDocument();
+    expect(screen.queryByText("IMAGE_ACCOUNT_WAIT_MS")).not.toBeInTheDocument();
+    expect(screen.queryByText("ACCOUNT_BALANCE_RECONCILE_ENABLED")).not.toBeInTheDocument();
   });
 
 
@@ -190,10 +200,14 @@ describe("admin app gate", () => {
     await screen.findByRole("button", { name: "图片生成" });
     fireEvent.click(screen.getByRole("button", { name: "图片生成" }));
 
-    fireEvent.change(screen.getByLabelText("Image prompt"), { target: { value: prompt } });
-    fireEvent.click(screen.getByRole("button", { name: "Generate image" }));
+    expect(await screen.findByRole("heading", { name: "图片生成" })).toBeInTheDocument();
+    expect(screen.getByText("图片工作台")).toBeInTheDocument();
+    expect(screen.queryByText("Image workbench")).not.toBeInTheDocument();
 
-    const generated = await screen.findByAltText("Generated image 1");
+    fireEvent.change(screen.getByLabelText("图片提示词"), { target: { value: prompt } });
+    fireEvent.click(screen.getByRole("button", { name: "开始生成" }));
+
+    const generated = await screen.findByAltText("生成图片 1");
     expect(generated).toHaveAttribute("src", "data:image/png;base64,aGVsbG8=");
     expect(fetchMock).toHaveBeenCalledWith("/api/images/generations", expect.objectContaining({ method: "POST" }));
   });
@@ -221,13 +235,13 @@ describe("admin app gate", () => {
     await screen.findByRole("button", { name: "图片生成" });
     fireEvent.click(screen.getByRole("button", { name: "图片生成" }));
 
-    fireEvent.change(screen.getByLabelText("Image prompt"), { target: { value: "保持人物姿态，改成赛博朋克风格" } });
-    fireEvent.change(screen.getByLabelText("Reference image URLs (one per line)"), {
+    fireEvent.change(screen.getByLabelText("图片提示词"), { target: { value: "保持人物姿态，改成赛博朋克风格" } });
+    fireEvent.change(screen.getByLabelText("参考图 URL，每行一个"), {
       target: { value: "https://assets.test/ref-a.png\nhttps://assets.test/ref-b.png" }
     });
-    fireEvent.click(screen.getByRole("button", { name: "Generate image" }));
+    fireEvent.click(screen.getByRole("button", { name: "开始生成" }));
 
-    await screen.findByAltText("Generated image 1");
+    await screen.findByAltText("生成图片 1");
     expect(imagePayload).toMatchObject({
       prompt: "保持人物姿态，改成赛博朋克风格",
       images: ["https://assets.test/ref-a.png", "https://assets.test/ref-b.png"]
@@ -338,6 +352,51 @@ describe("admin app gate", () => {
 
     await screen.findByText("1500 / 2000");
     expect(fetchMock).toHaveBeenCalledWith("/api/accounts/u1/balance/refresh", expect.objectContaining({ method: "POST" }));
+  });
+
+  it("deletes an account from the account pool", async () => {
+    let deleted = false;
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });
+      const path = String(url);
+      if (path === "/api/accounts" && init?.method === "GET") {
+        return Response.json(deleted ? [] : [{
+          uid: "test-account",
+          tokenPreview: "token-te...",
+          mailboxAddr: "test@mail.test",
+          status: "active",
+          balanceRemaining: 100,
+          balanceTotal: 100,
+          rateLimitedUntil: 0,
+          createdAt: 0,
+          lastUsedAt: 0,
+          lastBalanceAt: 0
+        }]);
+      }
+      if (path === "/api/registration/jobs" && init?.method === "GET") {
+        return Response.json([]);
+      }
+      if (path === "/api/accounts/test-account" && init?.method === "DELETE") {
+        deleted = true;
+        return Response.json({ deleted: true });
+      }
+      return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("Master API Key"), { target: { value: "sk-local" } });
+    fireEvent.click(screen.getByRole("button", { name: "进入控制台" }));
+
+    await screen.findByText("test-account");
+    fireEvent.click(screen.getByRole("button", { name: "删除 test-account" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/accounts/test-account", expect.objectContaining({ method: "DELETE" }));
+    });
+    await screen.findByText("账号已删除");
+    expect(screen.queryByText("test-account")).not.toBeInTheDocument();
   });
 
   it("creates and polls a video task from the console", async () => {
@@ -962,8 +1021,37 @@ describe("admin app gate", () => {
     expect(fetchMock).not.toHaveBeenCalledWith("/api/cos/config", expect.anything());
   });
 
-  it("toggles image video-reserve fallback from the config console", async () => {
+  it("toggles image video-reserve fallback from the runtime config console", async () => {
     let savedPayload: Record<string, unknown> | undefined;
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });
+      const path = String(url);
+      if (path === "/api/runtime-config" && init?.method === "GET") {
+        return Response.json({ imageAllowVideoReserveFallback: false });
+      }
+      if (path === "/api/runtime-config" && init?.method === "PUT") {
+        savedPayload = JSON.parse(String(init.body));
+        return Response.json(savedPayload);
+      }
+      return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RuntimeConfigPanel apiKey="sk-local" />);
+
+    const fallbackSwitch = await screen.findByRole("switch", { name: /视频储备账号/ });
+    expect(fallbackSwitch).not.toBeChecked();
+
+    fireEvent.click(fallbackSwitch);
+    fireEvent.click(screen.getByRole("button", { name: /保存运行配置/ }));
+
+    await waitFor(() => {
+      expect(savedPayload).toMatchObject({ imageAllowVideoReserveFallback: true });
+    });
+    expect(fetchMock).toHaveBeenCalledWith("/api/runtime-config", expect.objectContaining({ method: "PUT" }));
+  });
+
+  it("keeps YYDS config focused on mailbox and domain controls", async () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });
       const path = String(url);
@@ -976,29 +1064,16 @@ describe("admin app gate", () => {
           domains: []
         });
       }
-      if (path === "/api/runtime-config" && init?.method === "GET") {
-        return Response.json({ imageAllowVideoReserveFallback: false });
-      }
-      if (path === "/api/runtime-config" && init?.method === "PUT") {
-        savedPayload = JSON.parse(String(init.body));
-        return Response.json(savedPayload);
-      }
       return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
     });
     vi.stubGlobal("fetch", fetchMock);
 
     render(<YydsMailConfigPanel apiKey="sk-local" />);
 
-    const fallbackSwitch = await screen.findByRole("switch", { name: /视频储备账号/ });
-    expect(fallbackSwitch).not.toBeChecked();
-
-    fireEvent.click(fallbackSwitch);
-    fireEvent.click(screen.getByRole("button", { name: /保存运行配置/ }));
-
-    await waitFor(() => {
-      expect(savedPayload).toMatchObject({ imageAllowVideoReserveFallback: true });
-    });
-    expect(fetchMock).toHaveBeenCalledWith("/api/runtime-config", expect.objectContaining({ method: "PUT" }));
+    expect(await screen.findByText("YYDS Mail Key")).toBeInTheDocument();
+    expect(screen.getByText("YYDS 域名池")).toBeInTheDocument();
+    expect(screen.queryByText("运行配置")).not.toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith("/api/runtime-config", expect.anything());
   });
 
   it("saves YYDS Mail config from the console without exposing the key", async () => {

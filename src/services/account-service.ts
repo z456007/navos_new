@@ -58,6 +58,14 @@ export class AccountService {
     return this.store.get(uid);
   }
 
+  async deleteAccount(uid: string): Promise<boolean> {
+    const normalized = uid.trim();
+    if (!normalized) {
+      return false;
+    }
+    return this.store.delete(normalized);
+  }
+
   async listProviderAccounts(): Promise<AccountRecord[]> {
     return this.store.list();
   }

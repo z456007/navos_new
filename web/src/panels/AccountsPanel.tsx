@@ -1,6 +1,6 @@
 ﻿import { useEffect, useRef, useState } from "react";
-import { Button as AntButton, InputNumber, Table, type TableColumnsType } from "antd";
-import { Ban, Play, Power, RefreshCw, Square, Timer } from "lucide-react";
+import { Button as AntButton, InputNumber, Select, Table, type TableColumnsType } from "antd";
+import { Ban, Play, Power, RefreshCw, Square, Timer, Trash2 } from "lucide-react";
 import { apiRequest, errorMessage } from "../api";
 import { AccountBadge } from "../components/account-badge";
 import { JsonBlock, StatusLine } from "../components/feedback";
@@ -246,6 +246,18 @@ export function AccountsPanel({
     }
   }
 
+  async function deleteAccount(uid: string) {
+    setStatus({ kind: "loading", message: "删除账号中" });
+    try {
+      await apiRequest<unknown>(apiKey, `/api/accounts/${encodeURIComponent(uid)}`, { method: "DELETE" });
+      const loaded = await onRefresh();
+      onAccountsChange(loaded);
+      setStatus({ kind: "ok", message: "账号已删除" });
+    } catch (error) {
+      setStatus({ kind: "error", message: errorMessage(error) ?? "删除账号失败" });
+    }
+  }
+
   async function reconcileBalances() {
     setBatchBalanceRefreshing(true);
     setStatus({ kind: "loading", message: "批量检查余额中" });
@@ -334,6 +346,14 @@ export function AccountsPanel({
             title="冷却"
             type="text"
             onClick={() => void updateAccount(account.uid, "cooldown")}
+          />
+          <AntButton
+            aria-label={`删除 ${account.uid}`}
+            danger
+            icon={<Trash2 size={15} />}
+            title="删除账号"
+            type="text"
+            onClick={() => void deleteAccount(account.uid)}
           />
         </div>
       )
@@ -439,18 +459,26 @@ export function AccountsPanel({
 
       <div className="registration-ops" aria-label="批量余额检查">
         <div className="form-row three compact">
-          <label className="text-field">
+          <label className="text-field ant-field">
             <span>余额检查范围</span>
-            <select
+            <Select<BalanceReconcileScope>
               aria-label="余额检查范围"
+              showSearch
+              optionFilterProp="label"
+              options={[
+                { value: "depleted", label: "只查耗尽" },
+                { value: "active", label: "只查 active" },
+                { value: "non_disabled", label: "查非停用" },
+                { value: "all", label: "查全部" }
+              ]}
               value={balanceScope}
-              onChange={(event) => setBalanceScope(event.target.value as BalanceReconcileScope)}
-            >
-              <option value="depleted">只查耗尽</option>
-              <option value="active">只查 active</option>
-              <option value="non_disabled">查非停用</option>
-              <option value="all">查全部</option>
-            </select>
+              onChange={setBalanceScope}
+              onSearch={(value) => {
+                if (value === "depleted" || value === "active" || value === "non_disabled" || value === "all") {
+                  setBalanceScope(value);
+                }
+              }}
+            />
           </label>
           <label className="text-field ant-field">
             <span>检查数量</span>

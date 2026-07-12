@@ -1201,6 +1201,19 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     await reply.send(account);
   });
 
+  app.delete("/api/accounts/:uid", async (request, reply) => {
+    if (!requireLocalAuth(request, reply)) {
+      return;
+    }
+    const params = request.params as { uid?: string };
+    const deleted = params.uid ? await accountService.deleteAccount(params.uid) : false;
+    if (!deleted) {
+      await reply.status(404).send({ error: { message: "Account not found" } });
+      return;
+    }
+    await reply.send({ deleted: true });
+  });
+
   app.post("/api/accounts/:uid/balance/refresh", async (request, reply) => {
     if (!requireLocalAuth(request, reply)) {
       return;

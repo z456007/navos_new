@@ -1,32 +1,33 @@
 import { useEffect, useState } from "react";
 import { Alert, Button as AntButton, Card, InputNumber, Select, Switch } from "antd";
-import { Save, ShieldAlert, ShieldCheck } from "lucide-react";
+import { Save, ShieldAlert, ShieldCheck, SlidersHorizontal } from "lucide-react";
 import { apiRequest, errorMessage } from "../api";
 import { idleStatus } from "../app/defaults";
 import { StatusLine } from "../components/feedback";
 import type { AccountBalanceReconcileScope, RuntimeConfigView, StatusState } from "../types";
 
 const zh = {
-  eyebrow: "\u751f\u4ea7\u8fd0\u884c\u53c2\u6570",
-  title: "\u8fd0\u884c\u914d\u7f6e",
-  subtitle: "\u628a\u56fe\u7247\u3001\u89c6\u9891\u3001\u4f59\u989d\u68c0\u67e5\u548c\u6ce8\u518c\u5e76\u53d1\u653e\u5230\u9875\u9762\u4e0a\u64cd\u63a7\uff0c\u4e0d\u518d\u9760 SSH \u6539 .env\u3002",
-  save: "\u4fdd\u5b58\u8fd0\u884c\u914d\u7f6e",
-  loading: "\u6b63\u5728\u8bfb\u53d6\u8fd0\u884c\u914d\u7f6e",
-  saving: "\u6b63\u5728\u4fdd\u5b58\u8fd0\u884c\u914d\u7f6e",
-  saved: "\u8fd0\u884c\u914d\u7f6e\u5df2\u4fdd\u5b58",
-  loadFailed: "\u8bfb\u53d6\u8fd0\u884c\u914d\u7f6e\u5931\u8d25",
-  saveFailed: "\u4fdd\u5b58\u8fd0\u884c\u914d\u7f6e\u5931\u8d25",
-  imageVideo: "\u56fe\u7247/\u89c6\u9891\u4efb\u52a1",
-  balance: "\u4f59\u989d\u68c0\u67e5",
-  registration: "\u6ce8\u518c\u4e0e YYDS \u9650\u901f",
-  mysql: "MySQL \u8fde\u63a5\u6c60",
-  restartTitle: "\u8fd9\u4e24\u9879\u4fdd\u5b58\u540e\u9700\u91cd\u542f NavOS \u624d\u5b8c\u6574\u751f\u6548",
-  restartDesc: "\u8fde\u63a5\u6c60\u662f\u542f\u52a8\u671f\u8d44\u6e90\uff0c\u9875\u9762\u4f1a\u5148\u5199\u5165 runtime_config\uff0c\u4e0b\u6b21\u91cd\u542f\u65f6\u6309\u8fd9\u91cc\u7684\u503c\u542f\u52a8\u3002",
-  reserveProtected: "\u89c6\u9891\u50a8\u5907\u8d26\u53f7\u5df2\u4fdd\u62a4",
-  reserveOpen: "\u56fe\u7247\u4efb\u52a1\u53ef\u501f\u7528\u89c6\u9891\u8d26\u53f7",
-  reserveProtectedDesc: "\u56fe\u7247\u4f18\u5148\u4f7f\u7528\u4e2d\u4f4e\u989d\u5ea6\u8d26\u53f7\uff0c2000 \u5206\u8d26\u53f7\u7559\u7ed9 Seedance\u3002",
-  reserveOpenDesc: "\u56fe\u7247\u6c60\u8017\u5c3d\u65f6\u53ef\u4ee5\u5403\u89c6\u9891\u50a8\u5907\u8d26\u53f7\uff0c\u9002\u5408\u4e34\u65f6\u6269\u5bb9\u3002",
-  allowVideoReserve: "\u5141\u8bb8\u56fe\u7247\u4f7f\u7528\u89c6\u9891\u50a8\u5907\u8d26\u53f7"
+  eyebrow: "生产运行参数",
+  title: "运行配置",
+  subtitle: "把图片、视频、余额检查和注册并发放到页面上操控，不再靠 SSH 改 .env。",
+  save: "保存运行配置",
+  loading: "正在读取运行配置",
+  saving: "正在保存运行配置",
+  saved: "运行配置已保存",
+  loadFailed: "读取运行配置失败",
+  saveFailed: "保存运行配置失败",
+  presets: "运行预设",
+  imageVideo: "图片/视频任务",
+  balance: "余额检查",
+  registration: "注册与 YYDS 限速",
+  mysql: "数据库连接",
+  restartTitle: "数据库连接池保存后需要重启 NavOS 才会完整生效",
+  restartDesc: "连接池是启动期资源；页面会先写入运行配置，下次重启时按这里的值启动。",
+  reserveProtected: "视频储备账号已保护",
+  reserveOpen: "图片任务可借用视频账号",
+  reserveProtectedDesc: "图片优先使用中低额度账号，2000 分账号留给 Seedance。",
+  reserveOpenDesc: "图片池耗尽时可以吃视频储备账号，适合临时扩容，但会影响视频产能。",
+  allowVideoReserve: "允许图片使用视频储备账号"
 };
 
 const defaultRuntimeConfig: RuntimeConfigView = {
@@ -58,6 +59,69 @@ const defaultRuntimeConfig: RuntimeConfigView = {
   restartRequiredKeys: ["mysqlConnectionLimit", "mysqlQueueLimit"],
   updatedAt: 0
 };
+
+const runtimePresets: Array<{ name: string; desc: string; patch: Partial<RuntimeConfigView> }> = [
+  {
+    name: "安全默认",
+    desc: "小批量稳定运行，适合日常维护。",
+    patch: {
+      imageAccountWaitMs: 120000,
+      imageMaxPollAttempts: 30,
+      imagePollIntervalMs: 4000,
+      imageSyncWaitBudgetMs: 120000,
+      accountBalanceReconcileScope: "depleted",
+      accountBalanceReconcileBatchSize: 1000,
+      accountBalanceReconcileConcurrency: 10,
+      registrationMailboxCreateConcurrency: 2,
+      registrationMailboxCreatePerSecond: 2,
+      registrationPollConcurrency: 50
+    }
+  },
+  {
+    name: "100 并发验证",
+    desc: "本地 Sub2Api 全链路压测前的推荐档。",
+    patch: {
+      modelAccountWaitMs: 60000,
+      imageAccountWaitMs: 180000,
+      imageSyncWaitBudgetMs: 180000,
+      accountBalanceReconcileScope: "non_disabled",
+      accountBalanceReconcileBatchSize: 1000,
+      accountBalanceReconcileConcurrency: 20,
+      registrationMailboxCreateConcurrency: 3,
+      registrationMailboxCreatePerSecond: 3,
+      registrationPollConcurrency: 80,
+      mysqlConnectionLimit: 100,
+      mysqlQueueLimit: 0
+    }
+  },
+  {
+    name: "1000 账号池准备",
+    desc: "账号池维护和余额检查更积极，不代表直接上千压测。",
+    patch: {
+      accountBalanceReconcileScope: "non_disabled",
+      accountBalanceReconcileBatchSize: 2000,
+      accountBalanceReconcileConcurrency: 30,
+      registrationMaxInFlight: 100,
+      registrationMailboxCreateConcurrency: 4,
+      registrationMailboxCreatePerSecond: 4,
+      registrationPollConcurrency: 120,
+      mysqlConnectionLimit: 160,
+      mysqlQueueLimit: 0
+    }
+  },
+  {
+    name: "长对话/长消耗",
+    desc: "提高模型账号等待和长任务窗口，适合长上下文压测。",
+    patch: {
+      modelAccountWaitMs: 120000,
+      accountLeaseTtlMs: 1200000,
+      imageAccountWaitMs: 240000,
+      imageSyncWaitBudgetMs: 240000,
+      videoCreateTimeoutMs: 60000,
+      videoPollTimeoutMs: 60000
+    }
+  }
+];
 
 export function RuntimeConfigPanel({ apiKey }: { apiKey: string }) {
   const [config, setConfig] = useState<RuntimeConfigView>(defaultRuntimeConfig);
@@ -123,6 +187,17 @@ export function RuntimeConfigPanel({ apiKey }: { apiKey: string }) {
         </AntButton>
       </div>
 
+      <Card className="runtime-card runtime-preset-card" title={<span className="runtime-card-title"><SlidersHorizontal size={16} />{zh.presets}</span>}>
+        <div className="runtime-preset-grid">
+          {runtimePresets.map((preset) => (
+            <AntButton className="runtime-preset" key={preset.name} onClick={() => patchConfig(preset.patch)}>
+              <strong>{preset.name}</strong>
+              <span>{preset.desc}</span>
+            </AntButton>
+          ))}
+        </div>
+      </Card>
+
       <div className={`reserve-guard ${reserveProtected ? "protected" : "open"}`}>
         <span className="reserve-guard-icon"><ShieldIcon size={22} /></span>
         <div>
@@ -131,7 +206,7 @@ export function RuntimeConfigPanel({ apiKey }: { apiKey: string }) {
         </div>
       </div>
 
-      <Card title={zh.imageVideo} className="runtime-card">
+      <Card title={zh.imageVideo} className="runtime-card runtime-media-card">
         <div className="runtime-toggle-row">
           <Switch
             aria-label={zh.allowVideoReserve}
@@ -143,48 +218,61 @@ export function RuntimeConfigPanel({ apiKey }: { apiKey: string }) {
             <p>{reserveProtected ? zh.reserveProtectedDesc : zh.reserveOpenDesc}</p>
           </div>
         </div>
-        <div className="runtime-grid">
-          <NumberControl label="IMAGE_ACCOUNT_WAIT_MS" value={config.imageAccountWaitMs} onChange={(value) => numberPatch("imageAccountWaitMs", value)} />
-          <NumberControl label="IMAGE_MAX_POLL_ATTEMPTS" value={config.imageMaxPollAttempts} onChange={(value) => numberPatch("imageMaxPollAttempts", value)} />
-          <NumberControl label="IMAGE_POLL_INTERVAL_MS" value={config.imagePollIntervalMs} onChange={(value) => numberPatch("imagePollIntervalMs", value)} />
-          <NumberControl label="IMAGE_SYNC_WAIT_BUDGET_MS" value={config.imageSyncWaitBudgetMs} onChange={(value) => numberPatch("imageSyncWaitBudgetMs", value)} />
-          <NumberControl label="VIDEO_CREATE_TIMEOUT_MS" value={config.videoCreateTimeoutMs} onChange={(value) => numberPatch("videoCreateTimeoutMs", value)} />
-          <NumberControl label="VIDEO_POLL_TIMEOUT_MS" value={config.videoPollTimeoutMs} onChange={(value) => numberPatch("videoPollTimeoutMs", value)} />
+        <div className="runtime-grid compact-runtime-grid">
+          <NumberControl label="图片账号等待" help="账号池忙时等待可用图片账号的最长时间。" value={config.imageAccountWaitMs} onChange={(value) => numberPatch("imageAccountWaitMs", value)} />
+          <NumberControl label="图片轮询次数" help="异步图片任务最多查询多少次。" value={config.imageMaxPollAttempts} onChange={(value) => numberPatch("imageMaxPollAttempts", value)} />
+          <NumberControl label="图片轮询间隔" help="两次查询任务状态之间的毫秒数。" value={config.imagePollIntervalMs} onChange={(value) => numberPatch("imagePollIntervalMs", value)} />
+          <NumberControl label="图片同步等待" help="公共接口最多等待图片完成多久。" value={config.imageSyncWaitBudgetMs} onChange={(value) => numberPatch("imageSyncWaitBudgetMs", value)} />
+          <NumberControl label="视频创建超时" help="发起 Seedance 任务的超时时间。" value={config.videoCreateTimeoutMs} onChange={(value) => numberPatch("videoCreateTimeoutMs", value)} />
+          <NumberControl label="视频轮询超时" help="单次查询视频任务状态的超时时间。" value={config.videoPollTimeoutMs} onChange={(value) => numberPatch("videoPollTimeoutMs", value)} />
         </div>
       </Card>
 
-      <Card title={zh.balance} className="runtime-card">
+      <Card title={zh.balance} className="runtime-card runtime-balance-card">
         <div className="runtime-toggle-row">
-          <Switch checked={config.accountBalanceReconcileEnabled} onChange={(checked) => patchConfig({ accountBalanceReconcileEnabled: checked })} />
-          <div><strong>ACCOUNT_BALANCE_RECONCILE_ENABLED</strong><p>depleted \u8d26\u53f7\u53ef\u4ee5\u5b9a\u65f6\u68c0\u67e5\u5e76\u6062\u590d\u3002</p></div>
+          <Switch aria-label="启用余额自动检查" checked={config.accountBalanceReconcileEnabled} onChange={(checked) => patchConfig({ accountBalanceReconcileEnabled: checked })} />
+          <div><strong>启用余额自动检查</strong><p>定时检查账号余额，耗尽账号恢复后可自动拉回可用池。</p></div>
         </div>
-        <div className="runtime-grid">
-          <label className="field"><span>ACCOUNT_BALANCE_RECONCILE_SCOPE</span><Select<AccountBalanceReconcileScope> value={config.accountBalanceReconcileScope} onChange={(value) => patchConfig({ accountBalanceReconcileScope: value })} options={[{ value: "depleted", label: "depleted" }, { value: "active", label: "active" }, { value: "non_disabled", label: "non_disabled" }, { value: "all", label: "all" }]} /></label>
-          <NumberControl label="ACCOUNT_BALANCE_RECONCILE_INTERVAL_MINUTES" value={config.accountBalanceReconcileIntervalMinutes} onChange={(value) => numberPatch("accountBalanceReconcileIntervalMinutes", value)} />
-          <NumberControl label="ACCOUNT_BALANCE_RECONCILE_BATCH_SIZE" value={config.accountBalanceReconcileBatchSize} onChange={(value) => numberPatch("accountBalanceReconcileBatchSize", value)} />
-          <NumberControl label="ACCOUNT_BALANCE_RECONCILE_CONCURRENCY" value={config.accountBalanceReconcileConcurrency} onChange={(value) => numberPatch("accountBalanceReconcileConcurrency", value)} />
+        <div className="runtime-grid compact-runtime-grid">
+          <label className="runtime-field">
+            <span>检查范围</span>
+            <Select<AccountBalanceReconcileScope>
+              aria-label="余额检查范围"
+              value={config.accountBalanceReconcileScope}
+              onChange={(value) => patchConfig({ accountBalanceReconcileScope: value })}
+              options={[
+                { value: "depleted", label: "只查耗尽账号" },
+                { value: "active", label: "只查可用账号" },
+                { value: "non_disabled", label: "查非停用账号" },
+                { value: "all", label: "查全部账号" }
+              ]}
+            />
+          </label>
+          <NumberControl label="检查间隔" help="自动余额检查的分钟间隔。" value={config.accountBalanceReconcileIntervalMinutes} onChange={(value) => numberPatch("accountBalanceReconcileIntervalMinutes", value)} />
+          <NumberControl label="每批数量" help="每批最多检查多少账号。" value={config.accountBalanceReconcileBatchSize} onChange={(value) => numberPatch("accountBalanceReconcileBatchSize", value)} />
+          <NumberControl label="检查并发" help="余额接口同时并发数量。" value={config.accountBalanceReconcileConcurrency} onChange={(value) => numberPatch("accountBalanceReconcileConcurrency", value)} />
         </div>
       </Card>
 
-      <Card title={zh.registration} className="runtime-card">
-        <div className="runtime-grid">
-          <NumberControl label="REGISTRATION_CONCURRENCY" value={config.registrationConcurrency} onChange={(value) => numberPatch("registrationConcurrency", value)} />
-          <NumberControl label="REGISTRATION_MAX_IN_FLIGHT" value={config.registrationMaxInFlight} onChange={(value) => numberPatch("registrationMaxInFlight", value)} />
-          <NumberControl label="REGISTRATION_MAILBOX_CREATE_CONCURRENCY" value={config.registrationMailboxCreateConcurrency} onChange={(value) => numberPatch("registrationMailboxCreateConcurrency", value)} />
-          <NumberControl label="REGISTRATION_MAILBOX_CREATE_PER_SECOND" value={config.registrationMailboxCreatePerSecond} onChange={(value) => numberPatch("registrationMailboxCreatePerSecond", value)} />
-          <NumberControl label="REGISTRATION_VIP_SEND_CONCURRENCY" value={config.registrationVipSendConcurrency} onChange={(value) => numberPatch("registrationVipSendConcurrency", value)} />
-          <NumberControl label="REGISTRATION_POLL_CONCURRENCY" value={config.registrationPollConcurrency} onChange={(value) => numberPatch("registrationPollConcurrency", value)} />
-          <NumberControl label="REGISTRATION_LOGIN_CONCURRENCY" value={config.registrationLoginConcurrency} onChange={(value) => numberPatch("registrationLoginConcurrency", value)} />
-          <NumberControl label="REGISTRATION_CERT_CONCURRENCY" value={config.registrationCertConcurrency} onChange={(value) => numberPatch("registrationCertConcurrency", value)} />
-          <NumberControl label="REGISTRATION_YYDS_QUOTA_BLOCK_SECONDS" value={config.registrationYydsQuotaBlockSeconds} onChange={(value) => numberPatch("registrationYydsQuotaBlockSeconds", value)} />
+      <Card title={zh.registration} className="runtime-card runtime-registration-card">
+        <div className="runtime-grid compact-runtime-grid">
+          <NumberControl label="注册任务并发" value={config.registrationConcurrency} onChange={(value) => numberPatch("registrationConcurrency", value)} />
+          <NumberControl label="注册队列上限" value={config.registrationMaxInFlight} onChange={(value) => numberPatch("registrationMaxInFlight", value)} />
+          <NumberControl label="邮箱创建并发" value={config.registrationMailboxCreateConcurrency} onChange={(value) => numberPatch("registrationMailboxCreateConcurrency", value)} />
+          <NumberControl label="邮箱每秒创建" value={config.registrationMailboxCreatePerSecond} onChange={(value) => numberPatch("registrationMailboxCreatePerSecond", value)} />
+          <NumberControl label="VIP 发码并发" value={config.registrationVipSendConcurrency} onChange={(value) => numberPatch("registrationVipSendConcurrency", value)} />
+          <NumberControl label="邮件轮询并发" value={config.registrationPollConcurrency} onChange={(value) => numberPatch("registrationPollConcurrency", value)} />
+          <NumberControl label="登录并发" value={config.registrationLoginConcurrency} onChange={(value) => numberPatch("registrationLoginConcurrency", value)} />
+          <NumberControl label="认证并发" value={config.registrationCertConcurrency} onChange={(value) => numberPatch("registrationCertConcurrency", value)} />
+          <NumberControl label="YYDS 熔断秒数" help="YYDS quota 用尽后暂停邮箱创建多久。" value={config.registrationYydsQuotaBlockSeconds} onChange={(value) => numberPatch("registrationYydsQuotaBlockSeconds", value)} />
         </div>
       </Card>
 
-      <Card title={zh.mysql} className="runtime-card">
+      <Card title={zh.mysql} className="runtime-card runtime-mysql-card">
         <Alert showIcon type="warning" title={zh.restartTitle} description={zh.restartDesc} />
-        <div className="runtime-grid">
-          <NumberControl label="MYSQL_CONNECTION_LIMIT" value={config.mysqlConnectionLimit} onChange={(value) => numberPatch("mysqlConnectionLimit", value)} />
-          <NumberControl label="MYSQL_QUEUE_LIMIT" value={config.mysqlQueueLimit} onChange={(value) => numberPatch("mysqlQueueLimit", value)} />
+        <div className="runtime-grid compact-runtime-grid">
+          <NumberControl label="MySQL 最大连接" value={config.mysqlConnectionLimit} onChange={(value) => numberPatch("mysqlConnectionLimit", value)} />
+          <NumberControl label="MySQL 排队上限" help="0 表示不限制队列；修改后重启生效。" value={config.mysqlQueueLimit} onChange={(value) => numberPatch("mysqlQueueLimit", value)} />
         </div>
       </Card>
     </section>
@@ -195,11 +283,12 @@ type NumericRuntimeKey = {
   [K in keyof RuntimeConfigView]: RuntimeConfigView[K] extends number | undefined ? K : never
 }[keyof RuntimeConfigView] & string;
 
-function NumberControl({ label, value, onChange }: { label: string; value: number; onChange: (value: number | null) => void }) {
+function NumberControl({ label, help, value, onChange }: { label: string; help?: string; value: number; onChange: (value: number | null) => void }) {
   return (
-    <label className="field">
+    <label className="runtime-field">
       <span>{label}</span>
       <InputNumber min={0} value={value} onChange={onChange} />
+      {help ? <small>{help}</small> : null}
     </label>
   );
 }
