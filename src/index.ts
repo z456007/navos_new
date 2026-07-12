@@ -21,6 +21,7 @@ import { YydsMailConfigService } from "./services/yyds-mail-config-service.js";
 import { SecretBox } from "./security/secretbox.js";
 import { MysqlImageTaskStore } from "./store/image-task-store.js";
 import { MysqlAccountStore } from "./store/mysql-account-store.js";
+import { createMysqlPool } from "./store/mysql-config.js";
 import { MysqlRuntimeConfigStore } from "./store/runtime-config-store.js";
 import { MysqlYydsDomainPoolStore } from "./store/yyds-domain-pool-store.js";
 import { MysqlYydsMailConfigStore } from "./store/yyds-mail-config-store.js";
@@ -34,12 +35,13 @@ function normalizeSecretRoot(value: string): string {
 
 const config = loadConfig();
 await MysqlAccountStore.createDatabaseIfMissing(config.mysql);
-const accountStore = new MysqlAccountStore(config.mysql);
-const yydsMailConfigStore = new MysqlYydsMailConfigStore(config.mysql);
-const yydsDomainPoolStore = new MysqlYydsDomainPoolStore(config.mysql);
-const imageTaskStore = new MysqlImageTaskStore(config.mysql);
-const videoTaskStore = new MysqlVideoTaskStore(config.mysql);
-const runtimeConfigStore = new MysqlRuntimeConfigStore(config.mysql);
+const mysqlPool = createMysqlPool(config.mysql);
+const accountStore = new MysqlAccountStore(mysqlPool);
+const yydsMailConfigStore = new MysqlYydsMailConfigStore(mysqlPool);
+const yydsDomainPoolStore = new MysqlYydsDomainPoolStore(mysqlPool);
+const imageTaskStore = new MysqlImageTaskStore(mysqlPool);
+const videoTaskStore = new MysqlVideoTaskStore(mysqlPool);
+const runtimeConfigStore = new MysqlRuntimeConfigStore(mysqlPool);
 await accountStore.ensureSchema();
 await yydsMailConfigStore.ensureSchema();
 await yydsDomainPoolStore.ensureSchema();
@@ -210,7 +212,11 @@ app.addHook("onClose", async () => {
     try {
       await registrationQueue.close();
     } finally {
-      await limiterRedisClient.quit();
+      try {
+        await limiterRedisClient.quit();
+      } finally {
+        await mysqlPool.end();
+      }
     }
   }
 });

@@ -1,6 +1,6 @@
 import type { Pool, RowDataPacket } from "mysql2/promise";
 import type { RuntimeConfigView } from "../services/runtime-config-schema.js";
-import { createMysqlPool, type MysqlConfig } from "./mysql-config.js";
+import { resolveMysqlPool, type MysqlPoolInput } from "./mysql-config.js";
 
 export interface RuntimeConfigStore {
   ensureSchema?(): Promise<void>;
@@ -32,8 +32,8 @@ export class InMemoryRuntimeConfigStore implements RuntimeConfigStore {
 export class MysqlRuntimeConfigStore implements RuntimeConfigStore {
   private readonly pool: Pool;
 
-  constructor(config: MysqlConfig) {
-    this.pool = createMysqlPool(config);
+  constructor(input: MysqlPoolInput) {
+    this.pool = resolveMysqlPool(input);
   }
 
   async ensureSchema(): Promise<void> {

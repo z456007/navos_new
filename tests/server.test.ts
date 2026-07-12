@@ -3633,6 +3633,55 @@ describe("server routes", () => {
     expect(registrationService.registerOne).toHaveBeenCalledOnce();
   });
 
+  it("logs provider 5xx diagnostics with route model account and body snippet", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    await accountService.importAccount({ uid: "u-log", token: "t-log", balanceRemaining: 1000, balanceTotal: 1000 });
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      fetchImpl: async () => Response.json(
+        { error: { message: "upstream exploded", request_id: "req-log-1" } },
+        { status: 502 }
+      )
+    });
+
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/responses",
+        headers: { authorization: "Bearer sk-test" },
+        payload: {
+          model: "codex",
+          input: [{ role: "user", content: [{ type: "input_text", text: "hello" }] }]
+        }
+      });
+
+      expect(response.statusCode).toBe(502);
+      expect(warn).toHaveBeenCalledWith(
+        "navos.provider_failure",
+        expect.stringContaining('"route":"/v1/responses"')
+      );
+      expect(warn).toHaveBeenCalledWith(
+        "navos.provider_failure",
+        expect.stringContaining('"model":"codex"')
+      );
+      expect(warn).toHaveBeenCalledWith(
+        "navos.provider_failure",
+        expect.stringContaining('"accountUid":"u-log"')
+      );
+      expect(warn).toHaveBeenCalledWith(
+        "navos.provider_failure",
+        expect.stringContaining('"bodySnippet":"{\"error\":{\"message\":\"upstream exploded\",\"request_id\":\"req-log-1\"}}"')
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("depletes a leased video account when upstream reports insufficient balance", async () => {
     const store = new InMemoryAccountStore();
     const accountService = new AccountService(store);

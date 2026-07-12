@@ -1,7 +1,7 @@
 import type { RowDataPacket } from "mysql2";
 import type { Pool, PoolConnection } from "mysql2/promise";
 import type { YydsFailureKind } from "../protocols/mail/yyds-mail.js";
-import { createMysqlPool, type MysqlConfig } from "./mysql-config.js";
+import { resolveMysqlPool, type MysqlPoolInput } from "./mysql-config.js";
 
 export type YydsDomainPoolMode = "auto" | "whitelist" | "auto-plus-whitelist";
 export type YydsDomainHealthStatus = "active" | "cooldown" | "disabled";
@@ -185,8 +185,8 @@ export class InMemoryYydsDomainPoolStore implements YydsDomainPoolStore {
 export class MysqlYydsDomainPoolStore implements YydsDomainPoolStore {
   private readonly pool: Pool;
 
-  constructor(config: MysqlConfig) {
-    this.pool = createMysqlPool(config);
+  constructor(input: MysqlPoolInput) {
+    this.pool = resolveMysqlPool(input);
   }
 
   async ensureSchema(): Promise<void> {

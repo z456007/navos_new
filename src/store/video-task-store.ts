@@ -1,5 +1,5 @@
 import type { Pool, RowDataPacket } from "mysql2/promise";
-import { createMysqlPool, type MysqlConfig } from "./mysql-config.js";
+import { resolveMysqlPool, type MysqlPoolInput } from "./mysql-config.js";
 
 export interface VideoTaskRecord {
   taskId: string;
@@ -67,8 +67,8 @@ export class InMemoryVideoTaskStore implements VideoTaskStore {
 export class MysqlVideoTaskStore implements VideoTaskStore {
   private readonly pool: Pool;
 
-  constructor(config: MysqlConfig) {
-    this.pool = createMysqlPool(config);
+  constructor(input: MysqlPoolInput) {
+    this.pool = resolveMysqlPool(input);
   }
 
   async ensureSchema(): Promise<void> {

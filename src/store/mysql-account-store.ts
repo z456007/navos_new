@@ -1,6 +1,6 @@
 import mysql, { type Pool, type ResultSetHeader, type RowDataPacket } from "mysql2/promise";
 import type { AccountImportInput, AccountRecord, AccountStatus, AccountStore } from "./account-store.js";
-import { createMysqlPool, type MysqlConfig } from "./mysql-config.js";
+import { resolveMysqlPool, type MysqlConfig, type MysqlPoolInput } from "./mysql-config.js";
 
 interface AccountRow extends RowDataPacket {
   uid: string;
@@ -21,8 +21,8 @@ interface AccountRow extends RowDataPacket {
 export class MysqlAccountStore implements AccountStore {
   private readonly pool: Pool;
 
-  constructor(config: MysqlConfig) {
-    this.pool = createMysqlPool(config);
+  constructor(input: MysqlPoolInput) {
+    this.pool = resolveMysqlPool(input);
   }
 
   static async createDatabaseIfMissing(config: MysqlConfig): Promise<void> {
@@ -175,7 +175,7 @@ export class MysqlAccountStore implements AccountStore {
            AND (:maximumBalanceRemainingExclusive IS NULL OR balance_remaining < :maximumBalanceRemainingExclusive)
          ORDER BY last_used_at ASC, created_at ASC
          LIMIT 1
-         FOR UPDATE`,
+         FOR UPDATE SKIP LOCKED`,
         { nowMs, minimumBalanceRemaining, maximumBalanceRemainingExclusive: maximumBalanceRemainingExclusive ?? null }
       );
       const row = rows[0];

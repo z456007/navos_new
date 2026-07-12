@@ -60,6 +60,7 @@ const deepseekApiKey = process.env.SUB2API_DEEPSEEK_API_KEY ?? "sk-local-deepsee
 const imageApiKey = process.env.SUB2API_IMAGE_API_KEY ?? defaultApiKey;
 const seedanceApiKey = process.env.SUB2API_SEEDANCE_API_KEY ?? "sk-local-seedance-zgm2003";
 const timeoutMs = Number(process.env.LOAD_TIMEOUT_MS ?? 180000);
+const progressIntervalMs = nonNegativeInt(process.env.LOAD_PROGRESS_INTERVAL_MS, 5000);
 const reportTimeZone = process.env.LOAD_REPORT_TIME_ZONE ?? "Asia/Shanghai";
 const requestsPerScenario = positiveInt(process.env.LOAD_REQUESTS_PER_SCENARIO, 0);
 const includeMixedAll = process.env.LOAD_MIXED_ALL !== "false";
@@ -240,6 +241,7 @@ async function runScenario(scenario: Scenario): Promise<ScenarioResult> {
   let serverError = 0;
   let timeout = 0;
   let networkError = 0;
+  let completed = 0;
   let next = 0;
 
   function recordFailure(
@@ -257,6 +259,15 @@ async function runScenario(scenario: Scenario): Promise<ScenarioResult> {
         bodySnippet: snippet(bodyText)
       });
     }
+  }
+
+  function logProgress(final = false): void {
+    const pending = Math.max(0, scenario.requests - completed);
+    console.log(
+      `[progress] ${scenario.name}${final ? " final" : ""} completed=${completed}/${scenario.requests}`
+      + ` success=${success} 4xx=${clientError} 5xx=${serverError}`
+      + ` timeout=${timeout} network=${networkError} pending=${pending}`
+    );
   }
 
   async function worker(): Promise<void> {
@@ -296,12 +307,24 @@ async function runScenario(scenario: Scenario): Promise<ScenarioResult> {
         latencies.push(performance.now() - start);
       } finally {
         clearTimeout(timer);
+        completed += 1;
       }
     }
   }
 
   const started = performance.now();
-  await Promise.all(Array.from({ length: scenario.concurrency }, worker));
+  const progressTimer = progressIntervalMs > 0
+    ? setInterval(() => logProgress(false), progressIntervalMs)
+    : undefined;
+  progressTimer?.unref?.();
+  try {
+    await Promise.all(Array.from({ length: scenario.concurrency }, worker));
+  } finally {
+    if (progressTimer) {
+      clearInterval(progressTimer);
+    }
+    logProgress(true);
+  }
   const elapsedMs = performance.now() - started;
   latencies.sort((a, b) => a - b);
   const percentile = (p: number): number => latencies[Math.min(latencies.length - 1, Math.floor(latencies.length * p))] ?? 0;
@@ -561,6 +584,11 @@ function failureSampleRows(results: ScenarioResult[]): string[] {
 function positiveInt(value: string | undefined, fallback: number): number {
   const n = Number(value);
   return Number.isInteger(n) && n > 0 ? n : fallback;
+}
+
+function nonNegativeInt(value: string | undefined, fallback: number): number {
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 0 ? n : fallback;
 }
 
 function dateStamp(date: Date, timeZone: string): string {

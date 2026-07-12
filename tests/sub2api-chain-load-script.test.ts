@@ -43,6 +43,15 @@ describe("sub2api chain load script", () => {
     expect(source).toContain("classifyFailureBody");
   });
 
+  it("prints periodic progress so long real runs do not look stalled", async () => {
+    const source = await readFile("scripts/load/sub2api-chain-load-test.ts", "utf8");
+
+    expect(source).toContain("LOAD_PROGRESS_INTERVAL_MS");
+    expect(source).toContain("logProgress");
+    expect(source).toContain("pending");
+    expect(source).toContain("setInterval");
+  });
+
   it("can route each real platform through its own Sub2Api API key while sharing the same base URL", async () => {
     const source = await readFile("scripts/load/sub2api-chain-load-test.ts", "utf8");
     const wrapper = await readFile("scripts/load/run-local-sub2api-chain.ps1", "utf8");

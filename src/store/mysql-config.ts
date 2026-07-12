@@ -10,6 +10,8 @@ export interface MysqlConfig {
   queueLimit: number;
 }
 
+export type MysqlPoolInput = MysqlConfig | Pool;
+
 export function createMysqlPool(config: MysqlConfig): Pool {
   return mysql.createPool({
     host: config.host,
@@ -22,4 +24,16 @@ export function createMysqlPool(config: MysqlConfig): Pool {
     queueLimit: config.queueLimit,
     namedPlaceholders: true
   });
+}
+
+export function isMysqlPool(input: MysqlPoolInput): input is Pool {
+  const candidate = input as Partial<Pick<Pool, "query" | "execute" | "getConnection" | "end">>;
+  return typeof candidate.query === "function"
+    && typeof candidate.execute === "function"
+    && typeof candidate.getConnection === "function"
+    && typeof candidate.end === "function";
+}
+
+export function resolveMysqlPool(input: MysqlPoolInput): Pool {
+  return isMysqlPool(input) ? input : createMysqlPool(input);
 }

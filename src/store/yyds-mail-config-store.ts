@@ -1,6 +1,6 @@
 import type { RowDataPacket } from "mysql2";
 import type { Pool } from "mysql2/promise";
-import { createMysqlPool, type MysqlConfig } from "./mysql-config.js";
+import { resolveMysqlPool, type MysqlPoolInput } from "./mysql-config.js";
 
 export interface YydsMailConfigRaw {
   id: number;
@@ -56,8 +56,8 @@ export class InMemoryYydsMailConfigStore implements YydsMailConfigStore {
 export class MysqlYydsMailConfigStore implements YydsMailConfigStore {
   private readonly pool: Pool;
 
-  constructor(config: MysqlConfig) {
-    this.pool = createMysqlPool(config);
+  constructor(input: MysqlPoolInput) {
+    this.pool = resolveMysqlPool(input);
   }
 
   async ensureSchema(): Promise<void> {

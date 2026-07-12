@@ -1,5 +1,5 @@
 import type { Pool, RowDataPacket } from "mysql2/promise";
-import { createMysqlPool, type MysqlConfig } from "./mysql-config.js";
+import { resolveMysqlPool, type MysqlPoolInput } from "./mysql-config.js";
 import type { ImageTaskPollPath } from "../protocols/image.js";
 import { parseVideoTaskRawJson } from "./video-task-store.js";
 
@@ -77,8 +77,8 @@ export class InMemoryImageTaskStore implements ImageTaskStore {
 export class MysqlImageTaskStore implements ImageTaskStore {
   private readonly pool: Pool;
 
-  constructor(config: MysqlConfig) {
-    this.pool = createMysqlPool(config);
+  constructor(input: MysqlPoolInput) {
+    this.pool = resolveMysqlPool(input);
   }
 
   async ensureSchema(): Promise<void> {
