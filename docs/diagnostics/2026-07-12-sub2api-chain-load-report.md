@@ -19,25 +19,26 @@ Reference audio: not configured
 
 | scenario | total | success | 4xx | 5xx | timeout | network error | rps | p50 ms | p95 ms | p99 ms |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| image-t2i-5 | 5 | 2 | 3 | 0 | 0 | 0 | 0.06 | 25166 | 81663 | 81663 |
-| image-reference-5 | 5 | 0 | 5 | 0 | 0 | 0 | 0.2 | 21096 | 25419 | 25419 |
+| image-t2i-5 | 5 | 0 | 5 | 0 | 0 | 0 | 0.2 | 10662 | 24604 | 24604 |
+| image-reference-5 | 5 | 1 | 4 | 0 | 0 | 0 | 0.14 | 5882 | 36219 | 36219 |
 
 ## Error Summary
 
 | scenario | category | count |
 |---|---|---:|
-| image-t2i-5 | rate_limit | 3 |
-| image-reference-5 | rate_limit | 5 |
+| image-t2i-5 | rate_limit | 5 |
+| image-reference-5 | rate_limit | 4 |
 
 ## Failure Samples
 
 | scenario | status | category | path | body snippet |
 |---|---:|---|---|---|
-| image-t2i-5 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limit_error"}} |
-| image-t2i-5 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limit_error"}} |
-| image-t2i-5 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limit_error"}} |
-| image-reference-5 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limit_error"}} |
-| image-reference-5 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limit_error"}} |
-| image-reference-5 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limit_error"}} |
-| image-reference-5 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limit_error"}} |
-| image-reference-5 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limit_error"}} |
+| image-t2i-5 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limited"}} |
+| image-t2i-5 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limited"}} |
+| image-t2i-5 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limited"}} |
+| image-t2i-5 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limited"}} |
+| image-t2i-5 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limited"}} |
+| image-reference-5 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limited"}} |
+| image-reference-5 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limited"}} |
+| image-reference-5 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limited"}} |
+| image-reference-5 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limited"}} |

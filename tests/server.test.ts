@@ -2387,6 +2387,51 @@ describe("server routes", () => {
     expect((await store.get("u2"))?.rateLimitedUntil).toBeGreaterThan(Date.now());
   });
 
+  it("does not fan out image retries across accounts when provider returns a rate limit", async () => {
+    const store = new InMemoryAccountStore();
+    await store.upsert({ uid: "u1", token: "t1", balanceRemaining: 200, balanceTotal: 200 });
+    await store.upsert({ uid: "u2", token: "t2", balanceRemaining: 200, balanceTotal: 200 });
+    const usedAuthHeaders: string[] = [];
+    let createCalls = 0;
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(store),
+      fetchImpl: async (url, init) => {
+        const authorization = String((init?.headers as Record<string, string>).authorization ?? "");
+        usedAuthHeaders.push(authorization);
+        const path = new URL(String(url)).pathname;
+        if (path === "/api/tasks/navos-gpt-image-t2i") {
+          createCalls += 1;
+          return Response.json({ code: 200, msg: "success", data: { task_id: "img_rate_once", status: "queued" } });
+        }
+        if (path === "/api/tasks/image/generations/img_rate_once") {
+          return Response.json({
+            code: 200,
+            msg: "success",
+            data: { status: "failed", error: "\u8bf7\u6c42\u9891\u7387\u8d85\u8fc7\u9650\u5236" }
+          });
+        }
+        return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/images/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { model: "gpt-image-2", prompt: "white robot", n: 1, quality: "low", size: "1024x1024" }
+    });
+
+    expect(response.statusCode).toBe(429);
+    expect(response.json()).toMatchObject({ error: { type: "rate_limited" } });
+    expect(createCalls).toBe(1);
+    expect(usedAuthHeaders).toEqual(["Bearer u1:t1", "Bearer u1:t1"]);
+    expect((await store.get("u1"))?.rateLimitedUntil).toBeGreaterThan(Date.now());
+    expect((await store.get("u2"))?.rateLimitedUntil).toBe(0);
+  });
+
   it("exposes v1 video generation compatibility routes", async () => {
     const paths: string[] = [];
     const accountService = new AccountService(new InMemoryAccountStore());
