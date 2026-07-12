@@ -3114,6 +3114,64 @@ describe("server routes", () => {
     expect(await store.get("u1")).toMatchObject({ status: "active", balanceRemaining: 2000 });
   });
 
+  it("cooldowns the bound video account when polling returns a terminal rate-limit failure", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    await accountService.importAccount({ uid: "u1", token: "t1", balanceRemaining: 2000, balanceTotal: 2000 });
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      fetchImpl: async (url) => {
+        if (String(url).endsWith("/api/tasks/navos-seedance-video-generation")) {
+          return Response.json({
+            task_id: "task_rate_limited_refund",
+            status: "asset_pending",
+            billing: { points_amount: 500, remaining_amount: 1500 }
+          });
+        }
+        return Response.json({
+          code: 200,
+          data: {
+            task_id: "task_rate_limited_refund",
+            status: "failed",
+            error: {
+              code: "video_asset_activation_failed",
+              message: "\u8bf7\u6c42\u9891\u7387\u8d85\u8fc7\u9650\u5236"
+            },
+            billing: {
+              status: "refunded",
+              remaining_amount: 1500,
+              resolution: "480p",
+              duration_seconds: "5"
+            }
+          }
+        });
+      }
+    });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/video/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "city skyline", durationSeconds: 5, resolution: "480P" }
+    });
+    expect(created.statusCode).toBe(200);
+
+    const polled = await app.inject({
+      method: "GET",
+      url: "/api/video/generations/task_rate_limited_refund",
+      headers: { authorization: "Bearer sk-test" }
+    });
+
+    expect(polled.statusCode).toBe(200);
+    expect(polled.json()).toMatchObject({ id: "task_rate_limited_refund", status: "failed" });
+    const account = await store.get("u1");
+    expect(account).toMatchObject({ status: "active", balanceRemaining: 1500, leaseUntil: 0 });
+    expect(account?.rateLimitedUntil).toBeGreaterThan(Date.now());
+  });
+
   it("uses an existing 2000-credit video account before registering a new one", async () => {
     const store = new InMemoryAccountStore();
     const accountService = new AccountService(store);

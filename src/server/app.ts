@@ -1784,6 +1784,10 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     const result = await getVideoTask(client, params.taskId, headers);
     if (existingTask?.accountUid && result.status === 200) {
       await settleVideoAccountFromBilling(existingTask.accountUid, undefined, result.body);
+      const decision = classifyProviderResult(result);
+      if (providerFailureIsAccountRetryable(decision)) {
+        await applyStreamedProviderFailure(existingTask.accountUid, decision);
+      }
     }
     if (result.body.id) {
       await saveVideoTask(result.body, existingTask?.accountUid);
