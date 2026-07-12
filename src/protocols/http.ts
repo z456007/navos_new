@@ -1,4 +1,5 @@
 import { Readable } from "node:stream";
+import { Agent, type Dispatcher } from "undici";
 
 export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -8,11 +9,32 @@ export interface ProviderResult<T = unknown> {
   headers: Headers;
 }
 
+type RequestInitWithDispatcher = RequestInit & { dispatcher?: Dispatcher };
+
+const providerDispatcher = new Agent({
+  bodyTimeout: 0,
+  headersTimeout: 0,
+  connectTimeout: 30_000,
+  connections: 4096,
+  keepAliveTimeout: 120_000,
+  keepAliveMaxTimeout: 120_000
+});
+
+export function createProviderFetch(
+  fetchImpl: FetchLike = fetch,
+  dispatcher: Dispatcher = providerDispatcher
+): FetchLike {
+  return (input, init = {}) => fetchImpl(input, {
+    ...init,
+    dispatcher
+  } as RequestInitWithDispatcher);
+}
+
 export class ProviderHttpClient {
   private readonly baseUrl: string;
   private readonly fetchImpl: FetchLike;
 
-  constructor(baseUrl: string, fetchImpl: FetchLike = fetch) {
+  constructor(baseUrl: string, fetchImpl: FetchLike = createProviderFetch()) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.fetchImpl = fetchImpl;
   }

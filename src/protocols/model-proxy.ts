@@ -1,6 +1,7 @@
 import { Transform } from "node:stream";
 import type { ProviderResult } from "./http.js";
 import { ProviderHttpClient } from "./http.js";
+import { pipeProviderStream } from "./provider-stream.js";
 
 export interface ModelProxyRequest {
   method: "GET" | "POST";
@@ -265,7 +266,7 @@ async function forwardResponsesViaChatCompletions<T = unknown>(
   if (contentType.includes("text/event-stream") && isNodeReadable(result.body)) {
     return {
       ...result,
-      body: result.body.pipe(createChatCompletionsToResponsesStream(requestedModel)) as T
+      body: pipeProviderStream(result.body, createChatCompletionsToResponsesStream(requestedModel)) as T
     };
   }
 
@@ -294,7 +295,7 @@ async function forwardChatCompletion<T = unknown>(
     if (contentType.includes("text/event-stream") && isNodeReadable(result.body)) {
       return {
         ...result,
-        body: result.body.pipe(createOpenAiResponsesToChatCompletionsStream(model)) as T
+        body: pipeProviderStream(result.body, createOpenAiResponsesToChatCompletionsStream(model)) as T
       };
     }
     return {
@@ -314,7 +315,7 @@ async function forwardChatCompletion<T = unknown>(
   if (contentType.includes("text/event-stream") && isNodeReadable(result.body)) {
     return {
       ...result,
-      body: result.body.pipe(createAnthropicMessagesToChatCompletionsStream(model)) as T
+      body: pipeProviderStream(result.body, createAnthropicMessagesToChatCompletionsStream(model)) as T
     };
   }
   return {

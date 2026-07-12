@@ -25,6 +25,7 @@ import {
   normalizePublicProxyModelId,
   PUBLIC_PROXY_MODEL_IDS
 } from "../protocols/model-proxy.js";
+import { pipeProviderStream } from "../protocols/provider-stream.js";
 import { registerAccount } from "../protocols/register.js";
 import { uploadAsset } from "../protocols/upload.js";
 import type { VipBalanceClient } from "../protocols/vip-client.js";
@@ -840,7 +841,15 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     });
     return {
       ...result,
-      body: result.body.pipe(detector)
+      body: pipeProviderStream(result.body, detector, {
+        onError: (error) => {
+          console.log("navos.provider_stream_error", JSON.stringify({
+            kind: "model",
+            accountUid: uid,
+            message: error instanceof Error ? error.message : String(error)
+          }));
+        }
+      })
     };
   }
 
