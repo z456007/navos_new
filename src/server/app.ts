@@ -215,6 +215,49 @@ function providerResultBodyText(result: ProviderResult): string {
     : JSON.stringify(result.body) ?? "";
 }
 
+interface ProviderFailureLogInput {
+  kind: "model" | "image" | "video";
+  route: string;
+  status: number;
+  body: unknown;
+  model?: string;
+  accountUid?: string;
+  attempt?: number;
+}
+
+function logProviderFailure(input: ProviderFailureLogInput): void {
+  if (input.status < 500) {
+    return;
+  }
+  const payload: Record<string, unknown> = {
+    kind: input.kind,
+    route: input.route,
+    status: input.status,
+    bodySnippet: providerFailureBodySnippet(input.body)
+  };
+  if (input.model) {
+    payload.model = input.model;
+  }
+  if (input.accountUid) {
+    payload.accountUid = input.accountUid;
+  }
+  if (input.attempt !== undefined) {
+    payload.attempt = input.attempt;
+  }
+  console.log("navos.provider_failure", JSON.stringify(payload));
+}
+
+function providerFailureBodySnippet(body: unknown): string {
+  let text: string;
+  try {
+    text = typeof body === "string" ? body : JSON.stringify(body) ?? "";
+  } catch {
+    text = String(body);
+  }
+  const normalized = text.replace(/\s+/g, " ").trim();
+  return normalized.length > 800 ? `${normalized.slice(0, 797)}...` : normalized;
+}
+
 function providerResultIndicatesQuotaExhausted(result: ProviderResult): boolean {
   return classifyProviderResult(result).accountAction === "deplete";
 }
@@ -715,6 +758,15 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
         body,
         headers: auth.headers
       }).catch(providerExceptionResult));
+      logProviderFailure({
+        kind: "model",
+        route: path,
+        model: readBodyModel(body),
+        accountUid: auth.account.uid,
+        status: result.status,
+        body: result.body,
+        attempt: attempt + 1
+      });
       lastResult = result;
 
       const decision = classifyProviderResult(result);
@@ -1572,6 +1624,14 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     }
 
     const result = await createVideoTask(client, taskPayload, headers);
+    logProviderFailure({
+      kind: "video",
+      route: request.url,
+      model: readBodyModel(body),
+      accountUid: account.uid,
+      status: result.status,
+      body: result.body
+    });
     if (result.status >= 200 && result.status < 300) {
       await accountService.depleteVideoAccount(account.uid);
       const createdTask = normalizeVideoTaskStatus(result.body);
@@ -1664,6 +1724,15 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
         maxAttempts: runtimeConfig.imageMaxPollAttempts,
         intervalMs: runtimeConfig.imagePollIntervalMs,
         outputMode: defaultResponseFormat === "b64_json" ? "display" : undefined
+      });
+      logProviderFailure({
+        kind: "image",
+        route: request.url,
+        model: readBodyModel(payload),
+        accountUid: account.uid,
+        status: result.status,
+        body: result.body,
+        attempt: attempt + 1
       });
       lastResult = result;
       if (result.status === 200) {

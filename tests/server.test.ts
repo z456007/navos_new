@@ -3634,7 +3634,7 @@ describe("server routes", () => {
   });
 
   it("logs provider 5xx diagnostics with route model account and body snippet", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const store = new InMemoryAccountStore();
     const accountService = new AccountService(store);
     await accountService.importAccount({ uid: "u-log", token: "t-log", balanceRemaining: 1000, balanceTotal: 1000 });
@@ -3661,24 +3661,20 @@ describe("server routes", () => {
       });
 
       expect(response.statusCode).toBe(502);
-      expect(warn).toHaveBeenCalledWith(
-        "navos.provider_failure",
-        expect.stringContaining('"route":"/v1/responses"')
-      );
-      expect(warn).toHaveBeenCalledWith(
-        "navos.provider_failure",
-        expect.stringContaining('"model":"codex"')
-      );
-      expect(warn).toHaveBeenCalledWith(
-        "navos.provider_failure",
-        expect.stringContaining('"accountUid":"u-log"')
-      );
-      expect(warn).toHaveBeenCalledWith(
-        "navos.provider_failure",
-        expect.stringContaining('"bodySnippet":"{\"error\":{\"message\":\"upstream exploded\",\"request_id\":\"req-log-1\"}}"')
-      );
+      const diagnosticCall = log.mock.calls.find((call) => call[0] === "navos.provider_failure");
+      expect(diagnosticCall).toBeDefined();
+      const diagnostic = JSON.parse(String(diagnosticCall?.[1])) as Record<string, unknown>;
+      expect(diagnostic).toMatchObject({
+        kind: "model",
+        route: "/v1/responses",
+        status: 502,
+        model: "codex",
+        accountUid: "u-log",
+        attempt: 1,
+        bodySnippet: '{"error":{"message":"upstream exploded","request_id":"req-log-1"}}'
+      });
     } finally {
-      warn.mockRestore();
+      log.mockRestore();
     }
   });
 
