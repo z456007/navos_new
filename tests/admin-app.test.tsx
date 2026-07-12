@@ -399,6 +399,38 @@ describe("admin app gate", () => {
     expect(screen.queryByText("test-account")).not.toBeInTheDocument();
   });
 
+  it("paginates the account pool to keep menu switching responsive", async () => {
+    const accounts = Array.from({ length: 75 }, (_, index) => ({
+      uid: `acct-${String(index + 1).padStart(3, "0")}`,
+      tokenPreview: "token-ab...",
+      mailboxAddr: `acct${index + 1}@mail.test`,
+      status: "active",
+      balanceRemaining: 100,
+      balanceTotal: 100,
+      rateLimitedUntil: 0,
+      createdAt: index,
+      lastUsedAt: 0,
+      lastBalanceAt: 0
+    }));
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });
+      const path = String(url);
+      if (path === "/api/accounts") return Response.json(accounts);
+      if (path === "/api/registration/jobs" && init?.method === "GET") return Response.json([]);
+      return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("Master API Key"), { target: { value: "sk-local" } });
+    fireEvent.click(screen.getByRole("button", { name: "进入控制台" }));
+
+    await screen.findByText("acct-001");
+    expect(screen.queryByText("acct-075")).not.toBeInTheDocument();
+    expect(screen.getByText("1-50 条/共 75 条")).toBeInTheDocument();
+  });
+
   it("creates and polls a video task from the console", async () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });

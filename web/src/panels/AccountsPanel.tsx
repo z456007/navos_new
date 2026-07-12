@@ -519,7 +519,12 @@ export function AccountsPanel({
         columns={accountColumns}
         dataSource={accounts}
         locale={{ emptyText: "暂无账号" }}
-        pagination={false}
+        pagination={{
+          defaultPageSize: 50,
+          pageSizeOptions: [50, 100, 200],
+          showSizeChanger: true,
+          showTotal: (total, range) => `${range[0]}-${range[1]} 条/共 ${total} 条`
+        }}
         rowKey="uid"
         scroll={{ x: 900 }}
         size="middle"
