@@ -1,8 +1,7 @@
 import type { RowDataPacket } from "mysql2";
 import type { Pool, PoolConnection } from "mysql2/promise";
-import mysql from "mysql2/promise";
 import type { YydsFailureKind } from "../protocols/mail/yyds-mail.js";
-import type { MysqlConfig } from "./mysql-account-store.js";
+import { resolveMysqlPool, type MysqlPoolInput } from "./mysql-config.js";
 
 export type YydsDomainPoolMode = "auto" | "whitelist" | "auto-plus-whitelist";
 export type YydsDomainHealthStatus = "active" | "cooldown" | "disabled";
@@ -186,17 +185,8 @@ export class InMemoryYydsDomainPoolStore implements YydsDomainPoolStore {
 export class MysqlYydsDomainPoolStore implements YydsDomainPoolStore {
   private readonly pool: Pool;
 
-  constructor(config: MysqlConfig) {
-    this.pool = mysql.createPool({
-      host: config.host,
-      port: config.port,
-      user: config.user,
-      password: config.password,
-      database: config.database,
-      waitForConnections: true,
-      connectionLimit: 10,
-      namedPlaceholders: true
-    });
+  constructor(input: MysqlPoolInput) {
+    this.pool = resolveMysqlPool(input);
   }
 
   async ensureSchema(): Promise<void> {
@@ -234,6 +224,11 @@ export class MysqlYydsDomainPoolStore implements YydsDomainPoolStore {
       "last_auto_checked_at",
       "ALTER TABLE yyds_domain_health ADD COLUMN last_auto_checked_at BIGINT NOT NULL DEFAULT 0"
     );
+    await this.addIndexIfMissing(
+      "yyds_domain_health",
+      "idx_yyds_domain_health_pick",
+      "CREATE INDEX idx_yyds_domain_health_pick ON yyds_domain_health(status, cooldown_until, weight, last_success_at, last_failure_at)"
+    );
   }
 
   private async addColumnIfMissing(column: string, ddl: string): Promise<void> {
@@ -252,6 +247,18 @@ export class MysqlYydsDomainPoolStore implements YydsDomainPoolStore {
         }
         throw error;
       }
+    }
+  }
+
+  private async addIndexIfMissing(tableName: string, indexName: string, ddl: string): Promise<void> {
+    const [rows] = await this.pool.execute<RowDataPacket[]>(
+      `SELECT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :tableName AND INDEX_NAME = :indexName
+       LIMIT 1`,
+      { tableName, indexName }
+    );
+    if (rows.length === 0) {
+      await this.pool.query(ddl);
     }
   }
 

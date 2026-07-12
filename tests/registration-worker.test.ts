@@ -470,7 +470,7 @@ describe("processRegistrationJob", () => {
     ["fractional target", { mode: "fill", target: 1.5, concurrency: 1 }, /target/],
     ["infinite target", { mode: "fill", target: Number.POSITIVE_INFINITY, concurrency: 1 }, /target/],
     ["zero target", { mode: "fill", target: 0, concurrency: 1 }, /target/],
-    ["too-high target", { mode: "fill", target: 501, concurrency: 1 }, /target/],
+    ["too-high target", { mode: "fill", target: 100001, concurrency: 1 }, /target/],
     ["NaN concurrency", { mode: "fill", target: 2, concurrency: Number.NaN }, /concurrency/],
     ["fractional concurrency", { mode: "fill", target: 2, concurrency: 1.5 }, /concurrency/],
     [
@@ -479,7 +479,7 @@ describe("processRegistrationJob", () => {
       /concurrency/
     ],
     ["zero concurrency", { mode: "fill", target: 2, concurrency: 0 }, /concurrency/],
-    ["too-high concurrency", { mode: "fill", target: 2, concurrency: 21 }, /concurrency/]
+    ["too-high concurrency", { mode: "fill", target: 2, concurrency: 5001 }, /concurrency/]
   ])("rejects malformed fill payload before stats/progress/registering: %s", async (_caseName, payload, message) => {
     const registrationService = makeRegistrationService({
       getStats: vi.fn(async () => stats({ activeCount: 0 }))
@@ -530,7 +530,7 @@ describe("processRegistrationJob", () => {
     await expect(
       processRegistrationJob(job, registrationService, { clearCancelRequest })
     ).rejects.toThrow(
-      "bulk registration concurrency must be an integer from 1 to 20"
+      "bulk registration concurrency must be an integer from 1 to 5000"
     );
 
     expect(clearCancelRequest).toHaveBeenCalledWith("job-1");
@@ -547,7 +547,7 @@ describe("processRegistrationJob", () => {
       /create registration count/
     ],
     ["zero count", { mode: "create", count: 0, concurrency: 1 }, /create registration count/],
-    ["too-high count", { mode: "create", count: 501, concurrency: 1 }, /create registration count/],
+    ["too-high count", { mode: "create", count: 100001, concurrency: 1 }, /create registration count/],
     ["NaN concurrency", { mode: "create", count: 2, concurrency: Number.NaN }, /bulk registration concurrency/],
     ["fractional concurrency", { mode: "create", count: 2, concurrency: 1.5 }, /bulk registration concurrency/],
     [
@@ -556,7 +556,7 @@ describe("processRegistrationJob", () => {
       /bulk registration concurrency/
     ],
     ["zero concurrency", { mode: "create", count: 2, concurrency: 0 }, /bulk registration concurrency/],
-    ["too-high concurrency", { mode: "create", count: 2, concurrency: 21 }, /bulk registration concurrency/]
+    ["too-high concurrency", { mode: "create", count: 2, concurrency: 5001 }, /bulk registration concurrency/]
   ])("rejects malformed create payload before stats/progress/registering: %s", async (_caseName, payload, message) => {
     const registrationService = makeRegistrationService({
       getStats: vi.fn(async () => stats({ activeCount: 0 }))

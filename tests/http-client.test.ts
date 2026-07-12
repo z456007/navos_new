@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ProviderHttpClient } from "../src/protocols/http.js";
+import { createProviderFetch, ProviderHttpClient } from "../src/protocols/http.js";
 
 describe("ProviderHttpClient", () => {
   it("posts JSON to the provider and returns status with body", async () => {
@@ -34,5 +34,18 @@ describe("ProviderHttpClient", () => {
 
     expect(sentBody).toContain("\\u4f60\\u662f\\u4ec0\\u4e48\\u6a21\\u578b\\uff1f");
     expect(sentBody).not.toContain("你是什么模型？");
+  });
+  it("uses a provider dispatcher with long body/header timeouts by default", async () => {
+    const calls: Array<{ init: RequestInit & { dispatcher?: unknown } }> = [];
+    const fetchImpl = async (_url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ init: init ?? {} });
+      return Response.json({ ok: true });
+    };
+    const fetchWithProviderDefaults = createProviderFetch(fetchImpl);
+    const client = new ProviderHttpClient("https://upstream.test", fetchWithProviderDefaults);
+
+    await client.requestJson("POST", "/v1/messages", { model: "claude.opus-4.8", messages: [] });
+
+    expect(calls[0]?.init.dispatcher).toBeDefined();
   });
 });

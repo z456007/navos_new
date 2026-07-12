@@ -9,9 +9,9 @@ import type {
 
 const QUEUE_NAME = "registration";
 const MIN_BULK_COUNT = 1;
-const MAX_BULK_COUNT = 500;
+const MAX_BULK_COUNT = 100000;
 const MIN_BULK_CONCURRENCY = 1;
-const MAX_BULK_CONCURRENCY = 20;
+const MAX_BULK_CONCURRENCY = 5000;
 
 export interface RegistrationWorkerOptions {
   redisUrl: string;
@@ -287,17 +287,17 @@ function bulkRequestFields(data: BulkRegistrationJobPayload): { target: number }
 
 function validateBulkRegistrationPayload(data: BulkRegistrationJobPayload): void {
   if (data.mode === "fill" && (!Number.isSafeInteger(data.target) || data.target < MIN_BULK_COUNT || data.target > MAX_BULK_COUNT)) {
-    throw new Error("fill registration target must be an integer from 1 to 500");
+    throw new Error(`fill registration target must be an integer from 1 to ${MAX_BULK_COUNT}`);
   }
   if (data.mode === "create" && (!Number.isSafeInteger(data.count) || data.count < MIN_BULK_COUNT || data.count > MAX_BULK_COUNT)) {
-    throw new Error("create registration count must be an integer from 1 to 500");
+    throw new Error(`create registration count must be an integer from 1 to ${MAX_BULK_COUNT}`);
   }
   if (
     !Number.isSafeInteger(data.concurrency)
     || data.concurrency < MIN_BULK_CONCURRENCY
     || data.concurrency > MAX_BULK_CONCURRENCY
   ) {
-    throw new Error("bulk registration concurrency must be an integer from 1 to 20");
+    throw new Error(`bulk registration concurrency must be an integer from 1 to ${MAX_BULK_CONCURRENCY}`);
   }
 }
 

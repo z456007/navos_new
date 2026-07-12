@@ -19,6 +19,10 @@ describe("video protocol", () => {
     });
     expect(normalizeVideoTaskStatus({ status: "failed", error: "bad prompt" }).status).toBe("failed");
     expect(normalizeVideoTaskStatus({ status: "running" }).status).toBe("running");
+    expect(normalizeVideoTaskStatus({ data: { task_id: "task_asset", status: "asset_pending" } })).toMatchObject({
+      id: "task_asset",
+      status: "running"
+    });
   });
 
   it("normalizes nested navos task responses", () => {
@@ -94,30 +98,23 @@ describe("video protocol", () => {
       aspectRatio: "16:9",
       resolution: "720P",
       audio: true,
-      image: "https://assets.test/first.png",
-      imageRoles: ["first_frame"],
-      last_frame_image: "https://assets.test/last.png",
-      image_tail_url: "https://assets.test/last.png",
-      videos: [
+      generate_audio: true,
+      size: "16:9",
+      image_with_roles: [
+        { url: "https://assets.test/first.png", role: "first_frame" },
+        { url: "https://assets.test/last.png", role: "last_frame" }
+      ],
+      image_urls: ["https://assets.test/style.png"],
+      video_urls: [
         "https://assets.test/motion-1.mp4",
         "https://assets.test/motion-2.mp4",
         "https://assets.test/motion-3.mp4"
       ],
-      videoRoles: ["reference_video", "reference_video", "reference_video"],
-      audioRef: "https://assets.test/music.mp3",
-      audioRefs: ["https://assets.test/beat.mp3"],
-      audioRoles: ["reference_audio", "reference_audio"],
+      audio_urls: ["https://assets.test/music.mp3", "https://assets.test/beat.mp3"],
       metadata: {
         ratio: "16:9",
         resolution: "720P",
-        generate_audio: true,
-        reference_images: ["https://assets.test/style.png"],
-        reference_videos: [
-          "https://assets.test/motion-1.mp4",
-          "https://assets.test/motion-2.mp4",
-          "https://assets.test/motion-3.mp4"
-        ],
-        reference_audios: ["https://assets.test/music.mp3", "https://assets.test/beat.mp3"]
+        generate_audio: true
       }
     });
     expect(payload).not.toHaveProperty("images");
@@ -127,6 +124,62 @@ describe("video protocol", () => {
     expect(normalizeSeedanceVideoPayload({ prompt: "city skyline", model: "   " })).toMatchObject({
       model: "navos/doubao-seedance-2-0-260128"
     });
+  });
+
+  it("keeps explicit generic reference images as official image_urls instead of promoting them to the first frame field", () => {
+    const payload = normalizeSeedanceVideoPayload({
+      prompt: "animate this style reference",
+      images: ["https://assets.test/style.png"],
+      imageRoles: ["reference_image"]
+    });
+
+    expect(payload).not.toHaveProperty("image");
+    expect(payload).not.toHaveProperty("imageRoles");
+    expect(payload).toMatchObject({ image_urls: ["https://assets.test/style.png"] });
+    expect(payload).not.toHaveProperty("metadata.reference_images");
+  });
+
+  it("maps generic Seedance references to official image_urls video_urls and audio_urls fields", () => {
+    const payload = normalizeSeedanceVideoPayload({
+      prompt: "combine these references",
+      images: ["https://assets.test/style.png"],
+      imageRoles: ["reference_image"],
+      videos: ["https://assets.test/motion.mp4"],
+      audioRefs: ["https://assets.test/music.mp3"],
+      audioRoles: ["reference_audio"],
+      mode: "omni_reference",
+      generation_mode: "omni_reference"
+    });
+
+    expect(payload).toMatchObject({
+      image_urls: ["https://assets.test/style.png"],
+      video_urls: ["https://assets.test/motion.mp4"],
+      audio_urls: ["https://assets.test/music.mp3"],
+      generate_audio: true,
+      size: "16:9"
+    });
+    expect(payload).not.toHaveProperty("image");
+    expect(payload).not.toHaveProperty("videos");
+    expect(payload).not.toHaveProperty("audioRef");
+    expect(payload).not.toHaveProperty("metadata.reference_images");
+  });
+
+  it("maps first and last frame references to official image_with_roles fields", () => {
+    const payload = normalizeSeedanceVideoPayload({
+      prompt: "transition between frames",
+      images: ["https://assets.test/start.png", "https://assets.test/end.png"],
+      imageRoles: ["first_frame", "last_frame"]
+    });
+
+    expect(payload).toMatchObject({
+      image_with_roles: [
+        { url: "https://assets.test/start.png", role: "first_frame" },
+        { url: "https://assets.test/end.png", role: "last_frame" }
+      ]
+    });
+    expect(payload).not.toHaveProperty("image");
+    expect(payload).not.toHaveProperty("last_frame_image");
+    expect(payload).not.toHaveProperty("image_tail_url");
   });
 
   it("uploads local data URL references before creating a video payload", async () => {
@@ -157,14 +210,10 @@ describe("video protocol", () => {
       "/api/uploads/file"
     ]);
     expect(payload).toMatchObject({
-      image: "https://cdn.test/ref-1.bin",
-      videos: ["https://cdn.test/ref-2.bin"],
-      audioRef: "https://cdn.test/ref-3.bin",
-      metadata: {
-        reference_images: ["https://assets.test/style.png"],
-        reference_videos: ["https://cdn.test/ref-2.bin"],
-        reference_audios: ["https://cdn.test/ref-3.bin"]
-      }
+      image_with_roles: [{ url: "https://cdn.test/ref-1.bin", role: "first_frame" }],
+      image_urls: ["https://assets.test/style.png"],
+      video_urls: ["https://cdn.test/ref-2.bin"],
+      audio_urls: ["https://cdn.test/ref-3.bin"]
     });
   });
 });

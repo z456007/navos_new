@@ -1,51 +1,33 @@
 import type { RuntimeConfigStore } from "../store/runtime-config-store.js";
+import {
+  DEFAULT_RUNTIME_CONFIG,
+  normalizeRuntimeConfigInput,
+  type RuntimeConfigUpdateInput,
+  type RuntimeConfigView
+} from "./runtime-config-schema.js";
 
-export interface RuntimeConfigView {
-  imageAllowVideoReserveFallback: boolean;
-  updatedAt: number;
-}
-
-export interface RuntimeConfigDefaults {
-  imageAllowVideoReserveFallback: boolean;
-}
-
-export interface RuntimeConfigUpdateInput {
-  imageAllowVideoReserveFallback?: unknown;
-}
+export type { RuntimeConfigUpdateInput, RuntimeConfigView } from "./runtime-config-schema.js";
 
 export class RuntimeConfigService {
   constructor(
     private readonly store: RuntimeConfigStore,
-    private readonly defaults: RuntimeConfigDefaults
+    private readonly defaults: RuntimeConfigView = DEFAULT_RUNTIME_CONFIG
   ) {}
 
   async get(): Promise<RuntimeConfigView> {
     const stored = await this.store.get();
-    return normalizeRuntimeConfig({
-      imageAllowVideoReserveFallback: stored?.imageAllowVideoReserveFallback ?? this.defaults.imageAllowVideoReserveFallback,
-      updatedAt: stored?.updatedAt ?? 0
-    });
+    return normalizeRuntimeConfigInput(stored ?? {}, { ...this.defaults, updatedAt: stored?.updatedAt ?? 0 });
   }
 
   async update(input: RuntimeConfigUpdateInput): Promise<RuntimeConfigView> {
     const current = await this.get();
-    const next: RuntimeConfigView = {
-      ...current,
-      updatedAt: Date.now()
-    };
-    if (input.imageAllowVideoReserveFallback !== undefined) {
-      if (typeof input.imageAllowVideoReserveFallback !== "boolean") {
-        throw new Error("imageAllowVideoReserveFallback must be a boolean");
-      }
-      next.imageAllowVideoReserveFallback = input.imageAllowVideoReserveFallback;
-    }
-    return normalizeRuntimeConfig(await this.store.save(next));
+    const next = normalizeRuntimeConfigInput({ ...input, updatedAt: Date.now() }, current);
+    return normalizeRuntimeConfigInput(await this.store.save(next), this.defaults);
   }
-}
 
-function normalizeRuntimeConfig(input: RuntimeConfigView): RuntimeConfigView {
-  return {
-    imageAllowVideoReserveFallback: Boolean(input.imageAllowVideoReserveFallback),
-    updatedAt: Number.isFinite(input.updatedAt) ? input.updatedAt : 0
-  };
+  async seedDefaultsIfEmpty(): Promise<RuntimeConfigView> {
+    const stored = await this.store.get();
+    if (stored) return this.get();
+    return this.store.save({ ...this.defaults, updatedAt: Date.now() });
+  }
 }

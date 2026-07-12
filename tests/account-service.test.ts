@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AccountService } from "../src/services/account-service.js";
 import { InMemoryAccountStore } from "../src/store/account-store.js";
 
@@ -142,6 +142,32 @@ describe("AccountService", () => {
     const picked = await service.pickAccount();
 
     expect(picked?.uid).toBe("active");
+  });
+
+  it("moves cooled-down accounts behind never-failed accounts after cooldown expires", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new InMemoryAccountStore();
+      const service = new AccountService(store);
+
+      vi.setSystemTime(1_000);
+      await service.importAccount({ uid: "u1", token: "t1", balanceRemaining: 500, balanceTotal: 2000 });
+      vi.setSystemTime(1_001);
+      await service.importAccount({ uid: "u2", token: "t2", balanceRemaining: 500, balanceTotal: 2000 });
+      vi.setSystemTime(1_002);
+      await service.importAccount({ uid: "u3", token: "t3", balanceRemaining: 500, balanceTotal: 2000 });
+
+      vi.setSystemTime(2_000);
+      await service.cooldownAccount("u1", 1);
+      expect((await store.get("u1"))?.rateLimitedUntil).toBe(3_000);
+
+      vi.setSystemTime(3_001);
+      const leased = await service.leaseImageAccount("image-job-after-cooldown");
+
+      expect(leased?.uid).toBe("u2");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("marks depleted accounts with zero remaining balance", async () => {

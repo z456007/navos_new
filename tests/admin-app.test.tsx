@@ -5,6 +5,7 @@ import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../web/src/App";
 import { ConsoleShell } from "../web/src/app/ConsoleShell";
+import { RuntimeConfigPanel } from "../web/src/panels/RuntimeConfigPanel";
 import { YydsMailConfigPanel } from "../web/src/panels/YydsMailConfigPanel";
 
 describe("admin app gate", () => {
@@ -103,6 +104,77 @@ describe("admin app gate", () => {
     expect(within(configNav).queryByRole("button", { name: /COS/ })).not.toBeInTheDocument();
   });
 
+
+  it("shows visual runtime configuration controls", async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });
+      const path = String(url);
+      if (path === "/api/accounts") {
+        return Response.json([]);
+      }
+      if (path === "/api/runtime-config" && init?.method === "GET") {
+        return Response.json({
+          imageAllowVideoReserveFallback: false,
+          imageAccountWaitMs: 120000,
+          imageMaxPollAttempts: 30,
+          imagePollIntervalMs: 4000,
+          imageSyncWaitBudgetMs: 120000,
+          videoCreateTimeoutMs: 30000,
+          videoPollTimeoutMs: 30000,
+          accountBalanceReconcileEnabled: true,
+          accountBalanceReconcileScope: "depleted",
+          accountBalanceReconcileIntervalMinutes: 30,
+          accountBalanceReconcileBatchSize: 1000,
+          accountBalanceReconcileConcurrency: 10,
+          registrationConcurrency: 2,
+          registrationMaxInFlight: 20,
+          registrationMailboxCreateConcurrency: 2,
+          registrationMailboxCreatePerSecond: 2,
+          registrationVipSendConcurrency: 6,
+          registrationPollConcurrency: 50,
+          registrationLoginConcurrency: 6,
+          registrationCertConcurrency: 6,
+          registrationYydsQuotaBlockSeconds: 300,
+          mysqlConnectionLimit: 100,
+          mysqlQueueLimit: 0,
+          restartRequiredKeys: ["mysqlConnectionLimit", "mysqlQueueLimit"],
+          updatedAt: 0
+        });
+      }
+      return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("Master API Key"), { target: { value: "sk-local" } });
+    fireEvent.click(screen.getByRole("button", { name: "\u8fdb\u5165\u63a7\u5236\u53f0" }));
+
+    const runtimeButton = await screen.findByRole("button", { name: "\u8fd0\u884c\u914d\u7f6e" });
+    fireEvent.click(runtimeButton);
+
+    expect(await screen.findByText("一键套用方案")).toBeInTheDocument();
+    expect(screen.getByText("不知道选哪个：先点「100 并发压测」，保存后再跑测试。")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /日常稳妥运行/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /100 并发压测/ })).toBeInTheDocument();
+    expect(screen.getByText("适合：本地 Sub2Api 全链路 100 并发。")).toBeInTheDocument();
+    expect(screen.getByText("会调整：模型排队等待、图片等待、余额检查和注册吞吐。")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /千级账号池维护/ })).toBeInTheDocument();
+    expect(screen.getByText("不是直接发起上千压测，只是让账号池维护更积极。")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /长对话压测/ })).toBeInTheDocument();
+    expect(await screen.findByText("\u56fe\u7247/\u89c6\u9891\u4efb\u52a1")).toBeInTheDocument();
+    expect(screen.getByText("图片账号等待")).toBeInTheDocument();
+    expect(screen.getByText("\u4f59\u989d\u68c0\u67e5")).toBeInTheDocument();
+    expect(screen.getByText("注册吞吐")).toBeInTheDocument();
+    expect(screen.getByText("强力注册")).toBeInTheDocument();
+    expect(screen.queryByText("注册队列上限")).not.toBeInTheDocument();
+    expect(screen.queryByText("邮箱每秒创建")).not.toBeInTheDocument();
+    expect(screen.getByText((content) => content.includes("\u91cd\u542f NavOS"))).toBeInTheDocument();
+    expect(screen.queryByText("IMAGE_ACCOUNT_WAIT_MS")).not.toBeInTheDocument();
+    expect(screen.queryByText("ACCOUNT_BALANCE_RECONCILE_ENABLED")).not.toBeInTheDocument();
+  });
+
+
   it("generates images from the image workbench", async () => {
     const prompt = "白色机器人站在霓虹雨夜的天桥上";
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
@@ -134,10 +206,14 @@ describe("admin app gate", () => {
     await screen.findByRole("button", { name: "图片生成" });
     fireEvent.click(screen.getByRole("button", { name: "图片生成" }));
 
-    fireEvent.change(screen.getByLabelText("Image prompt"), { target: { value: prompt } });
-    fireEvent.click(screen.getByRole("button", { name: "Generate image" }));
+    expect(await screen.findByRole("heading", { name: "图片生成" })).toBeInTheDocument();
+    expect(screen.getByText("图片工作台")).toBeInTheDocument();
+    expect(screen.queryByText("Image workbench")).not.toBeInTheDocument();
 
-    const generated = await screen.findByAltText("Generated image 1");
+    fireEvent.change(screen.getByLabelText("图片提示词"), { target: { value: prompt } });
+    fireEvent.click(screen.getByRole("button", { name: "开始生成" }));
+
+    const generated = await screen.findByAltText("生成图片 1");
     expect(generated).toHaveAttribute("src", "data:image/png;base64,aGVsbG8=");
     expect(fetchMock).toHaveBeenCalledWith("/api/images/generations", expect.objectContaining({ method: "POST" }));
   });
@@ -165,13 +241,13 @@ describe("admin app gate", () => {
     await screen.findByRole("button", { name: "图片生成" });
     fireEvent.click(screen.getByRole("button", { name: "图片生成" }));
 
-    fireEvent.change(screen.getByLabelText("Image prompt"), { target: { value: "保持人物姿态，改成赛博朋克风格" } });
-    fireEvent.change(screen.getByLabelText("Reference image URLs (one per line)"), {
+    fireEvent.change(screen.getByLabelText("图片提示词"), { target: { value: "保持人物姿态，改成赛博朋克风格" } });
+    fireEvent.change(screen.getByLabelText("参考图 URL，每行一个"), {
       target: { value: "https://assets.test/ref-a.png\nhttps://assets.test/ref-b.png" }
     });
-    fireEvent.click(screen.getByRole("button", { name: "Generate image" }));
+    fireEvent.click(screen.getByRole("button", { name: "开始生成" }));
 
-    await screen.findByAltText("Generated image 1");
+    await screen.findByAltText("生成图片 1");
     expect(imagePayload).toMatchObject({
       prompt: "保持人物姿态，改成赛博朋克风格",
       images: ["https://assets.test/ref-a.png", "https://assets.test/ref-b.png"]
@@ -282,6 +358,83 @@ describe("admin app gate", () => {
 
     await screen.findByText("1500 / 2000");
     expect(fetchMock).toHaveBeenCalledWith("/api/accounts/u1/balance/refresh", expect.objectContaining({ method: "POST" }));
+  });
+
+  it("deletes an account from the account pool", async () => {
+    let deleted = false;
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });
+      const path = String(url);
+      if (path === "/api/accounts" && init?.method === "GET") {
+        return Response.json(deleted ? [] : [{
+          uid: "test-account",
+          tokenPreview: "token-te...",
+          mailboxAddr: "test@mail.test",
+          status: "active",
+          balanceRemaining: 100,
+          balanceTotal: 100,
+          rateLimitedUntil: 0,
+          createdAt: 0,
+          lastUsedAt: 0,
+          lastBalanceAt: 0
+        }]);
+      }
+      if (path === "/api/registration/jobs" && init?.method === "GET") {
+        return Response.json([]);
+      }
+      if (path === "/api/accounts/test-account" && init?.method === "DELETE") {
+        deleted = true;
+        return Response.json({ deleted: true });
+      }
+      return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("Master API Key"), { target: { value: "sk-local" } });
+    fireEvent.click(screen.getByRole("button", { name: "进入控制台" }));
+
+    await screen.findByText("test-account");
+    fireEvent.click(screen.getByRole("button", { name: "删除 test-account" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith("/api/accounts/test-account", expect.objectContaining({ method: "DELETE" }));
+    });
+    await screen.findByText("账号已删除");
+    expect(screen.queryByText("test-account")).not.toBeInTheDocument();
+  });
+
+  it("paginates the account pool to keep menu switching responsive", async () => {
+    const accounts = Array.from({ length: 75 }, (_, index) => ({
+      uid: `acct-${String(index + 1).padStart(3, "0")}`,
+      tokenPreview: "token-ab...",
+      mailboxAddr: `acct${index + 1}@mail.test`,
+      status: "active",
+      balanceRemaining: 100,
+      balanceTotal: 100,
+      rateLimitedUntil: 0,
+      createdAt: index,
+      lastUsedAt: 0,
+      lastBalanceAt: 0
+    }));
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });
+      const path = String(url);
+      if (path === "/api/accounts") return Response.json(accounts);
+      if (path === "/api/registration/jobs" && init?.method === "GET") return Response.json([]);
+      return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+
+    fireEvent.change(screen.getByLabelText("Master API Key"), { target: { value: "sk-local" } });
+    fireEvent.click(screen.getByRole("button", { name: "进入控制台" }));
+
+    await screen.findByText("acct-001");
+    expect(screen.queryByText("acct-075")).not.toBeInTheDocument();
+    expect(screen.getByText("1-50 条/共 75 条")).toBeInTheDocument();
   });
 
   it("creates and polls a video task from the console", async () => {
@@ -478,7 +631,7 @@ describe("admin app gate", () => {
     await waitFor(() => {
       expect(screen.getAllByRole("heading", { name: "账号池" }).length).toBeGreaterThan(0);
     });
-    expect(screen.getByLabelText("任务并发")).toHaveAttribute("aria-valuemax", "20");
+    expect(screen.getByLabelText("任务并发")).toHaveAttribute("aria-valuemax", "5000");
     fireEvent.click(screen.getByRole("button", { name: "启动单个注册" }));
 
     await waitFor(() => {
@@ -490,7 +643,7 @@ describe("admin app gate", () => {
     expect(screen.getByText(/token-full-1/)).toBeInTheDocument();
   });
 
-  it("distinguishes fill target from create count in account registration controls", async () => {
+  it("starts create registration as the primary account-pool action", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
       if (path === "/api/accounts") return Response.json([]);
@@ -501,10 +654,12 @@ describe("admin app gate", () => {
           id: "job-create",
           mode: "create",
           state: "succeeded",
-          count: 5,
-          concurrency: 4,
-          progress: { started: 5, completed: 5, failed: 0, total: 5 },
-          logs: []
+          count: 100,
+          concurrency: 6,
+          progress: { started: 100, completed: 100, failed: 0, total: 100 },
+          logs: [{ at: 1000, level: "info", message: "create registration completed" }],
+          createdAt: 1000,
+          finishedAt: 2000
         });
       }
       return Response.json({ ok: true });
@@ -523,12 +678,45 @@ describe("admin app gate", () => {
       />
     );
 
-    fireEvent.change(await screen.findByLabelText("新增数量"), { target: { value: "5" } });
-    fireEvent.change(screen.getByLabelText("任务并发"), { target: { value: "4" } });
+    fireEvent.change(await screen.findByLabelText("新增数量"), { target: { value: "100" } });
+    fireEvent.change(screen.getByLabelText("任务并发"), { target: { value: "6" } });
     fireEvent.click(screen.getByRole("button", { name: "新增注册" }));
 
     const postCall = fetchMock.mock.calls.find(([path, init]) => path === "/api/registration/jobs" && init?.method === "POST");
-    expect(JSON.parse(postCall?.[1]?.body as string)).toEqual({ mode: "create", count: 5, concurrency: 4 });
+    expect(JSON.parse(postCall?.[1]?.body as string)).toEqual({ mode: "create", count: 100, concurrency: 6 });
+    expect(screen.queryByRole("button", { name: "补齐账号池" })).not.toBeInTheDocument();
+  });
+
+  it("runs batch balance reconcile from the account panel", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path === "/api/accounts") return Response.json([]);
+      if (path === "/api/registration/jobs" && init?.method === "GET") return Response.json([]);
+      if (path === "/api/accounts/balances/reconcile" && init?.method === "POST") {
+        return Response.json({ checked: 3, restored: 1, stillDepleted: 1, updatedActive: 1, disabledUpdated: 0, failed: 0, failures: [] });
+      }
+      return Response.json({ ok: true });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ConsoleShell
+        accounts={[]}
+        activePanel="accounts"
+        apiKey="sk-local"
+        onAccountsChange={vi.fn()}
+        onPanelChange={vi.fn()}
+        onRefreshAccounts={vi.fn(async () => [])}
+        onSignOut={vi.fn()}
+      />
+    );
+
+    fireEvent.change(await screen.findByLabelText("余额检查范围"), { target: { value: "non_disabled" } });
+    fireEvent.click(screen.getByRole("button", { name: "批量检查余额" }));
+
+    const call = fetchMock.mock.calls.find(([path, init]) => path === "/api/accounts/balances/reconcile" && init?.method === "POST");
+    expect(JSON.parse(call?.[1]?.body as string)).toMatchObject({ scope: "non_disabled", limit: 1000, concurrency: 10, reactivatePositive: true });
+    expect((await screen.findAllByText(/已检查 3 个账号/)).length).toBeGreaterThan(0);
   });
 
   it("does not restore completed registration jobs when the account pool reloads", async () => {
@@ -871,8 +1059,37 @@ describe("admin app gate", () => {
     expect(fetchMock).not.toHaveBeenCalledWith("/api/cos/config", expect.anything());
   });
 
-  it("toggles image video-reserve fallback from the config console", async () => {
+  it("toggles image video-reserve fallback from the runtime config console", async () => {
     let savedPayload: Record<string, unknown> | undefined;
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });
+      const path = String(url);
+      if (path === "/api/runtime-config" && init?.method === "GET") {
+        return Response.json({ imageAllowVideoReserveFallback: false });
+      }
+      if (path === "/api/runtime-config" && init?.method === "PUT") {
+        savedPayload = JSON.parse(String(init.body));
+        return Response.json(savedPayload);
+      }
+      return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RuntimeConfigPanel apiKey="sk-local" />);
+
+    const fallbackSwitch = await screen.findByRole("switch", { name: /视频储备账号/ });
+    expect(fallbackSwitch).not.toBeChecked();
+
+    fireEvent.click(fallbackSwitch);
+    fireEvent.click(screen.getByRole("button", { name: /保存运行配置/ }));
+
+    await waitFor(() => {
+      expect(savedPayload).toMatchObject({ imageAllowVideoReserveFallback: true });
+    });
+    expect(fetchMock).toHaveBeenCalledWith("/api/runtime-config", expect.objectContaining({ method: "PUT" }));
+  });
+
+  it("keeps YYDS config focused on mailbox and domain controls", async () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });
       const path = String(url);
@@ -885,29 +1102,16 @@ describe("admin app gate", () => {
           domains: []
         });
       }
-      if (path === "/api/runtime-config" && init?.method === "GET") {
-        return Response.json({ imageAllowVideoReserveFallback: false });
-      }
-      if (path === "/api/runtime-config" && init?.method === "PUT") {
-        savedPayload = JSON.parse(String(init.body));
-        return Response.json(savedPayload);
-      }
       return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
     });
     vi.stubGlobal("fetch", fetchMock);
 
     render(<YydsMailConfigPanel apiKey="sk-local" />);
 
-    const fallbackSwitch = await screen.findByRole("switch", { name: /视频储备账号/ });
-    expect(fallbackSwitch).not.toBeChecked();
-
-    fireEvent.click(fallbackSwitch);
-    fireEvent.click(screen.getByRole("button", { name: /保存运行配置/ }));
-
-    await waitFor(() => {
-      expect(savedPayload).toEqual({ imageAllowVideoReserveFallback: true });
-    });
-    expect(fetchMock).toHaveBeenCalledWith("/api/runtime-config", expect.objectContaining({ method: "PUT" }));
+    expect(await screen.findByText("YYDS Mail Key")).toBeInTheDocument();
+    expect(screen.getByText("YYDS 域名池")).toBeInTheDocument();
+    expect(screen.queryByText("运行配置")).not.toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith("/api/runtime-config", expect.anything());
   });
 
   it("saves YYDS Mail config from the console without exposing the key", async () => {

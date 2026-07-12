@@ -1,5 +1,5 @@
-import mysql, { type Pool, type RowDataPacket } from "mysql2/promise";
-import type { MysqlConfig } from "./mysql-account-store.js";
+import type { Pool, RowDataPacket } from "mysql2/promise";
+import { resolveMysqlPool, type MysqlPoolInput } from "./mysql-config.js";
 
 export interface VideoTaskRecord {
   taskId: string;
@@ -67,17 +67,8 @@ export class InMemoryVideoTaskStore implements VideoTaskStore {
 export class MysqlVideoTaskStore implements VideoTaskStore {
   private readonly pool: Pool;
 
-  constructor(config: MysqlConfig) {
-    this.pool = mysql.createPool({
-      host: config.host,
-      port: config.port,
-      user: config.user,
-      password: config.password,
-      database: config.database,
-      waitForConnections: true,
-      connectionLimit: 10,
-      namedPlaceholders: true
-    });
+  constructor(input: MysqlPoolInput) {
+    this.pool = resolveMysqlPool(input);
   }
 
   async ensureSchema(): Promise<void> {
@@ -95,6 +86,11 @@ export class MysqlVideoTaskStore implements VideoTaskStore {
       )
     `);
     await this.addColumnIfMissing("account_uid", "ALTER TABLE video_tasks ADD COLUMN account_uid VARCHAR(128) NULL AFTER task_id");
+    await this.addIndexIfMissing(
+      "video_tasks",
+      "idx_video_tasks_account_updated",
+      "CREATE INDEX idx_video_tasks_account_updated ON video_tasks(account_uid, updated_at)"
+    );
   }
 
   private async addColumnIfMissing(column: string, ddl: string): Promise<void> {
@@ -103,6 +99,18 @@ export class MysqlVideoTaskStore implements VideoTaskStore {
        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'video_tasks' AND COLUMN_NAME = :column
        LIMIT 1`,
       { column }
+    );
+    if (rows.length === 0) {
+      await this.pool.query(ddl);
+    }
+  }
+
+  private async addIndexIfMissing(tableName: string, indexName: string, ddl: string): Promise<void> {
+    const [rows] = await this.pool.execute<RowDataPacket[]>(
+      `SELECT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :tableName AND INDEX_NAME = :indexName
+       LIMIT 1`,
+      { tableName, indexName }
     );
     if (rows.length === 0) {
       await this.pool.query(ddl);

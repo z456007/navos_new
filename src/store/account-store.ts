@@ -28,6 +28,7 @@ export interface AccountStore {
   upsert(account: AccountImportInput): Promise<AccountRecord>;
   list(): Promise<AccountRecord[]>;
   get(uid: string): Promise<AccountRecord | undefined>;
+  delete(uid: string): Promise<boolean>;
   pickActive(nowMs?: number): Promise<AccountRecord | undefined>;
   leaseActive(
     leaseId: string,
@@ -92,6 +93,10 @@ export class InMemoryAccountStore implements AccountStore {
   async get(uid: string): Promise<AccountRecord | undefined> {
     const account = this.accounts.get(uid);
     return account ? { ...account } : undefined;
+  }
+
+  async delete(uid: string): Promise<boolean> {
+    return this.accounts.delete(uid);
   }
 
   async pickActive(nowMs: number = now()): Promise<AccountRecord | undefined> {
@@ -190,6 +195,7 @@ export class InMemoryAccountStore implements AccountStore {
     const account = this.accounts.get(uid);
     if (account) {
       account.rateLimitedUntil = untilMs;
+      account.lastUsedAt = Math.max(account.lastUsedAt, now());
       account.leaseId = undefined;
       account.leaseUntil = 0;
     }

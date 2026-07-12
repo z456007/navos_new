@@ -282,6 +282,7 @@ a.button {
 
 .workspace {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto auto minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
@@ -289,8 +290,13 @@ a.button {
   padding: 24px;
 }
 
+.workspace > * {
+  min-width: 0;
+}
+
 .workspace-head {
   display: flex;
+  grid-column: 1 / -1;
   align-items: center;
   justify-content: space-between;
   gap: 18px;
@@ -313,6 +319,7 @@ a.button {
 
 .metrics {
   display: grid;
+  grid-column: 1 / -1;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 16px;
@@ -369,6 +376,13 @@ a.button {
   overflow: auto;
 }
 
+.workspace > .runtime-config-panel {
+  grid-column: 1 / -1;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 28px;
+}
+
 .panel.narrow {
   width: 100%;
   max-width: none;
@@ -386,6 +400,14 @@ a.button {
 .panel-head h2 {
   margin: 0;
   font-size: 16px;
+}
+
+.panel-title {
+  margin: 0;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.25;
 }
 
 .panel-head h3 {
@@ -1421,9 +1443,209 @@ a.button {
 }
 
 .runtime-config-panel {
-  grid-column: 2;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
   border-top: 0;
   border-bottom: 1px solid var(--line);
+}
+
+.runtime-config-panel > .inner-head,
+.runtime-config-panel > .runtime-preset-card,
+.runtime-config-panel > .reserve-guard,
+.runtime-config-panel > .runtime-registration-card,
+.runtime-config-panel > .runtime-mysql-card {
+  grid-column: 1 / -1;
+}
+
+.runtime-card {
+  overflow: visible;
+  border-color: rgba(37, 99, 235, 0.14);
+  border-radius: 16px;
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.05);
+}
+
+.runtime-card .ant-card-head {
+  min-height: 0;
+  border-bottom-color: rgba(216, 229, 251, 0.92);
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0.07), rgba(255, 255, 255, 0));
+  padding: 10px 14px;
+}
+
+.runtime-card .ant-card-head-title,
+.runtime-card .ant-card-extra {
+  padding: 0;
+}
+
+.runtime-card .ant-card-body {
+  display: grid;
+  gap: 12px;
+  min-height: auto;
+  overflow: visible;
+  padding: 14px;
+}
+
+.runtime-card-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #10203f;
+  font-weight: 900;
+}
+
+.runtime-preset-card {
+  background:
+    radial-gradient(circle at 100% 0%, rgba(15, 138, 95, 0.08), transparent 34%),
+    #ffffff;
+}
+
+.runtime-preset-help {
+  margin: 0 0 12px;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.runtime-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.runtime-preset {
+  display: grid;
+  width: 100%;
+  height: auto;
+  min-height: 126px;
+  align-items: start;
+  justify-content: start;
+  gap: 5px;
+  border: 1px solid rgba(191, 219, 254, 0.9);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(248, 251, 255, 0.96), rgba(255, 255, 255, 0.98)),
+    #ffffff;
+  color: #1f2d4a;
+  cursor: pointer;
+  padding: 12px;
+  text-align: left;
+  white-space: normal;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.runtime-preset.recommended {
+  border-color: rgba(47, 111, 235, 0.95);
+  box-shadow: 0 10px 24px rgba(47, 111, 235, 0.1);
+}
+
+.runtime-preset.ant-btn {
+  display: grid;
+  place-items: start stretch;
+}
+
+.runtime-preset.ant-btn > span {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+}
+
+.runtime-preset-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.runtime-preset-head em {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  background: rgba(47, 111, 235, 0.12);
+  color: #1d4ed8;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+  line-height: 1;
+  padding: 5px 8px;
+}
+
+.runtime-preset:hover {
+  border-color: #93c5fd;
+  box-shadow: 0 12px 24px rgba(37, 99, 235, 0.08);
+  transform: translateY(-1px);
+}
+
+.runtime-preset:focus-visible {
+  outline: none;
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px rgba(47, 111, 235, 0.14), 0 12px 24px rgba(37, 99, 235, 0.08);
+}
+
+.runtime-preset strong {
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.runtime-preset-desc,
+.runtime-preset-impact,
+.runtime-preset small {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.runtime-preset-impact {
+  color: #334155;
+  font-weight: 800;
+}
+
+.runtime-preset small {
+  color: #2563eb;
+}
+
+.runtime-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.runtime-media-card .runtime-grid,
+.runtime-balance-card .runtime-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.runtime-registration-card .runtime-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.runtime-mysql-card .runtime-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.compact-runtime-grid {
+  align-items: start;
+}
+
+.runtime-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: #41516b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.runtime-field .ant-input-number,
+.runtime-field .ant-select,
+.runtime-field .ant-select-selector {
+  width: 100%;
+}
+
+.runtime-field small {
+  color: #7b8798;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.45;
 }
 
 .domain-pool-panel {
@@ -1645,6 +1867,8 @@ a.button {
   .video-grid,
   .config-panel,
   .reference-grid,
+  .runtime-preset-grid,
+  .runtime-grid,
   .form-row.two,
   .form-row.three,
   .probe-grid {

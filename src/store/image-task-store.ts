@@ -1,5 +1,5 @@
-import mysql, { type Pool, type RowDataPacket } from "mysql2/promise";
-import type { MysqlConfig } from "./mysql-account-store.js";
+import type { Pool, RowDataPacket } from "mysql2/promise";
+import { resolveMysqlPool, type MysqlPoolInput } from "./mysql-config.js";
 import type { ImageTaskPollPath } from "../protocols/image.js";
 import { parseVideoTaskRawJson } from "./video-task-store.js";
 
@@ -77,17 +77,8 @@ export class InMemoryImageTaskStore implements ImageTaskStore {
 export class MysqlImageTaskStore implements ImageTaskStore {
   private readonly pool: Pool;
 
-  constructor(config: MysqlConfig) {
-    this.pool = mysql.createPool({
-      host: config.host,
-      port: config.port,
-      user: config.user,
-      password: config.password,
-      database: config.database,
-      waitForConnections: true,
-      connectionLimit: 10,
-      namedPlaceholders: true
-    });
+  constructor(input: MysqlPoolInput) {
+    this.pool = resolveMysqlPool(input);
   }
 
   async ensureSchema(): Promise<void> {
@@ -106,6 +97,23 @@ export class MysqlImageTaskStore implements ImageTaskStore {
         INDEX idx_image_tasks_status (status, updated_at)
       )
     `);
+    await this.addIndexIfMissing(
+      "image_tasks",
+      "idx_image_tasks_account_updated",
+      "CREATE INDEX idx_image_tasks_account_updated ON image_tasks(account_uid, updated_at)"
+    );
+  }
+
+  private async addIndexIfMissing(tableName: string, indexName: string, ddl: string): Promise<void> {
+    const [rows] = await this.pool.execute<RowDataPacket[]>(
+      `SELECT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :tableName AND INDEX_NAME = :indexName
+       LIMIT 1`,
+      { tableName, indexName }
+    );
+    if (rows.length === 0) {
+      await this.pool.query(ddl);
+    }
   }
 
   async get(taskId: string): Promise<ImageTaskRecord | undefined> {

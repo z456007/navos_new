@@ -1,16 +1,19 @@
 import { ProviderHttpClient, type ProviderResult } from "./http.js";
 
 export interface ImageGenerationResult {
-  url: string;
+  url?: string;
+  b64_json?: string;
   sizeBytes?: number;
   sha256?: string;
 }
 
 export type ImageTaskPollPath = "/api/tasks/image/generations" | "/api/tasks/image/edits";
+export type ImageResponseFormat = "url" | "b64_json";
 
 export interface ImageGenerationPollOptions {
   maxAttempts?: number;
   intervalMs?: number;
+  outputMode?: ImageResponseFormat | "display";
 }
 
 const DEFAULT_IMAGE_MODEL = "gpt-image-2";
@@ -23,7 +26,10 @@ const MAX_REFERENCE_IMAGES = 8;
 const IMAGE_SIZE_PATTERN = /^(auto|\d{2,5}x\d{2,5})$/i;
 const IMAGE_QUALITIES = new Set(["auto", "low", "medium", "high"]);
 
-export function buildImageGenerationPayload(body: Record<string, unknown>): Record<string, unknown> {
+export function buildImageGenerationPayload(
+  body: Record<string, unknown>,
+  defaultResponseFormat: ImageResponseFormat = "b64_json"
+): Record<string, unknown> {
   const prompt = readString(body.prompt)?.trim();
   if (!prompt) {
     throw new Error("prompt is required");
@@ -40,7 +46,7 @@ export function buildImageGenerationPayload(body: Record<string, unknown>): Reco
     n,
     quality,
     size,
-    response_format: "b64_json",
+    response_format: normalizeResponseFormat(readString(body.response_format), defaultResponseFormat),
     output_format: "png",
     background: readString(body.background)?.trim() || undefined,
     images: references.length > 0 ? references : undefined
@@ -60,14 +66,41 @@ export async function createImageGeneration<T = unknown>(
   return createTextImageGeneration(client, payload, headers, options);
 }
 
-export function imageResponseToResults(response: unknown): ImageGenerationResult[] {
+export function normalizeOpenAIImageData(response: unknown, responseFormat: ImageResponseFormat): ImageGenerationResult[] {
   return collectImageItems(response)
     .map((item) => {
       if (!item || typeof item !== "object") {
         return undefined;
       }
       const record = item as Record<string, unknown>;
-      const result: ImageGenerationResult = { url: "" };
+      const result: ImageGenerationResult = {};
+      if (responseFormat === "url") {
+        if (typeof record.url !== "string" || !record.url) {
+          return undefined;
+        }
+        result.url = record.url;
+      } else {
+        if (typeof record.b64_json !== "string" || !record.b64_json) {
+          return undefined;
+        }
+        result.b64_json = record.b64_json;
+      }
+      copyNumber(record, result, "sizeBytes", "sizeBytes");
+      copyNumber(record, result, "size_bytes", "sizeBytes");
+      copyString(record, result, "sha256", "sha256");
+      return result;
+    })
+    .filter((item): item is ImageGenerationResult => item !== undefined);
+}
+
+export function imageResponseToDisplayResults(response: unknown): ImageGenerationResult[] {
+  return collectImageItems(response)
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return undefined;
+      }
+      const record = item as Record<string, unknown>;
+      const result: ImageGenerationResult = {};
       if (typeof record.b64_json === "string" && record.b64_json) {
         result.url = `data:image/png;base64,${record.b64_json}`;
       } else if (typeof record.url === "string" && record.url) {
@@ -83,6 +116,8 @@ export function imageResponseToResults(response: unknown): ImageGenerationResult
     .filter((item): item is ImageGenerationResult => item !== undefined);
 }
 
+export const imageResponseToResults = imageResponseToDisplayResults;
+
 async function createTextImageGeneration<T = unknown>(
   client: ProviderHttpClient,
   payload: Record<string, unknown>,
@@ -90,7 +125,14 @@ async function createTextImageGeneration<T = unknown>(
   options: ImageGenerationPollOptions
 ): Promise<ProviderResult<T>> {
   const created = await client.requestJson("POST", "/api/tasks/navos-gpt-image-t2i", stripModelAndReferences(payload), headers);
-  return pollCreatedImageTask(client, created, headers, "/api/tasks/image/generations", options) as Promise<ProviderResult<T>>;
+  return pollCreatedImageTask(
+    client,
+    created,
+    headers,
+    "/api/tasks/image/generations",
+    options,
+    options.outputMode ?? responseFormatFromPayload(payload)
+  ) as Promise<ProviderResult<T>>;
 }
 
 async function createImageEdit<T = unknown>(
@@ -122,7 +164,14 @@ async function createImageEdit<T = unknown>(
     body: form,
     headers: formHeaders
   });
-  return pollCreatedImageTask(client, created, headers, "/api/tasks/image/edits", options) as Promise<ProviderResult<T>>;
+  return pollCreatedImageTask(
+    client,
+    created,
+    headers,
+    "/api/tasks/image/edits",
+    options,
+    options.outputMode ?? responseFormatFromPayload(payload)
+  ) as Promise<ProviderResult<T>>;
 }
 
 async function pollCreatedImageTask(
@@ -130,7 +179,8 @@ async function pollCreatedImageTask(
   created: ProviderResult,
   headers: Record<string, string>,
   pollBasePath: ImageTaskPollPath,
-  options: ImageGenerationPollOptions = {}
+  options: ImageGenerationPollOptions = {},
+  responseFormat: ImageResponseFormat | "display" = "b64_json"
 ): Promise<ProviderResult> {
   if (created.status < 200 || created.status >= 300) {
     return created;
@@ -160,7 +210,7 @@ async function pollCreatedImageTask(
     if (attempt > 0) {
       await delay(intervalMs);
     }
-    const polled = await pollImageTask(client, taskId, pollBasePath, headers);
+    const polled = await pollImageTask(client, taskId, pollBasePath, headers, responseFormat);
     if (polled.status !== 202) {
       return polled;
     }
@@ -174,6 +224,7 @@ async function pollCreatedImageTask(
       status: "running",
       task_id: taskId,
       id: taskId,
+      response_format: responseFormatForBody(responseFormat),
       data: []
     }
   };
@@ -183,7 +234,8 @@ export async function pollImageTask(
   client: ProviderHttpClient,
   taskId: string,
   pollBasePath: ImageTaskPollPath,
-  headers: Record<string, string>
+  headers: Record<string, string>,
+  responseFormat: ImageResponseFormat | "display" = "b64_json"
 ): Promise<ProviderResult> {
   const polled = await client.requestJson(
     "GET",
@@ -194,7 +246,7 @@ export async function pollImageTask(
   if (polled.status < 200 || polled.status >= 300) {
     return polled;
   }
-  return normalizePolledImageTask(polled, taskId);
+  return normalizePolledImageTask(polled, taskId, responseFormat);
 }
 
 export function imageTaskPollPathForPayload(payload: Record<string, unknown>): ImageTaskPollPath {
@@ -207,17 +259,16 @@ export function readImageTaskId(value: unknown): string | undefined {
   return readTaskId(value);
 }
 
-function normalizePolledImageTask(polled: ProviderResult, taskId: string): ProviderResult {
+function normalizePolledImageTask(
+  polled: ProviderResult,
+  taskId: string,
+  responseFormat: ImageResponseFormat | "display"
+): ProviderResult {
   const status = readTaskStatus(polled.body);
-  if (status === "succeeded" || status === "success" || status === "completed") {
-    const results = imageResponseToResults(polled.body);
-    if (results.length === 0) {
-      return {
-        ...polled,
-        status: 502,
-        body: { error: { message: "Image task succeeded but no image URL returned", type: "server_error" } }
-      };
-    }
+  const results = responseFormat === "display"
+    ? imageResponseToDisplayResults(polled.body)
+    : normalizeOpenAIImageData(polled.body, responseFormat);
+  if (results.length > 0) {
     return {
       ...polled,
       status: 200,
@@ -226,8 +277,16 @@ function normalizePolledImageTask(polled: ProviderResult, taskId: string): Provi
         status: "succeeded",
         task_id: taskId,
         id: taskId,
+        response_format: responseFormatForBody(responseFormat),
         data: results
       }
+    };
+  }
+  if (status === "succeeded" || status === "success" || status === "completed") {
+    return {
+      ...polled,
+      status: 502,
+      body: { error: { message: "Image task succeeded but no image data returned", type: "server_error" } }
     };
   }
   if (status === "failed" || status === "error" || status === "cancelled" || status === "canceled") {
@@ -245,9 +304,16 @@ function normalizePolledImageTask(polled: ProviderResult, taskId: string): Provi
       status: "running",
       task_id: taskId,
       id: taskId,
+      response_format: responseFormatForBody(responseFormat),
       data: []
     }
   };
+}
+
+export const normalizePolledImageTaskForTest = normalizePolledImageTask;
+
+function responseFormatForBody(responseFormat: ImageResponseFormat | "display"): ImageResponseFormat {
+  return responseFormat === "display" ? "b64_json" : responseFormat;
 }
 
 function collectImageItems(value: unknown): unknown[] {
@@ -453,6 +519,14 @@ function normalizeSize(value: string): string {
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function normalizeResponseFormat(value: string | undefined, fallback: ImageResponseFormat): ImageResponseFormat {
+  return value === "url" || value === "b64_json" ? value : fallback;
+}
+
+function responseFormatFromPayload(payload: Record<string, unknown>): ImageResponseFormat {
+  return normalizeResponseFormat(readString(payload.response_format), "b64_json");
 }
 
 function asList(value: unknown): unknown[] {

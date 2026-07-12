@@ -39,6 +39,9 @@ export interface RegistrationJobServiceOptions {
   maxConcurrency?: number;
 }
 
+const MAX_BULK_REGISTRATION_COUNT = 100000;
+const DEFAULT_MAX_REGISTRATION_CONCURRENCY = 5000;
+
 export interface RegistrationJobServicePort {
   createJob(input: RegistrationJobCreateInput): Promise<RegistrationJobCreateResponse>;
   getJob(id: string): Promise<RegistrationJobSnapshot | undefined>;
@@ -85,7 +88,7 @@ export class RegistrationJobService implements RegistrationJobServicePort {
     }
 
     const concurrency = rawInput.concurrency === undefined ? this.options.defaultConcurrency : rawInput.concurrency;
-    const maxConcurrency = this.options.maxConcurrency ?? 20;
+    const maxConcurrency = this.options.maxConcurrency ?? DEFAULT_MAX_REGISTRATION_CONCURRENCY;
     if (
       typeof concurrency !== "number" ||
       !Number.isInteger(concurrency) ||
@@ -97,15 +100,15 @@ export class RegistrationJobService implements RegistrationJobServicePort {
 
     if (mode === "fill") {
       const target = rawInput.target === undefined ? this.options.defaultTarget : rawInput.target;
-      if (typeof target !== "number" || !Number.isInteger(target) || target < 1 || target > 500) {
-        throw new RegistrationJobValidationError("target must be an integer from 1 to 500");
+      if (typeof target !== "number" || !Number.isInteger(target) || target < 1 || target > MAX_BULK_REGISTRATION_COUNT) {
+        throw new RegistrationJobValidationError(`target must be an integer from 1 to ${MAX_BULK_REGISTRATION_COUNT}`);
       }
       return { mode: "fill", target, concurrency };
     }
 
     const count = rawInput.count;
-    if (typeof count !== "number" || !Number.isInteger(count) || count < 1 || count > 500) {
-      throw new RegistrationJobValidationError("count must be an integer from 1 to 500");
+    if (typeof count !== "number" || !Number.isInteger(count) || count < 1 || count > MAX_BULK_REGISTRATION_COUNT) {
+      throw new RegistrationJobValidationError(`count must be an integer from 1 to ${MAX_BULK_REGISTRATION_COUNT}`);
     }
     return { mode: "create", count, concurrency };
   }

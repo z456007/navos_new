@@ -23,6 +23,9 @@ export function panelTitle(panel: PanelId): string {
   if (panel === "video") {
     return "视频生成";
   }
+  if (panel === "runtimeConfig") {
+    return "\u8fd0\u884c\u914d\u7f6e";
+  }
   if (panel === "probe") {
     return "代理测试";
   }

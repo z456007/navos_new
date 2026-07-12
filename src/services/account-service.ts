@@ -58,6 +58,14 @@ export class AccountService {
     return this.store.get(uid);
   }
 
+  async deleteAccount(uid: string): Promise<boolean> {
+    const normalized = uid.trim();
+    if (!normalized) {
+      return false;
+    }
+    return this.store.delete(normalized);
+  }
+
   async listProviderAccounts(): Promise<AccountRecord[]> {
     return this.store.list();
   }
@@ -150,6 +158,16 @@ export class AccountService {
     if (existing.status !== "disabled") {
       await this.store.setStatus(uid, balanceRemaining > 0 ? "active" : "depleted");
     }
+    const account = await this.store.get(uid);
+    return account ? toListItem(account) : undefined;
+  }
+
+  async updateBalanceKeepingStatus(
+    uid: string,
+    balanceRemaining: number,
+    balanceTotal?: number
+  ): Promise<AccountListItem | undefined> {
+    await this.store.setBalance(uid, balanceRemaining, balanceTotal);
     const account = await this.store.get(uid);
     return account ? toListItem(account) : undefined;
   }
