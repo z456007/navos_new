@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { AccountService } from "../src/services/account-service.js";
 import { RuntimeConfigService } from "../src/services/runtime-config-service.js";
@@ -4339,6 +4339,59 @@ describe("server routes", () => {
     expect(account?.balanceRemaining).toBe(1000);
   });
 
+  it("depletes and rotates when a successful model response is an upstream insufficient credits placeholder", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    await accountService.importAccount({ uid: "u1", token: "t1", balanceRemaining: 1000, balanceTotal: 1000 });
+    await accountService.importAccount({ uid: "u2", token: "t2", balanceRemaining: 1000, balanceTotal: 1000 });
+    const usedUids: string[] = [];
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      fetchImpl: async (_url, init) => {
+        const authorization = String((init?.headers as Record<string, string>).authorization ?? "");
+        const uid = authorization.replace(/^Bearer\s+/, "").split(":")[0];
+        usedUids.push(uid);
+        if (uid === "u1") {
+          return Response.json({
+            id: "chatcmpl_quota_placeholder",
+            object: "chat.completion",
+            choices: [{
+              message: { role: "assistant", content: "Insufficient credits, task paused..." },
+              finish_reason: "stop"
+            }]
+          });
+        }
+        return Response.json({
+          id: "chatcmpl_ok",
+          object: "chat.completion",
+          choices: [{
+            message: { role: "assistant", content: "gpt55-long-ok" },
+            finish_reason: "stop"
+          }]
+        });
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: { authorization: "Bearer sk-test" },
+      payload: {
+        model: "gpt-5.5",
+        messages: [{ role: "user", content: "hello" }]
+      }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().choices[0].message.content).toBe("gpt55-long-ok");
+    expect(usedUids).toEqual(["u1", "u2"]);
+    expect((await store.get("u1"))?.status).toBe("depleted");
+    expect((await store.get("u2"))?.status).toBe("active");
+  });
+
   it("uses runtime config modelAccountWaitMs when waiting for a model account to free up", async () => {
     const store = new InMemoryAccountStore();
     const accountService = new AccountService(store);
@@ -4432,6 +4485,91 @@ describe("server routes", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
     expect((await store.get("u1"))?.leaseUntil).toBe(0);
     expect((await store.get("u1"))?.lastUsedAt).toBeGreaterThan(0);
+  });
+
+  it("releases a leased model account without cooldown when the client disconnects before upstream responds", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    await accountService.importAccount({ uid: "u1", token: "t1", balanceRemaining: 1000, balanceTotal: 1000 });
+    let resolveFetchStarted!: () => void;
+    const fetchStarted = new Promise<void>((resolve) => {
+      resolveFetchStarted = resolve;
+    });
+    let resolveFetchAbort!: () => void;
+    const fetchAborted = new Promise<void>((resolve) => {
+      resolveFetchAbort = resolve;
+    });
+    let settleFetch!: (response: Response) => void;
+    let rejectFetch!: (error: Error) => void;
+    const fetchSettled = new Promise<Response>((resolve, reject) => {
+      settleFetch = resolve;
+      rejectFetch = reject;
+    });
+
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      fetchImpl: async (_url, init) => {
+        const signal = init?.signal;
+        if (signal) {
+          signal.addEventListener("abort", () => {
+            resolveFetchAbort();
+            rejectFetch(new DOMException("The operation was aborted", "AbortError"));
+          }, { once: true });
+        }
+        resolveFetchStarted();
+        return fetchSettled;
+      }
+    });
+
+    try {
+      await app.listen({ host: "127.0.0.1", port: 0 });
+      const address = app.server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("test app did not bind to a TCP port");
+      }
+
+      const request = httpRequest({
+        host: "127.0.0.1",
+        port: address.port,
+        path: "/v1/chat/completions",
+        method: "POST",
+        headers: {
+          authorization: "Bearer sk-test",
+          "content-type": "application/json"
+        }
+      });
+      request.on("error", () => {});
+      request.end(JSON.stringify({
+        model: "gpt-5.5",
+        messages: [{ role: "user", content: "hello" }]
+      }));
+
+      await fetchStarted;
+      expect((await store.get("u1"))?.leaseUntil).toBeGreaterThan(Date.now());
+      request.destroy();
+
+      const aborted = await Promise.race([
+        fetchAborted.then(() => true),
+        delay(250).then(() => false)
+      ]);
+      expect(aborted).toBe(true);
+      await vi.waitFor(async () => {
+        const account = await store.get("u1");
+        expect(account?.leaseUntil).toBe(0);
+        expect(account?.rateLimitedUntil).toBe(0);
+        expect(account?.status).toBe("active");
+      });
+    } finally {
+      settleFetch?.(Response.json({
+        id: "chatcmpl_late",
+        object: "chat.completion",
+        choices: [{ message: { role: "assistant", content: "late" }, finish_reason: "stop" }]
+      }));
+      await app.close();
+    }
   });
 
   it("auto-registers a model account when the pool has no available account", async () => {

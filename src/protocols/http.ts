@@ -55,10 +55,11 @@ export class ProviderHttpClient {
     method: string,
     path: string,
     body?: unknown,
-    headers: Record<string, string> = {}
+    headers: Record<string, string> = {},
+    initOverrides: Omit<RequestInit, "method" | "body" | "headers"> = {}
   ): Promise<ProviderResult<T>> {
     const requestHeaders: Record<string, string> = { ...headers };
-    const init: RequestInit = { headers: requestHeaders };
+    const init: RequestInit = { ...initOverrides, headers: requestHeaders };
 
     if (body !== undefined) {
       requestHeaders["content-type"] = requestHeaders["content-type"] ?? "application/json";

@@ -8,6 +8,7 @@ export interface ModelProxyRequest {
   path: string;
   body?: unknown;
   headers: Record<string, string>;
+  signal?: AbortSignal;
 }
 
 const ALLOWED_PATHS = new Set([
@@ -214,9 +215,9 @@ export async function forwardModelRequest<T = unknown>(
   }
   const body = normalizeProxyBody(request.path, request.body);
   if (request.method === "GET") {
-    return client.requestJson<T>("GET", request.path, undefined, request.headers);
+    return client.requestJson<T>("GET", request.path, undefined, request.headers, requestInit(request));
   }
-  return client.requestJson<T>("POST", request.path, body, request.headers);
+  return client.requestJson<T>("POST", request.path, body, request.headers, requestInit(request));
 }
 
 async function forwardAnthropicMessages<T = unknown>(
@@ -228,7 +229,7 @@ async function forwardAnthropicMessages<T = unknown>(
   return client.requestJson<T>("POST", "/v1/messages", buildAnthropicMessagesPassthroughBody(body, model), {
     ...request.headers,
     "anthropic-version": request.headers["anthropic-version"] ?? "2023-06-01"
-  });
+  }, requestInit(request));
 }
 
 async function forwardOpenAiResponses<T = unknown>(
@@ -239,14 +240,14 @@ async function forwardOpenAiResponses<T = unknown>(
   const model = readString(body.model) ?? "codex";
   const openAiModel = resolveOpenAiModel(model);
   if (!openAiModel) {
-    return client.requestJson<T>("POST", "/responses", body, request.headers);
+    return client.requestJson<T>("POST", "/responses", body, request.headers, requestInit(request));
   }
 
   if (!usesOpenAiResponsesPath(openAiModel)) {
     return forwardResponsesViaChatCompletions<T>(client, request, model, openAiModel);
   }
 
-  return client.requestJson<T>("POST", "/responses", buildNativeOpenAiResponsesBody(body, openAiModel), request.headers);
+  return client.requestJson<T>("POST", "/responses", buildNativeOpenAiResponsesBody(body, openAiModel), request.headers, requestInit(request));
 }
 
 async function forwardResponsesViaChatCompletions<T = unknown>(
@@ -257,7 +258,7 @@ async function forwardResponsesViaChatCompletions<T = unknown>(
 ): Promise<ProviderResult<T>> {
   const responsesBody = bodyRecord(request.body);
   const chatInput = buildChatBodyFromResponsesBody(responsesBody);
-  const result = await client.requestJson("POST", "/chat/completions", buildOpenAiChatBody(chatInput, openAiModel), request.headers);
+  const result = await client.requestJson("POST", "/chat/completions", buildOpenAiChatBody(chatInput, openAiModel), request.headers, requestInit(request));
   if (result.status < 200 || result.status >= 300) {
     return result as ProviderResult<T>;
   }
@@ -285,9 +286,9 @@ async function forwardChatCompletion<T = unknown>(
   const openAiModel = resolveOpenAiModel(model);
   if (openAiModel) {
     if (!usesOpenAiResponsesPath(openAiModel)) {
-      return client.requestJson<T>("POST", "/chat/completions", buildOpenAiChatBody(body, openAiModel), request.headers);
+      return client.requestJson<T>("POST", "/chat/completions", buildOpenAiChatBody(body, openAiModel), request.headers, requestInit(request));
     }
-    const result = await client.requestJson("POST", "/responses", buildOpenAiResponsesBody(body, openAiModel), request.headers);
+    const result = await client.requestJson("POST", "/responses", buildOpenAiResponsesBody(body, openAiModel), request.headers, requestInit(request));
     if (result.status < 200 || result.status >= 300) {
       return result as ProviderResult<T>;
     }
@@ -307,7 +308,7 @@ async function forwardChatCompletion<T = unknown>(
   const result = await client.requestJson("POST", "/v1/messages", buildAnthropicMessagesBody(body, model), {
     ...request.headers,
     "anthropic-version": request.headers["anthropic-version"] ?? "2023-06-01"
-  });
+  }, requestInit(request));
   if (result.status < 200 || result.status >= 300) {
     return result as ProviderResult<T>;
   }
@@ -322,6 +323,10 @@ async function forwardChatCompletion<T = unknown>(
     ...result,
     body: anthropicMessageToOpenAiChat(result.body, model) as T
   };
+}
+
+function requestInit(request: ModelProxyRequest): Omit<RequestInit, "method" | "body" | "headers"> {
+  return request.signal ? { signal: request.signal } : {};
 }
 
 function normalizeProxyBody(path: string, body: unknown): unknown {

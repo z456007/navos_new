@@ -213,6 +213,38 @@ function bodyRecord(request: FastifyRequest): Record<string, unknown> {
     : {};
 }
 
+function requestAbortSignal(request: FastifyRequest, reply: FastifyReply): AbortSignal {
+  const controller = new AbortController();
+  const abort = (): void => {
+    if (!controller.signal.aborted) {
+      controller.abort();
+    }
+  };
+  let cleanedUp = false;
+  const cleanup = (): void => {
+    if (cleanedUp) {
+      return;
+    }
+    cleanedUp = true;
+    request.raw.off("aborted", onAborted);
+    reply.raw.off("close", onClose);
+    reply.raw.off("finish", cleanup);
+  };
+  const onAborted = (): void => {
+    abort();
+  };
+  const onClose = (): void => {
+    if (!reply.raw.writableEnded) {
+      abort();
+    }
+    cleanup();
+  };
+  request.raw.once("aborted", onAborted);
+  reply.raw.once("close", onClose);
+  reply.raw.once("finish", cleanup);
+  return controller.signal;
+}
+
 function positiveIntegerInput(value: unknown, fallback: number, max?: number): number {
   const parsed = typeof value === "number" ? value : Number.parseInt(String(value ?? ""), 10);
   const normalized = Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
@@ -402,8 +434,50 @@ function providerExceptionResult(error: unknown): ProviderResult {
   };
 }
 
+function clientClosedRequestResult(error?: unknown): ProviderResult {
+  const message = error instanceof Error && error.message.trim()
+    ? error.message.trim()
+    : "Client closed request";
+  return {
+    status: 499,
+    body: {
+      error: {
+        message,
+        type: "client_closed_request"
+      }
+    },
+    headers: new Headers()
+  };
+}
+
+function isAbortLikeError(error: unknown): boolean {
+  return error instanceof Error && (
+    error.name === "AbortError"
+    || /aborted|aborterror|operation was aborted|client closed request/i.test(error.message)
+  );
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+}
+
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) {
+    return delay(ms);
+  }
+  if (signal.aborted) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const finish = (): void => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, Math.max(0, ms));
+    timer.unref?.();
+    signal.addEventListener("abort", finish, { once: true });
+  });
 }
 
 function imageResultIsRetryable(result: ProviderResult): boolean {
@@ -660,13 +734,16 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     return Math.max(modelRateLimitGateCooldownMs, retryAfterMs);
   }
 
-  async function waitForModelRateLimitGate(key: string): Promise<void> {
+  async function waitForModelRateLimitGate(key: string, signal?: AbortSignal): Promise<void> {
     while (true) {
+      if (signal?.aborted) {
+        return;
+      }
       const delayMs = (modelRateLimitGateUntil.get(key) ?? 0) - Date.now();
       if (delayMs <= 0) {
         return;
       }
-      await delay(delayMs);
+      await abortableDelay(delayMs, signal);
     }
   }
 
@@ -930,7 +1007,8 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     leaseId: string,
     allowRegister: boolean,
     waitMs: number,
-    leaseTtlMs: number
+    leaseTtlMs: number,
+    signal?: AbortSignal
   ): Promise<{
     auth?: ProviderAuthContext;
     registered: boolean;
@@ -939,7 +1017,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     let first = true;
     let registered = false;
     let hasCandidate = true;
-    while (first || Date.now() < deadline) {
+    while (!signal?.aborted && (first || Date.now() < deadline)) {
       first = false;
       const next = await leaseModelAccountOrRegister(leaseId, allowRegister && !registered, leaseTtlMs);
       if (next.registered) {
@@ -955,7 +1033,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       if (!hasCandidate) {
         break;
       }
-      await delay(Math.min(ACCOUNT_WAIT_POLL_INTERVAL_MS, Math.max(1, deadline - Date.now())));
+      await abortableDelay(Math.min(ACCOUNT_WAIT_POLL_INTERVAL_MS, Math.max(1, deadline - Date.now())), signal);
     }
     return { registered };
   }
@@ -997,8 +1075,12 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
 
   async function forwardModelRequestWithAccountRotation(
     path: "/v1/chat/completions" | "/v1/responses" | "/v1/messages",
-    body: Record<string, unknown>
+    body: Record<string, unknown>,
+    signal?: AbortSignal
   ): Promise<ProviderResult> {
+    if (signal?.aborted) {
+      return clientClosedRequestResult();
+    }
     let lastResult: ProviderResult | undefined;
     let lastDecision: ProviderFailureDecision | undefined;
     let registeredDuringRequest = false;
@@ -1014,23 +1096,40 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     );
 
     for (let attempt = 0; attempt < MODEL_PROXY_MAX_ATTEMPTS; attempt += 1) {
-      await waitForModelRateLimitGate(modelRateLimitKey);
+      await waitForModelRateLimitGate(modelRateLimitKey, signal);
+      if (signal?.aborted) {
+        return clientClosedRequestResult();
+      }
       const leaseId = `model:${randomUUID()}`;
-      const nextAuth = await modelAuthOrWait(leaseId, !registeredDuringRequest, modelAccountWaitMs, accountLeaseTtlMs);
+      const nextAuth = await modelAuthOrWait(leaseId, !registeredDuringRequest, modelAccountWaitMs, accountLeaseTtlMs, signal);
       if (nextAuth.registered) {
         registeredDuringRequest = true;
+      }
+      if (signal?.aborted) {
+        return clientClosedRequestResult();
       }
       const auth = nextAuth.auth;
       if (!auth) {
         break;
       }
 
-      const result = wrapStreamingProviderResultForAccount(auth.account.uid, auth.leaseId, await forwardModelRequest(client, {
-        method: "POST",
-        path,
-        body,
-        headers: auth.headers
-      }).catch(providerExceptionResult), modelRateLimitKey);
+      let upstreamResult: ProviderResult;
+      try {
+        upstreamResult = await forwardModelRequest(client, {
+          method: "POST",
+          path,
+          body,
+          headers: auth.headers,
+          signal
+        });
+      } catch (error) {
+        if (signal?.aborted || isAbortLikeError(error)) {
+          await accountService.releaseModelAccount(auth.account.uid, auth.leaseId);
+          return clientClosedRequestResult(error);
+        }
+        upstreamResult = providerExceptionResult(error);
+      }
+      const result = wrapStreamingProviderResultForAccount(auth.account.uid, auth.leaseId, upstreamResult, modelRateLimitKey);
       logProviderFailure({
         kind: "model",
         route: path,
@@ -1511,8 +1610,11 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       await sendModelNotAllowed(reply, "Only public Claude and Codex models are allowed on this endpoint");
       return;
     }
-    const result = await forwardModelRequestWithAccountRotation("/v1/chat/completions", body);
-    await sendProviderResult(reply, result);
+    const signal = requestAbortSignal(request, reply);
+    const result = await forwardModelRequestWithAccountRotation("/v1/chat/completions", body, signal);
+    if (!reply.raw.destroyed) {
+      await sendProviderResult(reply, result);
+    }
   });
 
   app.post("/v1/responses", async (request, reply) => {
@@ -1526,8 +1628,11 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       await sendModelNotAllowed(reply, "Only public Codex and GPT Responses models are allowed on this endpoint");
       return;
     }
-    const result = await forwardModelRequestWithAccountRotation("/v1/responses", body);
-    await sendProviderResult(reply, result);
+    const signal = requestAbortSignal(request, reply);
+    const result = await forwardModelRequestWithAccountRotation("/v1/responses", body, signal);
+    if (!reply.raw.destroyed) {
+      await sendProviderResult(reply, result);
+    }
   });
 
   app.post("/v1/messages", async (request, reply) => {
@@ -1541,8 +1646,11 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       await sendModelNotAllowed(reply, "Only public Claude models are allowed on this endpoint");
       return;
     }
-    const result = await forwardModelRequestWithAccountRotation("/v1/messages", body);
-    await sendProviderResult(reply, result);
+    const signal = requestAbortSignal(request, reply);
+    const result = await forwardModelRequestWithAccountRotation("/v1/messages", body, signal);
+    if (!reply.raw.destroyed) {
+      await sendProviderResult(reply, result);
+    }
   });
 
   app.post("/api/register", async (request, reply) => {

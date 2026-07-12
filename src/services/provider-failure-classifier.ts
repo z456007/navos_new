@@ -21,9 +21,19 @@ const QUOTA_PATTERN = /insufficient[_ -]?balance|quota[_ -]?(exhausted|exceeded)
 const INVALID_ACCOUNT_PATTERN = /(?:invalid|expired|revoked)\s+(?:access[_ -]?token|token|credentials?)\b|(?:access[_ -]?token|token|credentials?)\b.*(?:invalid|expired|revoked)|\bunauthorized\b|authentication|banned|account.*disabled/i;
 const RATE_LIMIT_PATTERN = /rate.?limit|too many|temporarily unavailable|try again later|频率.*限制|请求频率|限流|稍后再试/i;
 const USER_ERROR_PATTERN = /invalid|bad request|unsupported|policy|content|prompt|image_url|parameter|参数/i;
+const SUCCESS_QUOTA_PLACEHOLDER_PATTERN = /^Insufficient credits,\s*task paused\b/i;
 
 export function classifyProviderResult(result: ProviderClassifierResultInput): ProviderFailureDecision {
   const errorText = providerErrorText(result.body, result.status >= 400);
+  const successQuotaPlaceholder = result.status >= 200 && result.status < 300
+    ? providerSuccessQuotaPlaceholderText(result.body)
+    : undefined;
+  if (successQuotaPlaceholder) {
+    return decisionForKind("quota_exhausted", {
+      status: 402,
+      message: successQuotaPlaceholder
+    });
+  }
   if (result.status >= 200 && result.status < 300 && !errorText) {
     return {
       kind: "none",
@@ -194,6 +204,57 @@ function providerErrorText(value: unknown, forceErrorContext = false): string | 
   const parts = collectErrorTextParts(value, forceErrorContext);
   const uniqueParts = [...new Set(parts.map((part) => part.trim()).filter(Boolean))];
   return uniqueParts.length > 0 ? uniqueParts.join(" ") : undefined;
+}
+
+function providerSuccessQuotaPlaceholderText(value: unknown): string | undefined {
+  for (const text of providerAssistantTextParts(value)) {
+    const normalized = text.replace(/\s+/g, " ").trim();
+    if (SUCCESS_QUOTA_PLACEHOLDER_PATTERN.test(normalized)) {
+      return normalized;
+    }
+  }
+  return undefined;
+}
+
+function providerAssistantTextParts(value: unknown): string[] {
+  if (!isPlainRecord(value)) {
+    return [];
+  }
+  const parts: string[] = [];
+  const choices = value.choices;
+  if (Array.isArray(choices)) {
+    for (const choice of choices) {
+      if (!isPlainRecord(choice)) {
+        continue;
+      }
+      const message = choice.message;
+      if (isPlainRecord(message)) {
+        parts.push(...contentTextParts(message.content));
+      }
+    }
+  }
+  parts.push(...contentTextParts(value.content));
+  return parts;
+}
+
+function contentTextParts(value: unknown): string[] {
+  if (typeof value === "string") {
+    return [value];
+  }
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const parts: string[] = [];
+  for (const item of value) {
+    if (typeof item === "string") {
+      parts.push(item);
+      continue;
+    }
+    if (isPlainRecord(item) && typeof item.text === "string") {
+      parts.push(item.text);
+    }
+  }
+  return parts;
 }
 
 function collectErrorTextParts(record: Record<string, unknown>, forceErrorContext: boolean): string[] {
