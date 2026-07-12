@@ -43,6 +43,25 @@ describe("sub2api chain load script", () => {
     expect(source).toContain("classifyFailureBody");
   });
 
+  it("can route each real platform through its own Sub2Api API key while sharing the same base URL", async () => {
+    const source = await readFile("scripts/load/sub2api-chain-load-test.ts", "utf8");
+    const wrapper = await readFile("scripts/load/run-local-sub2api-chain.ps1", "utf8");
+
+    for (const envName of [
+      "SUB2API_CODEX_API_KEY",
+      "SUB2API_CLAUDE_API_KEY",
+      "SUB2API_DEEPSEEK_API_KEY",
+      "SUB2API_IMAGE_API_KEY",
+      "SUB2API_SEEDANCE_API_KEY"
+    ]) {
+      expect(source).toContain(envName);
+    }
+    expect(source).toContain("apiKey?: string");
+    expect(source).toContain("const requestApiKey = apiKey ?? defaultApiKey");
+    expect(source).toContain('SUB2API_DEEPSEEK_API_KEY ?? "sk-local-deepseek-zgm2003"');
+    expect(wrapper).toContain('Sub2ApiDeepSeekApiKey = "sk-local-deepseek-zgm2003"');
+  });
+
   it("has an exact production 100 plan for codex claude deepseek image and seedance", async () => {
     const source = await readFile("scripts/load/sub2api-chain-load-test.ts", "utf8");
 
@@ -63,6 +82,14 @@ describe("sub2api chain load script", () => {
     expect(source).toContain("runScenariosInParallel");
     expect(source).toContain("LOAD_SCENARIO_PARALLEL");
     expect(source).toContain('path: "/videos/generations"');
+  });
+
+  it("uses production-capable defaults for reference media and Seedance 2", async () => {
+    const source = await readFile("scripts/load/sub2api-chain-load-test.ts", "utf8");
+
+    expect(source).toContain('LOAD_VIDEO_MODEL ?? "doubao-seedance-2-0-260128"');
+    expect(source).toContain("DEFAULT_REFERENCE_IMAGE_URL");
+    expect(source).not.toContain("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=");
   });
 
   it("fake upstream covers video routes used by the all-channel runner", async () => {

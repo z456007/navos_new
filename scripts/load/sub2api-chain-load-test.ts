@@ -4,6 +4,7 @@ import { performance } from "node:perf_hooks";
 interface LoadRequest {
   path: string;
   body: unknown;
+  apiKey?: string;
 }
 
 interface ScenarioRecipe {
@@ -52,15 +53,20 @@ interface ScenarioResult {
 }
 
 const baseUrl = (process.env.SUB2API_BASE_URL ?? "http://127.0.0.1:3000/v1").replace(/\/+$/, "");
-const apiKey = process.env.SUB2API_API_KEY ?? "sk-local-openai-zgm2003";
+const defaultApiKey = process.env.SUB2API_API_KEY ?? "sk-local-openai-zgm2003";
+const codexApiKey = process.env.SUB2API_CODEX_API_KEY ?? defaultApiKey;
+const claudeApiKey = process.env.SUB2API_CLAUDE_API_KEY ?? "sk-local-claude-zgm2003";
+const deepseekApiKey = process.env.SUB2API_DEEPSEEK_API_KEY ?? "sk-local-deepseek-zgm2003";
+const imageApiKey = process.env.SUB2API_IMAGE_API_KEY ?? defaultApiKey;
+const seedanceApiKey = process.env.SUB2API_SEEDANCE_API_KEY ?? "sk-local-seedance-zgm2003";
 const timeoutMs = Number(process.env.LOAD_TIMEOUT_MS ?? 180000);
 const reportTimeZone = process.env.LOAD_REPORT_TIME_ZONE ?? "Asia/Shanghai";
 const requestsPerScenario = positiveInt(process.env.LOAD_REQUESTS_PER_SCENARIO, 0);
 const includeMixedAll = process.env.LOAD_MIXED_ALL !== "false";
 const production100 = process.env.LOAD_PRODUCTION_100 === "true";
 const runScenariosInParallel = process.env.LOAD_SCENARIO_PARALLEL === "true" || production100;
-const referenceImageUrl = process.env.LOAD_REFERENCE_IMAGE_URL
-  ?? "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+const DEFAULT_REFERENCE_IMAGE_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAUAAAADICAIAAAAWZq/8AAAEL0lEQVR42u3dsU0DQRCGUXcAGRWQUIc7oRLKoiYCIiQCAsiRrPP5fDf/zJO+Ciw/rXb3dvf09f0jKbSTn0ACWBLAkgCWAJYEsCSAJQEsASwJYEkASwBLAlgSwJIAlgCWBLAkgCUBLAEsCWBJAEsASwJYEsCSAJYAlgSwJIAlASwBLAlgSQBLAEsC+FLPrx9al3+tAAZYAAMMsAAWwAIYYAEMMMACGGCABbAAFsAAC2CAAT6kz/MZVIABrq50XQADDHAYWpgBBriP28mSAQa4j9uBkgEGuCfdIYwBBrgz3faMAQZ4hN6uhgEGeATdrowBBniW3maGAQZ4Ft1mjAEGeKjeHoYBBniu3gaGAQZ4tN50wwADPF1vtGGAAaY32DDAANMbbBhggOkNNpwB+OHpZUgRgBvrjTMMMMD0BhsGGGCAAQZ4BuAheoMMAwwwvcGGAQYYYIAB7g54oN4Iw/aB7QPTG2wYYIABBhjgvoCH6y1uGGCAAQYY4KaA0S1uGGCAAQYYYIABBlilAENb3zDAAAMMMMAAAwyw6gDGNcIwwAADDDDAAAMMsAAG2HHCyEOCpQCDmmIYYIABBhhggAEGGGCAAQYYYIABBhhgAQwwwADbBxbAAAMMMMAAA9wbMKJBhgEGmGEjMMAAAwywAAYYYIABBhhggAUwwAADDLAABhhggAEGGGCAAQYYRXdi0QswwP96fH/7C2CAAQ4GfCNjVgEG+HjAqyWzCjDAhQCvYIyrt5EArgX4KsbEAgxwRcALGRMLMMCHbSMtZHxZMrSV9QI8Yh/4FsbcAgxwiQ851jHmFmCAC32JtYIxumX1Ajz0U8qrGNMLMMAVv4VevspFL8AA1z3MgDHAAMefRsI4Ti/AAGMcrBdggE2PAQa444F+A3J9vQADjHGwXoABxhhggGcAnsM4RS/AAFvlCtYLMMC33nrXjHGWXoAB3ubmyh6M4/QCDPCW10dHM07UCzDA218Bnzg9DtULMMB3fMYhhXGuXoABvvtTLMUZR+sFGOCdnlOqyThdL8AAD2XcgC7AAB/zsuHhq1xt9AIM8JEPlO7PuBNdgAEu8cjwboz76QUY4BGMW9IFGOBUxsslN6YLMMBtB+T2bgEGuOEq1xy3AAPcbfd4oF6AAc6wveGjxwADDHDATSAAAwxwvGSAAQYYY4ABBhjjToAl02OApdEDMsDCGGAJY4AljAGWpqxyASySgxkDLIyDGQMsjIMZAywFT48BloIHZIClYMYAS8GMAZaCGQMsBa9yASwFD8gAS8GMAZaCGQMsBU+PAZaCB2SApWDGAEvBjAGWghkDLB3MGGApWDLAUjBjgKVgxgBLwYwBloYGsASwJIAlASwBLAlgSQBLAlgCWBLAkgCWAJYEsCSAJQEsASwJYEkASwJYAlgSwJIAlgCWBLAkgCUBLPXtF1CSxZ6X3shOAAAAAElFTkSuQmCC";
+const referenceImageUrl = process.env.LOAD_REFERENCE_IMAGE_URL ?? DEFAULT_REFERENCE_IMAGE_URL;
 const referenceVideoUrl = process.env.LOAD_REFERENCE_VIDEO_URL;
 const referenceAudioUrl = process.env.LOAD_REFERENCE_AUDIO_URL;
 const chatModel = process.env.LOAD_CHAT_MODEL ?? "gpt-5.5";
@@ -68,7 +74,7 @@ const codexModel = process.env.LOAD_CODEX_MODEL ?? "codex";
 const claudeCodeModel = process.env.LOAD_CLAUDE_CODE_MODEL ?? "claude-sonnet-4-6";
 const deepseekModel = process.env.LOAD_DEEPSEEK_MODEL ?? "deepseek-v4-pro";
 const imageModel = process.env.LOAD_IMAGE_MODEL ?? "gpt-image-2";
-const videoModel = process.env.LOAD_VIDEO_MODEL ?? "seedance-1.0-pro";
+const videoModel = process.env.LOAD_VIDEO_MODEL ?? "doubao-seedance-2-0-260128";
 const concurrencyCsv = (process.env.LOAD_CONCURRENCY ?? "100")
   .split(",")
   .map((item) => Number(item.trim()))
@@ -87,6 +93,7 @@ const recipes: ScenarioRecipe[] = [
     name: "chat",
     build: () => ({
       path: "/chat/completions",
+      apiKey: codexApiKey,
       body: { model: chatModel, messages: [{ role: "user", content: "ping" }], max_tokens: 256 }
     })
   },
@@ -94,6 +101,7 @@ const recipes: ScenarioRecipe[] = [
     name: "long-chat",
     build: (index) => ({
       path: "/chat/completions",
+      apiKey: codexApiKey,
       body: {
         model: chatModel,
         messages: longConversation(index),
@@ -105,6 +113,7 @@ const recipes: ScenarioRecipe[] = [
     name: "vision-chat",
     build: () => ({
       path: "/chat/completions",
+      apiKey: codexApiKey,
       body: {
         model: chatModel,
         messages: [{
@@ -122,6 +131,7 @@ const recipes: ScenarioRecipe[] = [
     name: "deepseek-chat",
     build: () => ({
       path: "/chat/completions",
+      apiKey: deepseekApiKey,
       body: {
         model: deepseekModel,
         messages: [{ role: "user", content: "DeepSeek pure text route smoke: answer with ok." }],
@@ -133,6 +143,7 @@ const recipes: ScenarioRecipe[] = [
     name: "image-t2i",
     build: (index) => ({
       path: "/images/generations",
+      apiKey: imageApiKey,
       body: { model: imageModel, prompt: `load test text-to-image ${index}`, response_format: "url", size: "1024x1024" }
     })
   },
@@ -140,6 +151,7 @@ const recipes: ScenarioRecipe[] = [
     name: "image-reference",
     build: (index) => ({
       path: "/images/generations",
+      apiKey: imageApiKey,
       body: {
         model: imageModel,
         prompt: `load test reference image generation ${index}`,
@@ -152,6 +164,7 @@ const recipes: ScenarioRecipe[] = [
     name: "seedance-t2v",
     build: (index) => ({
       path: "/videos/generations",
+      apiKey: seedanceApiKey,
       body: {
         model: videoModel,
         prompt: `load test text-to-video ${index}`,
@@ -165,6 +178,7 @@ const recipes: ScenarioRecipe[] = [
     name: "seedance-reference",
     build: (index) => ({
       path: "/videos/generations",
+      apiKey: seedanceApiKey,
       body: {
         model: videoModel,
         prompt: `load test reference-to-video ${index}`,
@@ -249,14 +263,15 @@ async function runScenario(scenario: Scenario): Promise<ScenarioResult> {
     while (next < scenario.requests) {
       const requestIndex = next;
       next += 1;
-      const { path, body } = scenario.build(requestIndex);
+      const { path, body, apiKey } = scenario.build(requestIndex);
+      const requestApiKey = apiKey ?? defaultApiKey;
       const start = performance.now();
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       try {
         const response = await fetch(`${baseUrl}${path}`, {
           method: "POST",
-          headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+          headers: { authorization: `Bearer ${requestApiKey}`, "content-type": "application/json" },
           body: JSON.stringify(body),
           signal: controller.signal
         });
@@ -369,6 +384,7 @@ function longConversation(index: number): Array<{ role: "system" | "user" | "ass
 function buildCodexConversation(index: number): LoadRequest {
   return {
     path: "/responses",
+    apiKey: codexApiKey,
     body: {
       model: codexModel,
       input: [
@@ -396,6 +412,7 @@ function buildClaudeCodeVisionConversation(index: number): LoadRequest {
   const toolUseId = `toolu_load_${index}`;
   return {
     path: "/messages",
+    apiKey: claudeApiKey,
     body: {
       model: claudeCodeModel,
       max_tokens: 512,
@@ -436,6 +453,7 @@ function buildGptImage2MixedGeneration(index: number): LoadRequest {
   const withReference = index % 2 === 1;
   return {
     path: "/images/generations",
+    apiKey: imageApiKey,
     body: {
       model: imageModel,
       prompt: withReference
@@ -467,7 +485,7 @@ function buildSeedanceReferenceVideo(index: number): LoadRequest {
     body.audioRef = referenceAudioUrl;
     body.audioRoles = ["reference_audio"];
   }
-  return { path: "/videos/generations", body };
+  return { path: "/videos/generations", apiKey: seedanceApiKey, body };
 }
 
 function anthropicImageSource(url: string): Record<string, unknown> {
