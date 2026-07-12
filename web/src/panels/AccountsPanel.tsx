@@ -378,20 +378,20 @@ export function AccountsPanel({
             <span>新增数量</span>
             <InputNumber
               aria-label="新增数量"
-              max={10000}
+              max={100000}
               min={1}
               value={createCount}
-              onChange={(value) => setCreateCount(clampJobNumber(value, 1, 10000))}
+              onChange={(value) => setCreateCount(clampJobNumber(value, 1, 100000))}
             />
           </label>
           <label className="text-field ant-field">
             <span>任务并发</span>
             <InputNumber
               aria-label="任务并发"
-              max={100}
+              max={5000}
               min={1}
               value={jobConcurrency}
-              onChange={(value) => setJobConcurrency(clampJobNumber(value, 1, 100))}
+              onChange={(value) => setJobConcurrency(clampJobNumber(value, 1, 5000))}
             />
           </label>
         </div>

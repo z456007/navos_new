@@ -153,7 +153,7 @@ describe("admin app gate", () => {
     const runtimeButton = await screen.findByRole("button", { name: "\u8fd0\u884c\u914d\u7f6e" });
     fireEvent.click(runtimeButton);
 
-    expect(await screen.findByText("运行预设")).toBeInTheDocument();
+    expect(await screen.findByText("一键套用方案")).toBeInTheDocument();
     expect(screen.getByText("100 并发验证")).toBeInTheDocument();
     expect(screen.getByText("长对话/长消耗")).toBeInTheDocument();
     expect(await screen.findByText("\u56fe\u7247/\u89c6\u9891\u4efb\u52a1")).toBeInTheDocument();
@@ -625,7 +625,7 @@ describe("admin app gate", () => {
     await waitFor(() => {
       expect(screen.getAllByRole("heading", { name: "账号池" }).length).toBeGreaterThan(0);
     });
-    expect(screen.getByLabelText("任务并发")).toHaveAttribute("aria-valuemax", "100");
+    expect(screen.getByLabelText("任务并发")).toHaveAttribute("aria-valuemax", "5000");
     fireEvent.click(screen.getByRole("button", { name: "启动单个注册" }));
 
     await waitFor(() => {

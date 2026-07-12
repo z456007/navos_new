@@ -349,4 +349,19 @@ describe("loadConfig", () => {
     expect(config.mysql.queueLimit).toBe(500);
   });
 
+  it("keeps visual runtime knobs out of .env.example", async () => {
+    const source = await import("node:fs/promises").then((fs) => fs.readFile(".env.example", "utf8"));
+    for (const key of [
+      "IMAGE_ACCOUNT_WAIT_MS",
+      "IMAGE_MAX_POLL_ATTEMPTS",
+      "ACCOUNT_BALANCE_RECONCILE_ENABLED",
+      "REGISTRATION_MAX_IN_FLIGHT",
+      "REGISTRATION_MAILBOX_CREATE_CONCURRENCY",
+      "REGISTRATION_POLL_CONCURRENCY"
+    ]) {
+      expect(source).not.toContain(key);
+    }
+    expect(source).toContain("# ????? Web ?????");
+  });
+
 });
