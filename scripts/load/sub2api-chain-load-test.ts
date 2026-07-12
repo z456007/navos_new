@@ -51,7 +51,7 @@ interface ScenarioResult {
   failureSamples: FailureSample[];
 }
 
-const baseUrl = (process.env.SUB2API_BASE_URL ?? "http://127.0.0.1:18080/v1").replace(/\/+$/, "");
+const baseUrl = (process.env.SUB2API_BASE_URL ?? "http://127.0.0.1:3000/v1").replace(/\/+$/, "");
 const apiKey = process.env.SUB2API_API_KEY ?? "sk-local-openai-zgm2003";
 const timeoutMs = Number(process.env.LOAD_TIMEOUT_MS ?? 180000);
 const reportTimeZone = process.env.LOAD_REPORT_TIME_ZONE ?? "Asia/Shanghai";

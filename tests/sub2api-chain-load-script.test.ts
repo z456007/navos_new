@@ -24,6 +24,14 @@ describe("sub2api chain load script", () => {
     expect(source).toContain("/video/generations");
   });
 
+  it("defaults to the local Sub2Api frontend proxy port used by the operator", async () => {
+    const runner = await readFile("scripts/load/sub2api-chain-load-test.ts", "utf8");
+    const wrapper = await readFile("scripts/load/run-local-sub2api-chain.ps1", "utf8");
+
+    expect(runner).toContain('SUB2API_BASE_URL ?? "http://127.0.0.1:3000/v1"');
+    expect(wrapper).toContain('Sub2ApiBaseUrl = "http://127.0.0.1:3000/v1"');
+  });
+
   it("records error categories and failure samples for production diagnostics", async () => {
     const source = await readFile("scripts/load/sub2api-chain-load-test.ts", "utf8");
 

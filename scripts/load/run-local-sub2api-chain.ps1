@@ -1,5 +1,5 @@
 ﻿param(
-  [string]$Sub2ApiBaseUrl = "http://127.0.0.1:18080/v1",
+  [string]$Sub2ApiBaseUrl = "http://127.0.0.1:3000/v1",
   [string]$Sub2ApiApiKey = "sk-local-openai-zgm2003",
   [string]$Concurrency = "100,300,1000"
 )
