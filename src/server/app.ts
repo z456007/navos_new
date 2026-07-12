@@ -1012,12 +1012,17 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
     return request.query && typeof request.query === "object" ? request.query as MailboxQuery : {};
   }
 
-  async function saveVideoTask(task: NormalizedVideoTask, accountUid?: string): Promise<VideoTaskRecord | undefined> {
-    if (!task.id) {
+  async function saveVideoTask(
+    task: NormalizedVideoTask,
+    accountUid?: string,
+    taskIdOverride?: string
+  ): Promise<VideoTaskRecord | undefined> {
+    const taskId = taskIdOverride ?? task.id;
+    if (!taskId) {
       return undefined;
     }
     return videoTaskStore.upsert({
-      taskId: task.id,
+      taskId,
       accountUid,
       status: task.status,
       sourceUrl: task.videoUrl,
@@ -1790,7 +1795,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       }
     }
     if (result.body.id) {
-      await saveVideoTask(result.body, existingTask?.accountUid);
+      await saveVideoTask(result.body, existingTask?.accountUid, params.taskId);
     }
     await sendProviderResult(reply, result);
   }

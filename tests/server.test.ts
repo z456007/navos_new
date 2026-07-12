@@ -3172,6 +3172,64 @@ describe("server routes", () => {
     expect(account?.rateLimitedUntil).toBeGreaterThan(Date.now());
   });
 
+  it("updates the originally requested video task when upstream returns a different final video id", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    const videoTaskStore = new InMemoryVideoTaskStore();
+    await accountService.importAccount({ uid: "u1", token: "t1", balanceRemaining: 2000, balanceTotal: 2000 });
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      videoTaskStore,
+      fetchImpl: async (url) => {
+        if (String(url).endsWith("/api/tasks/navos-seedance-video-generation")) {
+          return Response.json({
+            task_id: "provider_create_task",
+            status: "asset_pending",
+            billing: { points_amount: 500, remaining_amount: 1500 }
+          });
+        }
+        return Response.json({
+          code: 200,
+          data: {
+            task_id: "provider_final_video_id",
+            status: "succeeded",
+            video_url: "https://cdn.test/provider-final.mp4",
+            billing: { status: "deducted", remaining_amount: 1500 }
+          }
+        });
+      }
+    });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/video/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "city skyline", durationSeconds: 5, resolution: "480P" }
+    });
+    expect(created.statusCode).toBe(200);
+
+    const polled = await app.inject({
+      method: "GET",
+      url: "/api/video/generations/provider_create_task",
+      headers: { authorization: "Bearer sk-test" }
+    });
+
+    expect(polled.statusCode).toBe(200);
+    expect(polled.json()).toMatchObject({
+      id: "provider_final_video_id",
+      status: "succeeded",
+      videoUrl: "https://cdn.test/provider-final.mp4"
+    });
+    expect(await videoTaskStore.get("provider_create_task")).toMatchObject({
+      taskId: "provider_create_task",
+      status: "succeeded",
+      sourceUrl: "https://cdn.test/provider-final.mp4"
+    });
+  });
+
   it("uses an existing 2000-credit video account before registering a new one", async () => {
     const store = new InMemoryAccountStore();
     const accountService = new AccountService(store);

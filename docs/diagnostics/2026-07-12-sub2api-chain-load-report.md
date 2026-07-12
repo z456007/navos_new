@@ -2,13 +2,13 @@
 
 Base URL: http://127.0.0.1:3000/v1
 Mode: real
-Timeout: 360000 ms
+Timeout: 300000 ms
 Report timezone: Asia/Shanghai
 LOAD_PRODUCTION_100: false
 LOAD_SCENARIO_PARALLEL: false
 LOAD_MIXED_ALL: false
 LOAD_POLL_MEDIA: true
-LOAD_SCENARIOS: seedance-t2v
+LOAD_SCENARIOS: image-t2i,image-reference
 LOAD_IMAGE_SIZE: 1024x1024
 LOAD_VIDEO_RESOLUTION: 480P
 LOAD_VIDEO_DURATION_SECONDS: 5
@@ -19,16 +19,27 @@ Reference audio: not configured
 
 | scenario | total | success | 4xx | 5xx | timeout | network error | rps | p50 ms | p95 ms | p99 ms |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| seedance-t2v-1 | 1 | 1 | 0 | 0 | 0 | 0 | 0.01 | 96090 | 96090 | 96090 |
+| image-t2i-5 | 5 | 0 | 5 | 0 | 0 | 0 | 0.21 | 9904 | 24067 | 24067 |
+| image-reference-5 | 5 | 0 | 0 | 5 | 0 | 0 | 146.52 | 28 | 33 | 33 |
 
 ## Error Summary
 
 | scenario | category | count |
 |---|---|---:|
-| none | none | 0 |
+| image-t2i-5 | rate_limit | 5 |
+| image-reference-5 | server_error | 5 |
 
 ## Failure Samples
 
 | scenario | status | category | path | body snippet |
 |---|---:|---|---|---|
-| none | 0 | none | none | none |
+| image-t2i-5 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limit_error"}} |
+| image-t2i-5 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limit_error"}} |
+| image-t2i-5 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limit_error"}} |
+| image-t2i-5 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limit_error"}} |
+| image-t2i-5 | 429 | rate_limit | /images/generations | {"error":{"message":"请求频率超过限制 server_error","type":"rate_limit_error"}} |
+| image-reference-5 | 503 | server_error | /images/generations | {"error":{"message":"No available compatible accounts","type":"api_error"}} |
+| image-reference-5 | 503 | server_error | /images/generations | {"error":{"message":"No available compatible accounts","type":"api_error"}} |
+| image-reference-5 | 503 | server_error | /images/generations | {"error":{"message":"No available compatible accounts","type":"api_error"}} |
+| image-reference-5 | 503 | server_error | /images/generations | {"error":{"message":"No available compatible accounts","type":"api_error"}} |
+| image-reference-5 | 503 | server_error | /images/generations | {"error":{"message":"No available compatible accounts","type":"api_error"}} |
