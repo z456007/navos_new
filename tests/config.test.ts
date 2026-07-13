@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config/env.js";
+import { RuntimeConfigService } from "../src/services/runtime-config-service.js";
 import {
+  DEFAULT_RUNTIME_CONFIG,
   normalizeRuntimeConfigInput,
   runtimeConfigDefaultsFromAppConfig
 } from "../src/services/runtime-config-schema.js";
+import { InMemoryRuntimeConfigStore } from "../src/store/runtime-config-store.js";
 
 describe("loadConfig", () => {
   it("loads required settings and defaults", () => {
@@ -346,6 +349,45 @@ describe("loadConfig", () => {
     const defaults = runtimeConfigDefaultsFromAppConfig(config);
     expect(defaults.imageMaxPollAttempts * defaults.imagePollIntervalMs).toBe(300000);
     expect(defaults.imageSyncWaitBudgetMs).toBe(300000);
+  });
+
+  it("migrates persisted legacy image wait defaults to the five-minute budget", async () => {
+    const store = new InMemoryRuntimeConfigStore();
+    await store.save({
+      ...DEFAULT_RUNTIME_CONFIG,
+      imageMaxPollAttempts: 30,
+      imagePollIntervalMs: 4000,
+      imageSyncWaitBudgetMs: 120000,
+      updatedAt: 1
+    });
+    const service = new RuntimeConfigService(store, DEFAULT_RUNTIME_CONFIG);
+
+    const migrated = await service.seedDefaultsIfEmpty();
+
+    expect(migrated.imageMaxPollAttempts).toBe(75);
+    expect(migrated.imagePollIntervalMs).toBe(4000);
+    expect(migrated.imageSyncWaitBudgetMs).toBe(300000);
+    await expect(store.get()).resolves.toMatchObject({
+      imageMaxPollAttempts: 75,
+      imageSyncWaitBudgetMs: 300000
+    });
+  });
+
+  it("keeps customized persisted image wait budgets", async () => {
+    const store = new InMemoryRuntimeConfigStore();
+    await store.save({
+      ...DEFAULT_RUNTIME_CONFIG,
+      imageMaxPollAttempts: 45,
+      imagePollIntervalMs: 4000,
+      imageSyncWaitBudgetMs: 180000,
+      updatedAt: 1
+    });
+    const service = new RuntimeConfigService(store, DEFAULT_RUNTIME_CONFIG);
+
+    const loaded = await service.seedDefaultsIfEmpty();
+
+    expect(loaded.imageMaxPollAttempts).toBe(45);
+    expect(loaded.imageSyncWaitBudgetMs).toBe(180000);
   });
 
   it("loads MySQL pool limits as first-run env seed", () => {

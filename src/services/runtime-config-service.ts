@@ -8,6 +8,10 @@ import {
 
 export type { RuntimeConfigUpdateInput, RuntimeConfigView } from "./runtime-config-schema.js";
 
+const LEGACY_IMAGE_MAX_POLL_ATTEMPTS = 30;
+const LEGACY_IMAGE_POLL_INTERVAL_MS = 4000;
+const LEGACY_IMAGE_SYNC_WAIT_BUDGET_MS = 120000;
+
 export class RuntimeConfigService {
   constructor(
     private readonly store: RuntimeConfigStore,
@@ -16,7 +20,12 @@ export class RuntimeConfigService {
 
   async get(): Promise<RuntimeConfigView> {
     const stored = await this.store.get();
-    return normalizeRuntimeConfigInput(stored ?? {}, { ...this.defaults, updatedAt: stored?.updatedAt ?? 0 });
+    const normalized = normalizeRuntimeConfigInput(stored ?? {}, { ...this.defaults, updatedAt: stored?.updatedAt ?? 0 });
+    const migrated = this.migrateLegacyImageSyncDefaults(normalized);
+    if (!migrated) {
+      return normalized;
+    }
+    return normalizeRuntimeConfigInput(await this.store.save(migrated), this.defaults);
   }
 
   async update(input: RuntimeConfigUpdateInput): Promise<RuntimeConfigView> {
@@ -29,5 +38,27 @@ export class RuntimeConfigService {
     const stored = await this.store.get();
     if (stored) return this.get();
     return this.store.save({ ...this.defaults, updatedAt: Date.now() });
+  }
+
+  private migrateLegacyImageSyncDefaults(config: RuntimeConfigView): RuntimeConfigView | undefined {
+    const defaultIsFiveMinuteImageWait = this.defaults.imageMaxPollAttempts === 75
+      && this.defaults.imagePollIntervalMs === 4000
+      && this.defaults.imageSyncWaitBudgetMs === 300000;
+    if (!defaultIsFiveMinuteImageWait) {
+      return undefined;
+    }
+    const configUsesLegacyImageWaitDefaults = config.imageMaxPollAttempts === LEGACY_IMAGE_MAX_POLL_ATTEMPTS
+      && config.imagePollIntervalMs === LEGACY_IMAGE_POLL_INTERVAL_MS
+      && config.imageSyncWaitBudgetMs === LEGACY_IMAGE_SYNC_WAIT_BUDGET_MS;
+    if (!configUsesLegacyImageWaitDefaults) {
+      return undefined;
+    }
+    return {
+      ...config,
+      imageMaxPollAttempts: this.defaults.imageMaxPollAttempts,
+      imagePollIntervalMs: this.defaults.imagePollIntervalMs,
+      imageSyncWaitBudgetMs: this.defaults.imageSyncWaitBudgetMs,
+      updatedAt: Date.now()
+    };
   }
 }
