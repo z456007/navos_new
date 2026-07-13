@@ -2023,6 +2023,58 @@ describe("server routes", () => {
     expect(await store.get("u1")).toMatchObject({ balanceRemaining: 100, leaseUntil: 0 });
   });
 
+  it("uses the image sync wait budget to extend synchronous image polling", async () => {
+    const store = new InMemoryAccountStore();
+    await store.upsert({ uid: "u1", token: "t1", balanceRemaining: 200, balanceTotal: 200 });
+    let pollCount = 0;
+    const runtimeConfigService = new RuntimeConfigService(
+      new InMemoryRuntimeConfigStore(),
+      {
+        ...DEFAULT_RUNTIME_CONFIG,
+        imageMaxPollAttempts: 1,
+        imagePollIntervalMs: 1,
+        imageSyncWaitBudgetMs: 3
+      }
+    );
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(store),
+      runtimeConfigService,
+      imageGatePostTaskCooldownMs: 0,
+      fetchImpl: async (url) => {
+        const path = new URL(String(url)).pathname;
+        if (path === "/api/tasks/navos-gpt-image-t2i") {
+          return Response.json({ code: 200, data: { task_id: "img_sync_budget", status: "queued" } });
+        }
+        if (path === "/api/tasks/image/generations/img_sync_budget") {
+          pollCount += 1;
+          if (pollCount < 3) {
+            return Response.json({ code: 200, data: { status: "running" } });
+          }
+          return Response.json({ code: 200, data: { status: "succeeded", url: "https://cdn.test/sync-budget.png" } });
+        }
+        return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+      }
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/images/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "high quality icon", n: 1, quality: "high", size: "1024x1024" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      status: "succeeded",
+      task_id: "img_sync_budget",
+      data: [{ url: "https://cdn.test/sync-budget.png" }]
+    });
+    expect(pollCount).toBe(3);
+  });
+
   it("returns a cached completed image task without polling upstream or consuming balance again", async () => {
     const store = new InMemoryAccountStore();
     await store.upsert({ uid: "u1", token: "t1", balanceRemaining: 300, balanceTotal: 300 });

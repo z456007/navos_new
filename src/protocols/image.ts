@@ -19,7 +19,7 @@ export interface ImageGenerationPollOptions {
 const DEFAULT_IMAGE_MODEL = "gpt-image-2";
 const DEFAULT_IMAGE_SIZE = "1024x1024";
 const DEFAULT_IMAGE_QUALITY = "auto";
-const DEFAULT_IMAGE_POLL_ATTEMPTS = 30;
+const DEFAULT_IMAGE_POLL_ATTEMPTS = 75;
 const DEFAULT_IMAGE_POLL_INTERVAL_MS = 4000;
 const MAX_IMAGE_COUNT = 4;
 const MAX_REFERENCE_IMAGES = 8;

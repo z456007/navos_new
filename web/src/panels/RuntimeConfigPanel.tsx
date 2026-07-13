@@ -33,9 +33,9 @@ const zh = {
 const defaultRuntimeConfig: RuntimeConfigView = {
   imageAllowVideoReserveFallback: false,
   imageAccountWaitMs: 120000,
-  imageMaxPollAttempts: 30,
+  imageMaxPollAttempts: 75,
   imagePollIntervalMs: 4000,
-  imageSyncWaitBudgetMs: 120000,
+  imageSyncWaitBudgetMs: 300000,
   videoCreateTimeoutMs: 30000,
   videoPollTimeoutMs: 30000,
   modelAccountWaitMs: 30000,
@@ -76,9 +76,9 @@ const runtimePresets: RuntimePreset[] = [
     effect: "会调整：降低注册和检查强度，优先保护账号与上游稳定。",
     patch: {
       imageAccountWaitMs: 120000,
-      imageMaxPollAttempts: 30,
+      imageMaxPollAttempts: 75,
       imagePollIntervalMs: 4000,
-      imageSyncWaitBudgetMs: 120000,
+      imageSyncWaitBudgetMs: 300000,
       accountBalanceReconcileScope: "depleted",
       accountBalanceReconcileBatchSize: 1000,
       accountBalanceReconcileConcurrency: 10,

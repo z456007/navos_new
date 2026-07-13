@@ -49,7 +49,7 @@ import {
   providerFailureIsAccountRetryable,
   type ProviderFailureDecision
 } from "../services/provider-failure-classifier.js";
-import { DEFAULT_RUNTIME_CONFIG, type AccountBalanceReconcileScope } from "../services/runtime-config-schema.js";
+import { DEFAULT_RUNTIME_CONFIG, type AccountBalanceReconcileScope, type RuntimeConfigView } from "../services/runtime-config-schema.js";
 import {
   assertYydsDomainPoolConfigInput,
   isValidYydsDomainPoolDomain,
@@ -700,6 +700,15 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       return rateLimitDelay;
     }
     return result.status === 200 || result.status === 202 ? imageGatePostTaskCooldownMs : 0;
+  }
+
+  function imageMaxPollAttemptsForRuntimeConfig(runtimeConfig: RuntimeConfigView): number {
+    const intervalMs = Math.max(1, Math.trunc(runtimeConfig.imagePollIntervalMs));
+    const waitBudgetMs = Math.max(0, Math.trunc(runtimeConfig.imageSyncWaitBudgetMs));
+    if (waitBudgetMs <= 0) {
+      return runtimeConfig.imageMaxPollAttempts;
+    }
+    return Math.max(1, Math.ceil(waitBudgetMs / intervalMs));
   }
 
   function modelRateLimitKeyForRequest(
@@ -2225,7 +2234,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       let result: ProviderResult;
       try {
         result = await createImageGeneration(client, payload, headers, {
-          maxAttempts: runtimeConfig.imageMaxPollAttempts,
+          maxAttempts: imageMaxPollAttemptsForRuntimeConfig(runtimeConfig),
           intervalMs: runtimeConfig.imagePollIntervalMs,
           outputMode: defaultResponseFormat === "b64_json" ? "display" : undefined
         });

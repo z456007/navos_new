@@ -87,7 +87,7 @@ describe("loadConfig", () => {
     expect(config.registrationJobRemoveOnComplete).toBe(50);
     expect(config.registrationJobRemoveOnFail).toBe(100);
     expect(config.imageAccountWaitMs).toBe(120000);
-    expect(config.imageMaxPollAttempts).toBe(30);
+    expect(config.imageMaxPollAttempts).toBe(75);
     expect(config.imagePollIntervalMs).toBe(4000);
     expect(config.imageAllowVideoReserveFallback).toBe(false);
     expect(config.accountBalanceReconcileEnabled).toBe(true);
@@ -333,6 +333,18 @@ describe("loadConfig", () => {
     expect(defaults.registrationYydsQuotaBlockSeconds).toBe(120);
     expect(defaults.mysqlConnectionLimit).toBe(150);
     expect(defaults.restartRequiredKeys).toContain("mysqlConnectionLimit");
+  });
+
+  it("defaults image synchronous wait budget to five minutes", () => {
+    const config = loadConfig({
+      MASTER_API_KEY: "master",
+      PROVIDER_BASE_URL: "https://provider.test",
+      VIP_HMAC_SECRET: "secret"
+    });
+
+    const defaults = runtimeConfigDefaultsFromAppConfig(config);
+    expect(defaults.imageMaxPollAttempts * defaults.imagePollIntervalMs).toBe(300000);
+    expect(defaults.imageSyncWaitBudgetMs).toBe(300000);
   });
 
   it("loads MySQL pool limits as first-run env seed", () => {

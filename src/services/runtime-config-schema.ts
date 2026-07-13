@@ -42,9 +42,9 @@ export const RUNTIME_CONFIG_RESTART_REQUIRED_KEYS = [
 export const DEFAULT_RUNTIME_CONFIG: RuntimeConfigView = {
   imageAllowVideoReserveFallback: false,
   imageAccountWaitMs: 120000,
-  imageMaxPollAttempts: 30,
+  imageMaxPollAttempts: 75,
   imagePollIntervalMs: 4000,
-  imageSyncWaitBudgetMs: 120000,
+  imageSyncWaitBudgetMs: 300000,
   videoCreateTimeoutMs: 30000,
   videoPollTimeoutMs: 30000,
   modelAccountWaitMs: 30000,
