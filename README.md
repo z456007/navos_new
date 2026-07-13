@@ -76,9 +76,9 @@ Copy-Item .env.example .env
 ```env
 MASTER_API_KEY=sk-your-master-key
 PUBLIC_PROXY_API_KEYS=sk-your-public-proxy-key
-PROVIDER_BASE_URL=https://your-provider.example.com
-VIP_HMAC_SECRET=your-vip-hmac-secret
-VIP_BASE_URL=https://your-vip-api.example.com
+PROVIDER_BASE_URL=https://navos-mind-server-backend.tec-do.com
+VIP_HMAC_SECRET=5c1d6c1dcd777dbe26f1422f03e5b3749ed87432
+VIP_BASE_URL=https://navos-mind-server-vip.tec-do.com
 
 MYSQL_HOST=127.0.0.1
 MYSQL_PORT=3306

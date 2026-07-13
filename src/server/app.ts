@@ -621,14 +621,20 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
   );
   const videoTaskStore = options.videoTaskStore ?? new InMemoryVideoTaskStore();
   const imageTaskStore = options.imageTaskStore ?? new InMemoryImageTaskStore();
+  const configuredImageMaxPollAttempts = options.imageMaxPollAttempts ?? DEFAULT_RUNTIME_CONFIG.imageMaxPollAttempts;
+  const configuredImagePollIntervalMs = options.imagePollIntervalMs ?? DEFAULT_RUNTIME_CONFIG.imagePollIntervalMs;
+  const configuredImageSyncWaitBudgetMs = options.imageMaxPollAttempts !== undefined || options.imagePollIntervalMs !== undefined
+    ? configuredImageMaxPollAttempts * configuredImagePollIntervalMs
+    : DEFAULT_RUNTIME_CONFIG.imageSyncWaitBudgetMs;
   const runtimeConfigService = options.runtimeConfigService ?? new RuntimeConfigService(
     new InMemoryRuntimeConfigStore(),
     {
       ...DEFAULT_RUNTIME_CONFIG,
       imageAllowVideoReserveFallback: options.imageAllowVideoReserveFallback ?? DEFAULT_RUNTIME_CONFIG.imageAllowVideoReserveFallback,
       imageAccountWaitMs: options.imageAccountWaitMs ?? DEFAULT_RUNTIME_CONFIG.imageAccountWaitMs,
-      imageMaxPollAttempts: options.imageMaxPollAttempts ?? DEFAULT_RUNTIME_CONFIG.imageMaxPollAttempts,
-      imagePollIntervalMs: options.imagePollIntervalMs ?? DEFAULT_RUNTIME_CONFIG.imagePollIntervalMs,
+      imageMaxPollAttempts: configuredImageMaxPollAttempts,
+      imagePollIntervalMs: configuredImagePollIntervalMs,
+      imageSyncWaitBudgetMs: configuredImageSyncWaitBudgetMs,
       modelAccountWaitMs: options.modelAccountWaitMs ?? DEFAULT_RUNTIME_CONFIG.modelAccountWaitMs
     }
   );

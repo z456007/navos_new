@@ -76,6 +76,7 @@ export function runtimeConfigDefaultsFromAppConfig(config: AppConfig): RuntimeCo
     imageAccountWaitMs: config.imageAccountWaitMs,
     imageMaxPollAttempts: config.imageMaxPollAttempts,
     imagePollIntervalMs: config.imagePollIntervalMs,
+    imageSyncWaitBudgetMs: config.imageMaxPollAttempts * config.imagePollIntervalMs,
     accountBalanceReconcileEnabled: config.accountBalanceReconcileEnabled,
     accountBalanceReconcileIntervalMinutes: config.accountBalanceReconcileIntervalMinutes,
     accountBalanceReconcileBatchSize: config.accountBalanceReconcileBatchSize,

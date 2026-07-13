@@ -327,6 +327,7 @@ describe("loadConfig", () => {
     expect(defaults.imageAccountWaitMs).toBe(90000);
     expect(defaults.imageMaxPollAttempts).toBe(12);
     expect(defaults.imagePollIntervalMs).toBe(3000);
+    expect(defaults.imageSyncWaitBudgetMs).toBe(36000);
     expect(defaults.accountBalanceReconcileScope).toBe("active");
     expect(defaults.registrationMailboxCreateConcurrency).toBe(3);
     expect(defaults.registrationMailboxCreatePerSecond).toBe(4);
