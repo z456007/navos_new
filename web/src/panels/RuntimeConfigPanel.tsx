@@ -37,6 +37,7 @@ const defaultRuntimeConfig: RuntimeConfigView = {
   imageMaxPollAttempts: 75,
   imagePollIntervalMs: 4000,
   imageSyncWaitBudgetMs: 300000,
+  videoT2vMaxInFlight: 100,
   videoCreateTimeoutMs: 30000,
   videoPollTimeoutMs: 30000,
   modelAccountWaitMs: 30000,
@@ -81,6 +82,7 @@ const runtimePresets: RuntimePreset[] = [
       imageMaxPollAttempts: 75,
       imagePollIntervalMs: 4000,
       imageSyncWaitBudgetMs: 300000,
+      videoT2vMaxInFlight: 100,
       accountBalanceReconcileScope: "depleted",
       accountBalanceReconcileBatchSize: 1000,
       accountBalanceReconcileConcurrency: 10,
@@ -105,6 +107,7 @@ const runtimePresets: RuntimePreset[] = [
       imageAccountWaitMs: 180000,
       imageMaxInFlight: 100,
       imageSyncWaitBudgetMs: 180000,
+      videoT2vMaxInFlight: 100,
       accountBalanceReconcileScope: "non_disabled",
       accountBalanceReconcileBatchSize: 1000,
       accountBalanceReconcileConcurrency: 20,
@@ -152,6 +155,7 @@ const runtimePresets: RuntimePreset[] = [
       imageAccountWaitMs: 240000,
       imageMaxInFlight: 100,
       imageSyncWaitBudgetMs: 240000,
+      videoT2vMaxInFlight: 100,
       videoCreateTimeoutMs: 60000,
       videoPollTimeoutMs: 60000
     }
@@ -315,6 +319,7 @@ export function RuntimeConfigPanel({ apiKey }: { apiKey: string }) {
           <NumberControl label="图片轮询次数" help="异步图片任务最多查询多少次。" value={config.imageMaxPollAttempts} onChange={(value) => numberPatch("imageMaxPollAttempts", value)} />
           <NumberControl label="图片轮询间隔" help="两次查询任务状态之间的毫秒数。" value={config.imagePollIntervalMs} onChange={(value) => numberPatch("imagePollIntervalMs", value)} />
           <NumberControl label="图片同步等待" help="公共接口最多等待图片完成多久。" value={config.imageSyncWaitBudgetMs} onChange={(value) => numberPatch("imageSyncWaitBudgetMs", value)} />
+          <NumberControl label="视频上游并发" help="同时创建/持有多少个纯文生视频任务；账号够多时默认支持 100 并发，上游限流直接透出。" value={config.videoT2vMaxInFlight} onChange={(value) => numberPatch("videoT2vMaxInFlight", value)} />
           <NumberControl label="视频创建超时" help="发起 Seedance 任务的超时时间。" value={config.videoCreateTimeoutMs} onChange={(value) => numberPatch("videoCreateTimeoutMs", value)} />
           <NumberControl label="视频轮询超时" help="单次查询视频任务状态的超时时间。" value={config.videoPollTimeoutMs} onChange={(value) => numberPatch("videoPollTimeoutMs", value)} />
         </div>

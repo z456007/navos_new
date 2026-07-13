@@ -281,6 +281,7 @@ describe("loadConfig", () => {
       imageMaxInFlight: 999999999,
       imageMaxPollAttempts: 0,
       imagePollIntervalMs: 250,
+      videoT2vMaxInFlight: 999999999,
       accountBalanceReconcileEnabled: true,
       accountBalanceReconcileScope: "non_disabled",
       accountBalanceReconcileConcurrency: 999,
@@ -299,6 +300,7 @@ describe("loadConfig", () => {
     expect(normalized.imageMaxInFlight).toBe(1000);
     expect(normalized.imageMaxPollAttempts).toBe(1);
     expect(normalized.imagePollIntervalMs).toBe(1000);
+    expect(normalized.videoT2vMaxInFlight).toBe(1000);
     expect(normalized.accountBalanceReconcileScope).toBe("non_disabled");
     expect(normalized.accountBalanceReconcileConcurrency).toBe(500);
     expect(normalized.registrationConcurrency).toBe(5000);
@@ -331,6 +333,7 @@ describe("loadConfig", () => {
     const defaults = runtimeConfigDefaultsFromAppConfig(config);
     expect(defaults.imageAccountWaitMs).toBe(90000);
     expect(defaults.imageMaxInFlight).toBe(100);
+    expect(defaults.videoT2vMaxInFlight).toBe(100);
     expect(defaults.imageMaxPollAttempts).toBe(12);
     expect(defaults.imagePollIntervalMs).toBe(3000);
     expect(defaults.imageSyncWaitBudgetMs).toBe(36000);
@@ -351,6 +354,7 @@ describe("loadConfig", () => {
 
     const defaults = runtimeConfigDefaultsFromAppConfig(config);
     expect(defaults.imageMaxInFlight).toBe(100);
+    expect(defaults.videoT2vMaxInFlight).toBe(100);
     expect(defaults.imageMaxPollAttempts * defaults.imagePollIntervalMs).toBe(300000);
     expect(defaults.imageSyncWaitBudgetMs).toBe(300000);
   });

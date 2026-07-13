@@ -9,6 +9,7 @@ export interface RuntimeConfigView {
   imageMaxPollAttempts: number;
   imagePollIntervalMs: number;
   imageSyncWaitBudgetMs: number;
+  videoT2vMaxInFlight: number;
   videoCreateTimeoutMs: number;
   videoPollTimeoutMs: number;
   modelAccountWaitMs: number;
@@ -47,6 +48,7 @@ export const DEFAULT_RUNTIME_CONFIG: RuntimeConfigView = {
   imageMaxPollAttempts: 75,
   imagePollIntervalMs: 4000,
   imageSyncWaitBudgetMs: 300000,
+  videoT2vMaxInFlight: 100,
   videoCreateTimeoutMs: 30000,
   videoPollTimeoutMs: 30000,
   modelAccountWaitMs: 30000,
@@ -110,6 +112,7 @@ export function normalizeRuntimeConfigInput(
   next.imageMaxPollAttempts = intInput(input.imageMaxPollAttempts, next.imageMaxPollAttempts, 1, 120);
   next.imagePollIntervalMs = intInput(input.imagePollIntervalMs, next.imagePollIntervalMs, 1000, 60000);
   next.imageSyncWaitBudgetMs = intInput(input.imageSyncWaitBudgetMs, next.imageSyncWaitBudgetMs, 0, 300000);
+  next.videoT2vMaxInFlight = intInput(input.videoT2vMaxInFlight, next.videoT2vMaxInFlight, 1, 1000);
   next.videoCreateTimeoutMs = intInput(input.videoCreateTimeoutMs, next.videoCreateTimeoutMs, 5000, 300000);
   next.videoPollTimeoutMs = intInput(input.videoPollTimeoutMs, next.videoPollTimeoutMs, 5000, 300000);
   next.modelAccountWaitMs = intInput(input.modelAccountWaitMs, next.modelAccountWaitMs, 0, 120000);

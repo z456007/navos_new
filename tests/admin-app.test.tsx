@@ -1089,6 +1089,33 @@ describe("admin app gate", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/runtime-config", expect.objectContaining({ method: "PUT" }));
   });
 
+  it("saves video text-to-video concurrency from the runtime config console", async () => {
+    let savedPayload: Record<string, unknown> | undefined;
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });
+      const path = String(url);
+      if (path === "/api/runtime-config" && init?.method === "GET") {
+        return Response.json({ videoT2vMaxInFlight: 100 });
+      }
+      if (path === "/api/runtime-config" && init?.method === "PUT") {
+        savedPayload = JSON.parse(String(init.body));
+        return Response.json(savedPayload);
+      }
+      return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<RuntimeConfigPanel apiKey="sk-local" />);
+
+    const videoConcurrencyInput = await screen.findByLabelText(/视频上游并发/);
+    fireEvent.change(videoConcurrencyInput, { target: { value: "128" } });
+    fireEvent.click(screen.getByRole("button", { name: /保存运行配置/ }));
+
+    await waitFor(() => {
+      expect(savedPayload).toMatchObject({ videoT2vMaxInFlight: 128 });
+    });
+  });
+
   it("keeps YYDS config focused on mailbox and domain controls", async () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       expect(init?.headers).toMatchObject({ authorization: "Bearer sk-local" });

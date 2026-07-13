@@ -143,7 +143,7 @@ const DEFAULT_IMAGE_MAX_IN_FLIGHT = DEFAULT_RUNTIME_CONFIG.imageMaxInFlight;
 const DEFAULT_IMAGE_GATE_POST_TASK_COOLDOWN_MS = 0;
 const DEFAULT_MODEL_ACCOUNT_WAIT_MS = 30_000;
 const DEFAULT_MODEL_RATE_LIMIT_GATE_COOLDOWN_MS = 60_000;
-const DEFAULT_VIDEO_T2V_MAX_IN_FLIGHT = 2;
+const DEFAULT_VIDEO_T2V_MAX_IN_FLIGHT = DEFAULT_RUNTIME_CONFIG.videoT2vMaxInFlight;
 const DEFAULT_VIDEO_T2V_GATE_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_MEDIA_RATE_LIMIT_GATE_COOLDOWN_MS = 180_000;
 const ACCOUNT_WAIT_POLL_INTERVAL_MS = 100;
@@ -650,6 +650,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       imageMaxPollAttempts: configuredImageMaxPollAttempts,
       imagePollIntervalMs: configuredImagePollIntervalMs,
       imageSyncWaitBudgetMs: configuredImageSyncWaitBudgetMs,
+      videoT2vMaxInFlight: options.videoT2vMaxInFlight ?? DEFAULT_RUNTIME_CONFIG.videoT2vMaxInFlight,
       modelAccountWaitMs: options.modelAccountWaitMs ?? DEFAULT_RUNTIME_CONFIG.modelAccountWaitMs
     }
   );
@@ -2073,6 +2074,8 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       return;
     }
 
+    const runtimeConfig = await runtimeConfigService.get();
+    videoT2vGate.setMaxInFlight(runtimeConfig.videoT2vMaxInFlight);
     let lastResult: ProviderResult | undefined;
     let lastDecision: ProviderFailureDecision | undefined;
     for (let attempt = 0; attempt < 5; attempt += 1) {

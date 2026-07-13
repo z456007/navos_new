@@ -3373,6 +3373,46 @@ describe("server routes", () => {
     expect((await store.get("u2"))).toMatchObject({ status: "active", balanceRemaining: 1500, leaseUntil: 0 });
   });
 
+  it("starts text-to-video tasks concurrently by default when separate accounts are available", async () => {
+    const store = new InMemoryAccountStore();
+    const accountService = new AccountService(store);
+    await accountService.importAccount({ uid: "u1", token: "t1", balanceRemaining: 2000, balanceTotal: 2000 });
+    await accountService.importAccount({ uid: "u2", token: "t2", balanceRemaining: 2000, balanceTotal: 2000 });
+    await accountService.importAccount({ uid: "u3", token: "t3", balanceRemaining: 2000, balanceTotal: 2000 });
+    let createCalls = 0;
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService,
+      fetchImpl: async (url) => {
+        const path = new URL(String(url)).pathname;
+        if (path === "/api/tasks/navos-seedance-video-generation") {
+          createCalls += 1;
+          return Response.json({
+            task_id: `task_default_${createCalls}`,
+            status: "queued",
+            billing: { points_amount: 500, remaining_amount: 1500 }
+          });
+        }
+        return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+      }
+    });
+
+    const requests = [1, 2, 3].map((index) => app.inject({
+      method: "POST",
+      url: "/api/video/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: `city skyline ${index}`, durationSeconds: 5, resolution: "480P" }
+    }));
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(createCalls).toBe(3);
+
+    const responses = await Promise.all(requests);
+    expect(responses.map((response) => response.statusCode)).toEqual([200, 200, 200]);
+  });
+
   it("queues text-to-video task creation until an active Seedance task reaches a terminal state", async () => {
     const store = new InMemoryAccountStore();
     const accountService = new AccountService(store);

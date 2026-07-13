@@ -81,6 +81,7 @@ export interface RuntimeConfigView {
   imageMaxPollAttempts: number;
   imagePollIntervalMs: number;
   imageSyncWaitBudgetMs: number;
+  videoT2vMaxInFlight: number;
   videoCreateTimeoutMs: number;
   videoPollTimeoutMs: number;
   modelAccountWaitMs: number;
