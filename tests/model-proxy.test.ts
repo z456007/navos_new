@@ -265,6 +265,51 @@ describe("model proxy", () => {
     });
   });
 
+  it("drops unpaired Responses function_call items before GPT-5.5 chat fallback", async () => {
+    let capturedUrl = "";
+    let capturedBody: Record<string, unknown> = {};
+    const client = new ProviderHttpClient("https://upstream.test", async (url, init) => {
+      capturedUrl = String(url);
+      capturedBody = JSON.parse(String(init?.body));
+      return Response.json({
+        id: "chatcmpl_1",
+        object: "chat.completion",
+        model: "openai.gpt-5.5",
+        choices: [{
+          message: { role: "assistant", content: "OK" },
+          finish_reason: "stop"
+        }]
+      });
+    });
+
+    await forwardModelRequest(client, {
+      method: "POST",
+      path: "/v1/responses",
+      body: {
+        model: "gpt-5.5",
+        input: [
+          { type: "message", role: "user", content: [{ type: "input_text", text: "use tool" }] },
+          {
+            type: "function_call",
+            call_id: "call_oSled6U3QkAdKVQpUu2EsKRQ",
+            name: "noop",
+            arguments: "{}"
+          },
+          { type: "message", role: "user", content: [{ type: "input_text", text: "continue" }] }
+        ],
+        max_output_tokens: 32,
+        stream: false
+      },
+      headers: { authorization: "Bearer t" }
+    });
+
+    expect(capturedUrl).toBe("https://upstream.test/chat/completions");
+    expect(capturedBody.messages).toEqual([
+      { role: "user", content: "use tool" },
+      { role: "user", content: "continue" }
+    ]);
+  });
+
   it("drops reasoning effort for GPT-5.5 chat requests with function tools", async () => {
     let capturedBody: Record<string, unknown> = {};
     const client = new ProviderHttpClient("https://upstream.test", async (_url, init) => {

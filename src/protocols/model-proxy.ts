@@ -465,6 +465,20 @@ function chatMessagesFromResponsesInput(instructions: unknown, input: unknown): 
     return messages;
   }
 
+  const functionCallOutputIds = new Set<string>();
+  for (const item of input) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const record = item as Record<string, unknown>;
+    if (readString(record.type) === "function_call_output") {
+      const callId = readString(record.call_id);
+      if (callId) {
+        functionCallOutputIds.add(callId);
+      }
+    }
+  }
+
   for (const item of input) {
     if (!item || typeof item !== "object") {
       messages.push({ role: "user", content: collectContent(item) });
@@ -473,11 +487,15 @@ function chatMessagesFromResponsesInput(instructions: unknown, input: unknown): 
     const record = item as Record<string, unknown>;
     const type = readString(record.type);
     if (type === "function_call") {
+      const callId = readString(record.call_id) ?? readString(record.id);
+      if (!callId || !functionCallOutputIds.has(callId)) {
+        continue;
+      }
       messages.push({
         role: "assistant",
         content: "",
         tool_calls: [{
-          id: readString(record.call_id) ?? readString(record.id) ?? `call_${Date.now()}`,
+          id: callId,
           type: "function",
           function: {
             name: readString(record.name) ?? "",
