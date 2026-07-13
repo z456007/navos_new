@@ -2,6 +2,11 @@ node_modules/
 dist/
 dist-admin/
 coverage/
+logs/
+output/
+tmp-image-tests/
+mysql_data/
+redis_data/
 .env
 .env.*
 !.env.example
