@@ -278,6 +278,7 @@ describe("loadConfig", () => {
     const normalized = normalizeRuntimeConfigInput({
       imageAllowVideoReserveFallback: true,
       imageAccountWaitMs: 999999999,
+      imageMaxInFlight: 999999999,
       imageMaxPollAttempts: 0,
       imagePollIntervalMs: 250,
       accountBalanceReconcileEnabled: true,
@@ -295,6 +296,7 @@ describe("loadConfig", () => {
 
     expect(normalized.imageAllowVideoReserveFallback).toBe(true);
     expect(normalized.imageAccountWaitMs).toBe(300000);
+    expect(normalized.imageMaxInFlight).toBe(1000);
     expect(normalized.imageMaxPollAttempts).toBe(1);
     expect(normalized.imagePollIntervalMs).toBe(1000);
     expect(normalized.accountBalanceReconcileScope).toBe("non_disabled");
@@ -328,6 +330,7 @@ describe("loadConfig", () => {
 
     const defaults = runtimeConfigDefaultsFromAppConfig(config);
     expect(defaults.imageAccountWaitMs).toBe(90000);
+    expect(defaults.imageMaxInFlight).toBe(100);
     expect(defaults.imageMaxPollAttempts).toBe(12);
     expect(defaults.imagePollIntervalMs).toBe(3000);
     expect(defaults.imageSyncWaitBudgetMs).toBe(36000);
@@ -347,6 +350,7 @@ describe("loadConfig", () => {
     });
 
     const defaults = runtimeConfigDefaultsFromAppConfig(config);
+    expect(defaults.imageMaxInFlight).toBe(100);
     expect(defaults.imageMaxPollAttempts * defaults.imagePollIntervalMs).toBe(300000);
     expect(defaults.imageSyncWaitBudgetMs).toBe(300000);
   });

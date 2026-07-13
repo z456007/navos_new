@@ -2570,6 +2570,68 @@ describe("server routes", () => {
     expect(createCalls).toBe(2);
   });
 
+  it("starts image tasks concurrently by default when separate accounts are available", async () => {
+    const store = new InMemoryAccountStore();
+    await store.upsert({ uid: "u1", token: "t1", balanceRemaining: 200, balanceTotal: 200 });
+    await store.upsert({ uid: "u2", token: "t2", balanceRemaining: 200, balanceTotal: 200 });
+    let createCalls = 0;
+    let releaseFirstPoll: (() => void) | undefined;
+    let resolveFirstPollStarted: (() => void) | undefined;
+    const firstPollStarted = new Promise<void>((resolve) => {
+      resolveFirstPollStarted = resolve;
+    });
+    const firstPollReady = new Promise<void>((resolve) => {
+      releaseFirstPoll = resolve;
+    });
+    const app = createApp({
+      masterApiKey: "sk-test",
+      providerBaseUrl: "https://upstream.test",
+      providerAuthMode: "uid-token",
+      accountService: new AccountService(store),
+      imageGatePostTaskCooldownMs: 0,
+      fetchImpl: async (url) => {
+        const path = new URL(String(url)).pathname;
+        if (path === "/api/tasks/navos-gpt-image-t2i") {
+          createCalls += 1;
+          return Response.json({ code: 200, msg: "success", data: { task_id: `img_default_${createCalls}`, status: "queued" } });
+        }
+        if (path === "/api/tasks/image/generations/img_default_1") {
+          resolveFirstPollStarted?.();
+          await firstPollReady;
+          return Response.json({ code: 200, msg: "success", data: { status: "succeeded", url: "https://cdn.test/img_default_1.png" } });
+        }
+        if (path === "/api/tasks/image/generations/img_default_2") {
+          return Response.json({ code: 200, msg: "success", data: { status: "succeeded", url: "https://cdn.test/img_default_2.png" } });
+        }
+        return Response.json({ error: { message: `unexpected path ${path}` } }, { status: 404 });
+      }
+    });
+
+    const firstPromise = app.inject({
+      method: "POST",
+      url: "/api/images/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "white robot", n: 1, quality: "low", size: "1024x1024" }
+    });
+    await firstPollStarted;
+    expect(createCalls).toBe(1);
+
+    const secondPromise = app.inject({
+      method: "POST",
+      url: "/api/images/generations",
+      headers: { authorization: "Bearer sk-test" },
+      payload: { prompt: "black robot", n: 1, quality: "low", size: "1024x1024" }
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(createCalls).toBe(2);
+
+    releaseFirstPoll?.();
+    const [first, second] = await Promise.all([firstPromise, secondPromise]);
+
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+  });
+
   it("retries the same image request after a provider rate-limit gate cooldown", async () => {
     const store = new InMemoryAccountStore();
     await store.upsert({ uid: "u1", token: "t1", balanceRemaining: 200, balanceTotal: 200 });

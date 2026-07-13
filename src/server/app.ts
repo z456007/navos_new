@@ -139,8 +139,8 @@ const JSON_BODY_LIMIT_BYTES = 64 * 1024 * 1024;
 const MODEL_PROXY_MAX_ATTEMPTS = 5;
 const MODEL_PROXY_RETRY_COOLDOWN_SECONDS = 30;
 const DEFAULT_IMAGE_ACCOUNT_WAIT_MS = 120_000;
-const DEFAULT_IMAGE_MAX_IN_FLIGHT = 1;
-const DEFAULT_IMAGE_GATE_POST_TASK_COOLDOWN_MS = 60_000;
+const DEFAULT_IMAGE_MAX_IN_FLIGHT = DEFAULT_RUNTIME_CONFIG.imageMaxInFlight;
+const DEFAULT_IMAGE_GATE_POST_TASK_COOLDOWN_MS = 0;
 const DEFAULT_MODEL_ACCOUNT_WAIT_MS = 30_000;
 const DEFAULT_MODEL_RATE_LIMIT_GATE_COOLDOWN_MS = 60_000;
 const DEFAULT_VIDEO_T2V_MAX_IN_FLIGHT = 2;
@@ -155,25 +155,39 @@ class AsyncSemaphore {
   private active = 0;
   private readonly queue: Array<() => void> = [];
 
-  constructor(private readonly maxInFlight: number) {}
+  constructor(private maxInFlight: number) {}
+
+  setMaxInFlight(maxInFlight: number): void {
+    this.maxInFlight = Math.max(1, Math.trunc(maxInFlight));
+    this.drainQueue();
+  }
 
   async acquire(): Promise<() => void> {
-    if (this.active >= this.maxInFlight) {
-      await new Promise<void>((resolve) => this.queue.push(resolve));
+    if (this.active < this.maxInFlight) {
+      this.active += 1;
+      return this.releaseOnce();
     }
-    this.active += 1;
+    await new Promise<void>((resolve) => this.queue.push(resolve));
+    return this.releaseOnce();
+  }
+
+  private releaseOnce(): () => void {
     let released = false;
     return () => {
-      if (released) {
-        return;
-      }
+      if (released) return;
       released = true;
       this.active = Math.max(0, this.active - 1);
-      const next = this.queue.shift();
-      if (next) {
-        next();
-      }
+      this.drainQueue();
     };
+  }
+
+  private drainQueue(): void {
+    while (this.active < this.maxInFlight) {
+      const next = this.queue.shift();
+      if (!next) return;
+      this.active += 1;
+      next();
+    }
   }
 }
 
@@ -632,6 +646,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
       ...DEFAULT_RUNTIME_CONFIG,
       imageAllowVideoReserveFallback: options.imageAllowVideoReserveFallback ?? DEFAULT_RUNTIME_CONFIG.imageAllowVideoReserveFallback,
       imageAccountWaitMs: options.imageAccountWaitMs ?? DEFAULT_RUNTIME_CONFIG.imageAccountWaitMs,
+      imageMaxInFlight: options.imageMaxInFlight ?? DEFAULT_RUNTIME_CONFIG.imageMaxInFlight,
       imageMaxPollAttempts: configuredImageMaxPollAttempts,
       imagePollIntervalMs: configuredImagePollIntervalMs,
       imageSyncWaitBudgetMs: configuredImageSyncWaitBudgetMs,
@@ -2223,6 +2238,7 @@ export function createApp(options: CreateAppOptions): FastifyInstance {
 
     const pollPath = imageTaskPollPathForPayload(payload);
     const runtimeConfig = await runtimeConfigService.get();
+    imageGenerationGate.setMaxInFlight(runtimeConfig.imageMaxInFlight);
     let lastResult: ProviderResult | undefined;
     let lastDecision: ProviderFailureDecision | undefined;
     for (let attempt = 0; attempt < 5; attempt += 1) {

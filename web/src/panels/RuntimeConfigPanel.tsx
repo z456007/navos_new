@@ -33,6 +33,7 @@ const zh = {
 const defaultRuntimeConfig: RuntimeConfigView = {
   imageAllowVideoReserveFallback: false,
   imageAccountWaitMs: 120000,
+  imageMaxInFlight: 100,
   imageMaxPollAttempts: 75,
   imagePollIntervalMs: 4000,
   imageSyncWaitBudgetMs: 300000,
@@ -76,6 +77,7 @@ const runtimePresets: RuntimePreset[] = [
     effect: "会调整：降低注册和检查强度，优先保护账号与上游稳定。",
     patch: {
       imageAccountWaitMs: 120000,
+      imageMaxInFlight: 100,
       imageMaxPollAttempts: 75,
       imagePollIntervalMs: 4000,
       imageSyncWaitBudgetMs: 300000,
@@ -101,6 +103,7 @@ const runtimePresets: RuntimePreset[] = [
     patch: {
       modelAccountWaitMs: 60000,
       imageAccountWaitMs: 180000,
+      imageMaxInFlight: 100,
       imageSyncWaitBudgetMs: 180000,
       accountBalanceReconcileScope: "non_disabled",
       accountBalanceReconcileBatchSize: 1000,
@@ -147,6 +150,7 @@ const runtimePresets: RuntimePreset[] = [
       modelAccountWaitMs: 120000,
       accountLeaseTtlMs: 1200000,
       imageAccountWaitMs: 240000,
+      imageMaxInFlight: 100,
       imageSyncWaitBudgetMs: 240000,
       videoCreateTimeoutMs: 60000,
       videoPollTimeoutMs: 60000
@@ -307,6 +311,7 @@ export function RuntimeConfigPanel({ apiKey }: { apiKey: string }) {
         </div>
         <div className="runtime-grid compact-runtime-grid">
           <NumberControl label="图片账号等待" help="账号池忙时等待可用图片账号的最长时间。" value={config.imageAccountWaitMs} onChange={(value) => numberPatch("imageAccountWaitMs", value)} />
+          <NumberControl label="图片上游并发" help="同时创建/等待多少个图片任务；账号够多时默认支持 100 并发。" value={config.imageMaxInFlight} onChange={(value) => numberPatch("imageMaxInFlight", value)} />
           <NumberControl label="图片轮询次数" help="异步图片任务最多查询多少次。" value={config.imageMaxPollAttempts} onChange={(value) => numberPatch("imageMaxPollAttempts", value)} />
           <NumberControl label="图片轮询间隔" help="两次查询任务状态之间的毫秒数。" value={config.imagePollIntervalMs} onChange={(value) => numberPatch("imagePollIntervalMs", value)} />
           <NumberControl label="图片同步等待" help="公共接口最多等待图片完成多久。" value={config.imageSyncWaitBudgetMs} onChange={(value) => numberPatch("imageSyncWaitBudgetMs", value)} />

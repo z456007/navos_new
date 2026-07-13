@@ -5,6 +5,7 @@ export type AccountBalanceReconcileScope = "depleted" | "active" | "non_disabled
 export interface RuntimeConfigView {
   imageAllowVideoReserveFallback: boolean;
   imageAccountWaitMs: number;
+  imageMaxInFlight: number;
   imageMaxPollAttempts: number;
   imagePollIntervalMs: number;
   imageSyncWaitBudgetMs: number;
@@ -42,6 +43,7 @@ export const RUNTIME_CONFIG_RESTART_REQUIRED_KEYS = [
 export const DEFAULT_RUNTIME_CONFIG: RuntimeConfigView = {
   imageAllowVideoReserveFallback: false,
   imageAccountWaitMs: 120000,
+  imageMaxInFlight: 100,
   imageMaxPollAttempts: 75,
   imagePollIntervalMs: 4000,
   imageSyncWaitBudgetMs: 300000,
@@ -104,6 +106,7 @@ export function normalizeRuntimeConfigInput(
   const next: RuntimeConfigView = { ...base };
   next.imageAllowVideoReserveFallback = boolInput(input.imageAllowVideoReserveFallback, next.imageAllowVideoReserveFallback);
   next.imageAccountWaitMs = intInput(input.imageAccountWaitMs, next.imageAccountWaitMs, 0, 300000);
+  next.imageMaxInFlight = intInput(input.imageMaxInFlight, next.imageMaxInFlight, 1, 1000);
   next.imageMaxPollAttempts = intInput(input.imageMaxPollAttempts, next.imageMaxPollAttempts, 1, 120);
   next.imagePollIntervalMs = intInput(input.imagePollIntervalMs, next.imagePollIntervalMs, 1000, 60000);
   next.imageSyncWaitBudgetMs = intInput(input.imageSyncWaitBudgetMs, next.imageSyncWaitBudgetMs, 0, 300000);

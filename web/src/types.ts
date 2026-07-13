@@ -77,6 +77,7 @@ export interface BalanceReconcileResult {
 export interface RuntimeConfigView {
   imageAllowVideoReserveFallback: boolean;
   imageAccountWaitMs: number;
+  imageMaxInFlight: number;
   imageMaxPollAttempts: number;
   imagePollIntervalMs: number;
   imageSyncWaitBudgetMs: number;
