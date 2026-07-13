@@ -12,4 +12,3 @@ Dockerfile
 docker-compose.yml
 docs
 tests
-web

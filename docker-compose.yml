@@ -32,6 +32,26 @@ services:
       retries: 5
       start_period: 30s
 
+  navos-web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    container_name: navos-web
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${NAVOS_WEB_BIND_PORT:-15173}:80"
+    networks:
+      - navos-internal
+    depends_on:
+      navos:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+
   navos-mysql:
     image: mysql:8.0
     container_name: navos-mysql
@@ -74,5 +94,4 @@ networks:
   navos-internal:
     driver: bridge
   sub2api-net:
-    external: true
-    name: sub2api-deploy_sub2api-network
+    driver: bridge
