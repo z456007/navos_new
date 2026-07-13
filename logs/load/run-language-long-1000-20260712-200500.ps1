@@ -2,9 +2,9 @@
 try { [Console]::OutputEncoding=[System.Text.Encoding]::UTF8 } catch {}
 Set-Location 'E:\navos-new'
 $env:SUB2API_BASE_URL='http://127.0.0.1:3000/v1'
-$env:SUB2API_API_KEY='sk-local-openai-zgm2003'
-$env:SUB2API_CODEX_API_KEY='sk-local-openai-zgm2003'
-$env:SUB2API_CLAUDE_API_KEY='sk-local-claude-zgm2003'
+$env:SUB2API_API_KEY='sk-placeholder-openai'
+$env:SUB2API_CODEX_API_KEY='sk-placeholder-openai'
+$env:SUB2API_CLAUDE_API_KEY='sk-placeholder-claude'
 $env:LOAD_LANGUAGE_CONCURRENCY='1000'
 $env:LOAD_LANGUAGE_REQUESTS='1000'
 $env:LOAD_TIMEOUT_MS='1200000'

@@ -4,8 +4,8 @@ import { performance } from "node:perf_hooks";
 import { Agent, fetch as undiciFetch } from "undici";
 
 const baseUrl = (process.env.SUB2API_BASE_URL || "http://127.0.0.1:3000/v1").replace(/\/+$/, "");
-const gptKey = process.env.SUB2API_CODEX_API_KEY || process.env.SUB2API_API_KEY || "sk-local-openai-zgm2003";
-const claudeKey = process.env.SUB2API_CLAUDE_API_KEY || "sk-local-claude-zgm2003";
+const gptKey = process.env.SUB2API_CODEX_API_KEY || process.env.SUB2API_API_KEY || "sk-placeholder-openai";
+const claudeKey = process.env.SUB2API_CLAUDE_API_KEY || "sk-placeholder-claude";
 const concurrency = Number.parseInt(process.env.LOAD_LANGUAGE_CONCURRENCY || "1000", 10);
 const requests = Number.parseInt(process.env.LOAD_LANGUAGE_REQUESTS || String(concurrency), 10);
 const timeoutMs = Number.parseInt(process.env.LOAD_TIMEOUT_MS || "1200000", 10);

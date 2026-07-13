@@ -53,12 +53,12 @@ interface ScenarioResult {
 }
 
 const baseUrl = (process.env.SUB2API_BASE_URL ?? "http://127.0.0.1:3000/v1").replace(/\/+$/, "");
-const defaultApiKey = process.env.SUB2API_API_KEY ?? "sk-local-openai-zgm2003";
+const defaultApiKey = process.env.SUB2API_API_KEY ?? "sk-placeholder-openai";
 const codexApiKey = process.env.SUB2API_CODEX_API_KEY ?? defaultApiKey;
-const claudeApiKey = process.env.SUB2API_CLAUDE_API_KEY ?? "sk-local-claude-zgm2003";
-const deepseekApiKey = process.env.SUB2API_DEEPSEEK_API_KEY ?? "sk-local-deepseek-zgm2003";
+const claudeApiKey = process.env.SUB2API_CLAUDE_API_KEY ?? "sk-placeholder-claude";
+const deepseekApiKey = process.env.SUB2API_DEEPSEEK_API_KEY ?? "sk-placeholder-deepseek";
 const imageApiKey = process.env.SUB2API_IMAGE_API_KEY ?? defaultApiKey;
-const seedanceApiKey = process.env.SUB2API_SEEDANCE_API_KEY ?? "sk-local-seedance-zgm2003";
+const seedanceApiKey = process.env.SUB2API_SEEDANCE_API_KEY ?? "sk-placeholder-seedance";
 const timeoutMs = Number(process.env.LOAD_TIMEOUT_MS ?? 180000);
 const progressIntervalMs = nonNegativeInt(process.env.LOAD_PROGRESS_INTERVAL_MS, 5000);
 const reportTimeZone = process.env.LOAD_REPORT_TIME_ZONE ?? "Asia/Shanghai";

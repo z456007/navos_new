@@ -2415,7 +2415,7 @@ interface Scenario {
 }
 
 const baseUrl = (process.env.SUB2API_BASE_URL ?? "http://127.0.0.1:18080/v1").replace(/\/+$/, "");
-const apiKey = process.env.SUB2API_API_KEY ?? "sk-local-openai-zgm2003";
+const apiKey = process.env.SUB2API_API_KEY ?? "sk-placeholder-openai";
 const concurrencyCsv = (process.env.LOAD_CONCURRENCY ?? "100").split(",").map((item) => Number(item.trim())).filter(Number.isFinite);
 const mode = process.env.LOAD_MODE ?? "real";
 
@@ -2528,7 +2528,7 @@ Create `scripts/load/run-local-sub2api-chain.ps1`:
 ```powershell
 param(
   [string]$Sub2ApiBaseUrl = "http://127.0.0.1:18080/v1",
-  [string]$Sub2ApiApiKey = "sk-local-openai-zgm2003",
+  [string]$Sub2ApiApiKey = "sk-placeholder-openai",
   [string]$Concurrency = "100,300,1000"
 )
 
@@ -2573,7 +2573,7 @@ Set `PROVIDER_BASE_URL` to the real NavOS upstream, keep local NavOS and local S
 ```powershell
 $env:LOAD_MODE = "real"
 $env:SUB2API_BASE_URL = "http://127.0.0.1:18080/v1"
-$env:SUB2API_API_KEY = "sk-local-openai-zgm2003"
+$env:SUB2API_API_KEY = "sk-placeholder-openai"
 $env:LOAD_CONCURRENCY = "20"
 npm run load:sub2api-chain
 ```
@@ -2593,7 +2593,7 @@ Only run this after the account pool has enough active accounts for the target b
 ```powershell
 $env:LOAD_MODE = "real"
 $env:SUB2API_BASE_URL = "http://127.0.0.1:18080/v1"
-$env:SUB2API_API_KEY = "sk-local-openai-zgm2003"
+$env:SUB2API_API_KEY = "sk-placeholder-openai"
 powershell -ExecutionPolicy Bypass -File scripts\load\run-local-sub2api-chain.ps1 -Concurrency "100"
 powershell -ExecutionPolicy Bypass -File scripts\load\run-local-sub2api-chain.ps1 -Concurrency "300"
 powershell -ExecutionPolicy Bypass -File scripts\load\run-local-sub2api-chain.ps1 -Concurrency "1000"
@@ -2657,7 +2657,7 @@ Test Files  ... passed
 Run through Sub2Api, not NavOS direct:
 
 ```powershell
-$headers = @{ Authorization = "Bearer sk-local-openai-zgm2003"; "Content-Type" = "application/json" }
+$headers = @{ Authorization = "Bearer sk-placeholder-openai"; "Content-Type" = "application/json" }
 $body = @{ model = "gpt-5.5"; messages = @(@{ role = "user"; content = "ping" }) } | ConvertTo-Json -Depth 8
 Invoke-RestMethod -Uri "http://127.0.0.1:18080/v1/chat/completions" -Headers $headers -Method Post -Body $body
 ```

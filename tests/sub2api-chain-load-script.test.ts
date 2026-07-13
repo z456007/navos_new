@@ -78,8 +78,8 @@ describe("sub2api chain load script", () => {
     }
     expect(source).toContain("apiKey?: string");
     expect(source).toContain("const requestApiKey = apiKey ?? defaultApiKey");
-    expect(source).toContain('SUB2API_DEEPSEEK_API_KEY ?? "sk-local-deepseek-zgm2003"');
-    expect(wrapper).toContain('Sub2ApiDeepSeekApiKey = "sk-local-deepseek-zgm2003"');
+    expect(source).toContain('SUB2API_DEEPSEEK_API_KEY ?? "sk-placeholder-deepseek"');
+    expect(wrapper).toContain('Sub2ApiDeepSeekApiKey = "sk-placeholder-deepseek"');
   });
 
   it("has an exact production 100 plan for codex claude deepseek image and seedance", async () => {

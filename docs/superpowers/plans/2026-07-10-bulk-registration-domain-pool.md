@@ -1360,7 +1360,7 @@ Expected: all commands exit 0.
 - [ ] **Step 4: Live smoke check domain refresh**
 
 ```powershell
-$headers=@{'x-api-key'='zgm2003';'authorization'='Bearer zgm2003'}
+$headers=@{'x-api-key'='sk-your-master-key';'authorization'='Bearer sk-your-master-key'}
 Invoke-RestMethod -Uri 'http://127.0.0.1:18888/api/mail/yyds/domains/refresh' -Method POST -Headers $headers | ConvertTo-Json -Depth 5
 Invoke-RestMethod -Uri 'http://127.0.0.1:18888/api/mail/yyds/domains' -Headers $headers | ConvertTo-Json -Depth 5
 ```
@@ -1370,7 +1370,7 @@ Expected: healthy domains are returned and no YYDS API key is present.
 - [ ] **Step 5: Live smoke check create mode**
 
 ```powershell
-$headers=@{'x-api-key'='zgm2003';'authorization'='Bearer zgm2003'}
+$headers=@{'x-api-key'='sk-your-master-key';'authorization'='Bearer sk-your-master-key'}
 $job=Invoke-RestMethod -Uri 'http://127.0.0.1:18888/api/registration/jobs' -Method POST -Headers $headers -ContentType 'application/json' -Body '{"mode":"create","count":3,"concurrency":3}'
 Invoke-RestMethod -Uri "http://127.0.0.1:18888/api/registration/jobs/$($job.jobId)" -Headers $headers | ConvertTo-Json -Depth 10
 ```

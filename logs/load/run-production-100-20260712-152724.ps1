@@ -3,7 +3,7 @@
 Set-Location 'E:\navos-new'
 $env:LOAD_MODE='real'
 $env:SUB2API_BASE_URL='http://127.0.0.1:3000/v1'
-$env:SUB2API_API_KEY='sk-local-openai-zgm2003'
+$env:SUB2API_API_KEY='sk-placeholder-openai'
 $env:LOAD_PRODUCTION_100='true'
 $env:LOAD_SCENARIO_PARALLEL='true'
 $env:LOAD_CONCURRENCY='100'
